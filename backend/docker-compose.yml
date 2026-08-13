@@ -1,0 +1,51 @@
+# Infraestructura local del Sprint 0.
+#
+# Puertos deliberadamente NO estándar: esta máquina ya corre otro proyecto con
+# PostgreSQL en 5432 y Redis en 6379. Usar los de siempre haría que los dos
+# proyectos se pisen y que los datos terminen en la base equivocada.
+#
+#   pnpm infra:up     levantar
+#   pnpm infra:down   bajar
+#   pnpm infra:logs   ver logs
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: livesell-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: livesell
+      POSTGRES_PASSWORD: livesell
+      POSTGRES_DB: livesell
+      # Todo en UTC. La conversión a hora argentina se hace al presentar.
+      TZ: UTC
+      PGTZ: UTC
+    ports:
+      - '5433:5432'
+    volumes:
+      - livesell-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U livesell -d livesell']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: livesell-redis
+    restart: unless-stopped
+    # appendonly: en desarrollo evita perder el estado en cada reinicio.
+    command: ['redis-server', '--appendonly', 'yes']
+    ports:
+      - '6380:6379'
+    volumes:
+      - livesell-redisdata:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  livesell-pgdata:
+  livesell-redisdata:

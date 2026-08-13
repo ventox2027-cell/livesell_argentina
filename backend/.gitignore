@@ -1,0 +1,20 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Secretos — jamás versionados
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Resultados de spikes (se comparten por otro canal, pueden traer datos de red)
+spike-results/*.json
+!spike-results/.gitkeep
+
+.DS_Store
+*.log
+.idea/
+.vscode/*
+!.vscode/extensions.json

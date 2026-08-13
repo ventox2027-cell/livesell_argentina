@@ -1,0 +1,37 @@
+name: livesell_spike
+description: "Sprint 0 · Spike de LiveKit — medición de latencia real desde Argentina"
+publish_to: "none"
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.6.0 <4.0.0"
+  flutter: ">=3.27.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # ── Video en tiempo real ───────────────────────────────────────────────────
+  # SDK OFICIAL de LiveKit. Fue la razón determinante para elegir LiveKit sobre
+  # AWS IVS: el reproductor de IVS para Flutter es comunitario.
+  livekit_client: ^2.4.0
+
+  # ── Estado ─────────────────────────────────────────────────────────────────
+  flutter_riverpod: ^2.6.1
+
+  # ── Red y sistema ──────────────────────────────────────────────────────────
+  dio: ^5.7.0
+  connectivity_plus: ^6.1.0 # WiFi ⇄ 4G: el evento que más rompe un live
+  device_info_plus: ^11.2.0 # sin modelo de dispositivo, los números no se interpretan
+  permission_handler: ^11.3.1
+  wakelock_plus: ^1.2.10 # la pantalla no puede apagarse a mitad de una medición
+  shared_preferences: ^2.3.3
+  intl: ^0.19.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true

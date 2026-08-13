@@ -1,0 +1,33 @@
+import { ulid } from 'ulid';
+
+/**
+ * IDs con prefijo por tipo.
+ *
+ * ULID y no UUID v4: es ordenable por tiempo (los índices B-tree no se
+ * fragmentan) y el prefijo hace imposible pasar un `sessionId` donde va un
+ * `sampleId` sin que salte a la vista en un log o en un test.
+ */
+export const ID_PREFIX = {
+  spikeSession: 'spk',
+  spikeSample: 'smp',
+  spikeEvent: 'evt',
+  glassToGlass: 'g2g',
+  webhookEvent: 'whk',
+  // Sprint 0B — pagos
+  order: 'ord',
+  payment: 'pay',
+  paymentEvent: 'pev',
+  mpWebhook: 'mpw',
+  customer: 'cus',
+  customerCard: 'crd',
+} as const;
+
+export type IdPrefix = (typeof ID_PREFIX)[keyof typeof ID_PREFIX];
+
+export function newId(prefix: IdPrefix): string {
+  return `${prefix}_${ulid()}`;
+}
+
+export function isId(value: string, prefix: IdPrefix): boolean {
+  return value.startsWith(`${prefix}_`) && value.length === prefix.length + 27;
+}

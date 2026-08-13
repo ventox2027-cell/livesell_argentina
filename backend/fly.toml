@@ -1,0 +1,51 @@
+# Fly.io — backend de Live Shopping Argentina.
+#
+# Región gru (São Paulo): es el punto con menor latencia hacia Argentina entre
+# los disponibles, y va junto a Neon y Upstash en la misma región. Separar la
+# app de su base agrega un ida y vuelta a cada consulta.
+#
+# Los secretos NO van acá. Se cargan con:
+#   fly secrets set LIVEKIT_API_SECRET=... MP_ACCESS_TOKEN=...
+
+app = "livesell-api-staging"
+primary_region = "gru"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "staging"
+  PORT = "3000"
+  TZ = "UTC"
+  LOG_LEVEL = "info"
+  # Los spikes jamás encendidos por configuración de archivo: si hacen falta en
+  # staging, se habilitan a mano con `fly secrets set`.
+  SPIKE_ENABLED = "false"
+  PAYMENTS_SPIKE_ENABLED = "false"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  # La máquina NO se apaga sola: un arranque en frío agrega segundos justo
+  # cuando alguien está entrando a un live.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 200
+    hard_limit = 250
+
+# El chequeo apunta a /health, que es VERSION_NEUTRAL y no lleva el prefijo
+# /api. Apuntarlo a /api/v1/health haría que Fly reinicie la máquina en bucle.
+[[http_service.checks]]
+  interval = "15s"
+  timeout = "3s"
+  grace_period = "20s"
+  method = "GET"
+  path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

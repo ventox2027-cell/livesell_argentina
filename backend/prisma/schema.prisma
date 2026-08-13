@@ -1,0 +1,427 @@
+// =============================================================================
+// SPRINT 0 — Esquema mínimo.
+//
+// Solo las tablas necesarias para instrumentar los spikes de LiveKit y
+// Mercado Pago. Son ADITIVAS: no chocan con el esquema completo de
+// db/schema.prisma, que se incorpora recién cuando arranque el módulo Auth.
+//
+// Convenciones (blueprint/05-datos-postgres.md):
+//   · IDs = ULID con prefijo, en TEXT.
+//   · Tiempo = DateTime en UTC, siempre.
+//   · Métricas numéricas = Int en milisegundos. Nada de Float para tiempos.
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum SpikeRole {
+  BROADCASTER
+  VIEWER
+
+  @@map("spike_role")
+}
+
+enum NetworkType {
+  WIFI
+  CELLULAR_5G
+  CELLULAR_4G
+  CELLULAR_3G
+  UNKNOWN
+
+  @@map("network_type")
+}
+
+enum SpikeEventType {
+  SESSION_START
+  ROOM_CONNECTING
+  ROOM_CONNECTED
+  ROOM_RECONNECTING
+  ROOM_RECONNECTED
+  ROOM_DISCONNECTED
+  TRACK_PUBLISHED
+  TRACK_SUBSCRIBED
+  TRACK_UNSUBSCRIBED
+  FIRST_FRAME
+  NETWORK_CHANGED
+  QUALITY_CHANGED
+  ERROR
+  SESSION_END
+
+  @@map("spike_event_type")
+}
+
+/// Una corrida del spike: un par broadcaster/viewer probando en una condición
+/// concreta (operadora, tipo de red, ubicación).
+model SpikeSession {
+  id        String   @id                                   // spk_<ulid>
+  label     String                                         // "Personal 4G · Palermo · tarde"
+  roomName  String   @unique @map("room_name")             // sala en LiveKit
+
+  /// Condiciones de la prueba. Sin esto los números no significan nada:
+  /// "800 ms" es excelente en 3G y malo en fibra.
+  carrier       String?
+  networkType   NetworkType @default(UNKNOWN) @map("network_type")
+  locationNote  String?     @map("location_note")
+
+  broadcasterDevice Json? @map("broadcaster_device")
+  viewerDevice      Json? @map("viewer_device")
+
+  notes     String?
+  startedAt DateTime  @default(now()) @map("started_at")
+  endedAt   DateTime? @map("ended_at")
+
+  samples      SpikeSample[]
+  events       SpikeEvent[]
+  measurements GlassToGlassMeasurement[]
+
+  @@index([startedAt])
+  @@map("spike_sessions")
+}
+
+/// Muestra periódica de calidad. El broadcaster y el viewer envían una por
+/// segundo, en lotes de 10 para no generar una petición por segundo por device.
+model SpikeSample {
+  id        String    @id
+  sessionId String    @map("session_id")
+  role      SpikeRole
+  seq       Int
+  /// Instante de la muestra en el reloj DEL SERVIDOR, ya corregido por el
+  /// offset que el cliente calculó con /spike/time. Sin esta corrección,
+  /// comparar timestamps entre dos teléfonos distintos no significa nada.
+  at        DateTime
+
+  /// Latencia one-way del canal de datos: el broadcaster publica un paquete
+  /// con su reloj corregido y el viewer resta. Es un PISO de la latencia de
+  /// video, no la latencia de video: el data channel se salta encode,
+  /// jitter buffer, decode y render.
+  probeLatencyMs Int? @map("probe_latency_ms")
+
+  /// Estimación de glass-to-glass calculada por el backend a partir de la
+  /// muestra. Se CALIBRA contra las mediciones manuales (ver §calibración).
+  estimatedE2eMs Int? @map("estimated_e2e_ms")
+
+  // ─── Estadísticas de WebRTC ───
+  rttMs               Int?   @map("rtt_ms")
+  jitterMs            Int?   @map("jitter_ms")
+  packetsLost         Int?   @map("packets_lost")
+  packetLossPct       Float? @map("packet_loss_pct")
+  jitterBufferDelayMs Int?   @map("jitter_buffer_delay_ms")
+  framesDecoded       Int?   @map("frames_decoded")
+  framesDropped       Int?   @map("frames_dropped")
+  freezeCount         Int?   @map("freeze_count")
+  bitrateKbps         Int?   @map("bitrate_kbps")
+  fps                 Float?
+  frameWidth          Int?   @map("frame_width")
+  frameHeight         Int?   @map("frame_height")
+  /// Capa de simulcast que está recibiendo: valida que el ABR funciona.
+  videoLayer          String? @map("video_layer")
+
+  connectionQuality String?      @map("connection_quality")   // excellent|good|poor|lost
+  networkType       NetworkType  @default(UNKNOWN) @map("network_type")
+  carrier           String?
+  clockOffsetMs     Int?         @map("clock_offset_ms")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  session SpikeSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, role, at])
+  @@map("spike_samples")
+}
+
+/// Eventos discretos del ciclo de vida. Miden lo que las muestras periódicas
+/// no ven: cuánto tarda en conectar, cuánto en reconectar, cuándo llega el
+/// primer frame.
+model SpikeEvent {
+  id        String         @id
+  sessionId String         @map("session_id")
+  role      SpikeRole
+  type      SpikeEventType
+  at        DateTime
+  /// Milisegundos desde el evento anterior relevante. Para ROOM_RECONNECTED
+  /// es el tiempo de reconexión; para FIRST_FRAME, el time-to-first-frame.
+  durationMs Int?          @map("duration_ms")
+  detail    Json?
+  createdAt DateTime       @default(now()) @map("created_at")
+
+  session SpikeSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, at])
+  @@index([type])
+  @@map("spike_events")
+}
+
+/// Medición MANUAL de glass-to-glass: la referencia de verdad.
+/// Método en docs/sprint-0/RUNBOOK-livekit.md §5.
+model GlassToGlassMeasurement {
+  id        String @id
+  sessionId String @map("session_id")
+
+  /// Lo que se lee en la foto: reloj del overlay menos reloj dentro del video.
+  latencyMs Int    @map("latency_ms")
+  /// Muestra automática más cercana en el tiempo. Permite calcular el sesgo
+  /// entre la estimación y la realidad, y calibrar.
+  pairedEstimatedE2eMs Int? @map("paired_estimated_e2e_ms")
+
+  method      String      @default("overlay_photo")
+  networkType NetworkType @default(UNKNOWN) @map("network_type")
+  carrier     String?
+  photoRef    String?     @map("photo_ref")
+  note        String?
+  measuredAt  DateTime    @default(now()) @map("measured_at")
+
+  session SpikeSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@map("glass_to_glass_measurements")
+}
+
+/// Webhooks de LiveKit. Mismo patrón que usaremos con Mercado Pago:
+/// UNIQUE sobre el id del evento del proveedor = deduplicación garantizada
+/// por la base, no por el código.
+model LivekitWebhookEvent {
+  id             String   @id
+  eventId        String   @map("event_id")
+  event          String
+  roomName       String?  @map("room_name")
+  participantId  String?  @map("participant_id")
+  payload        Json
+  signatureValid Boolean  @map("signature_valid")
+  processedAt    DateTime? @map("processed_at")
+  error          String?
+  receivedAt     DateTime @default(now()) @map("received_at")
+
+  @@unique([eventId])
+  @@index([roomName, receivedAt])
+  @@map("livekit_webhook_events")
+}
+
+// =============================================================================
+// SPRINT 0B — Spike de Mercado Pago
+//
+// Riesgo R1: ¿se puede cobrar con tarjeta desde Flutter sin arrastrar el
+// alcance PCI completo, y sobrevive el flujo a webhooks duplicados, perdidos,
+// desordenados y falsificados?
+//
+// REGLA QUE GOBIERNA TODO EL MÓDULO
+// ---------------------------------
+// El webhook NO es la fuente de verdad. Es un "andá a fijarte". El estado
+// siempre se toma consultando la API de Mercado Pago con nuestro access token.
+// Un webhook falsificado, entonces, no puede acreditar un pago aunque logre
+// pasar la firma: lo único que consigue es que le preguntemos a Mercado Pago,
+// que va a responder la verdad.
+//
+// Corolario: NADA de datos de tarjeta acá. Ni PAN, ni CVV, ni el token de la
+// tarjeta. Sólo los últimos cuatro dígitos y la marca, que es lo que PCI
+// permite guardar y lo único que la interfaz necesita mostrar.
+// =============================================================================
+
+enum PayOrderStatus {
+  /// Creada, todavía sin intento de cobro.
+  PENDING_PAYMENT
+  /// Hay un pago en curso. Estado deliberadamente pegajoso: ante cualquier
+  /// duda se queda acá, nunca se pasa a FAILED por un timeout de red.
+  PROCESSING
+  PAID
+  FAILED
+  CANCELLED
+  REFUNDED
+
+  @@map("pay_order_status")
+}
+
+/// Espejo de los estados de Mercado Pago. Se replican con sus nombres para que
+/// traducir no pueda introducir un error de interpretación.
+enum PayPaymentStatus {
+  PENDING
+  IN_PROCESS
+  AUTHORIZED
+  APPROVED
+  REJECTED
+  CANCELLED
+  REFUNDED
+  CHARGED_BACK
+  UNKNOWN
+
+  @@map("pay_payment_status")
+}
+
+/// Quién produjo un cambio de estado. Sin esto, ante una discrepancia no hay
+/// forma de saber si fue la app, un webhook o el conciliador.
+enum PaySource {
+  API
+  WEBHOOK
+  RECONCILER
+  MANUAL
+
+  @@map("pay_source")
+}
+
+/// Orden de compra del spike. Un producto, una unidad: alcanza para responder
+/// la pregunta de si podemos cobrar.
+model SpikeOrder {
+  id String @id // ord_<ulid>
+
+  /// Clave de idempotencia que manda el cliente. UNIQUE en la base: dos toques
+  /// del botón "Pagar" con la misma clave no pueden crear dos órdenes ni
+  /// aunque lleguen en paralelo. La garantía es del motor, no del código.
+  idempotencyKey String @unique @map("idempotency_key")
+
+  buyerEmail  String @map("buyer_email")
+  description String
+
+  /// Centavos. Nunca Float para dinero: 0.1 + 0.2 no es 0.3 en binario.
+  amountCents Int    @map("amount_cents")
+  currency    String @default("ARS")
+
+  status PayOrderStatus @default(PENDING_PAYMENT)
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  paidAt    DateTime? @map("paid_at")
+
+  payments SpikePayment[]
+  events   SpikePaymentEvent[]
+
+  @@index([status, createdAt])
+  @@map("spike_orders")
+}
+
+/// Intento de cobro contra Mercado Pago. Una orden puede tener varios: el
+/// primero rechazado por fondos, el segundo aprobado.
+model SpikePayment {
+  id      String @id // pay_<ulid>
+  orderId String @map("order_id")
+
+  /// Id del pago en Mercado Pago. UNIQUE: es lo que impide acreditar dos veces
+  /// el mismo pago cuando llegan webhooks repetidos.
+  mpPaymentId String? @unique @map("mp_payment_id")
+
+  status       PayPaymentStatus @default(PENDING)
+  /// `cc_rejected_insufficient_amount`, `accredited`, etc. Es lo que permite
+  /// darle al comprador un mensaje útil en vez de "error".
+  statusDetail String?          @map("status_detail")
+
+  amountCents     Int     @map("amount_cents")
+  installments    Int     @default(1)
+  paymentMethodId String? @map("payment_method_id")
+  paymentTypeId   String? @map("payment_type_id")
+
+  /// Lo ÚNICO que se guarda de la tarjeta. PCI permite los últimos cuatro
+  /// dígitos y la marca; nada más entra a esta base.
+  cardLastFour String? @map("card_last_four")
+  cardBrand    String? @map("card_brand")
+
+  /// Respuesta de Mercado Pago con los campos sensibles removidos.
+  /// El saneado ocurre ANTES de escribir, en `scrubMpPayment()`.
+  rawResponse Json? @map("raw_response")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  order SpikeOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, createdAt])
+  @@index([status])
+  @@map("spike_payments")
+}
+
+/// Bitácora de auditoría de pagos. Append-only: no se actualiza ni se borra.
+/// Es la respuesta a "¿por qué esta orden figura pagada?" seis meses después.
+model SpikePaymentEvent {
+  id      String @id // pev_<ulid>
+  orderId String @map("order_id")
+
+  source PaySource
+  /// `order.created`, `payment.created`, `payment.status_changed`,
+  /// `webhook.received`, `webhook.rejected`, `reconciler.fixed`.
+  kind   String
+
+  fromStatus String? @map("from_status")
+  toStatus   String? @map("to_status")
+
+  detail Json?
+  at     DateTime @default(now())
+
+  order SpikeOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, at])
+  @@map("spike_payment_events")
+}
+
+/// Notificaciones recibidas de Mercado Pago, válidas y rechazadas por igual.
+///
+/// Las rechazadas se guardan a propósito: un pico de firmas inválidas es la
+/// señal de que alguien está probando el endpoint, y sin registro no se ve.
+model MpWebhookEvent {
+  id String @id // mpw_<ulid>
+
+  /// Id de la notificación según Mercado Pago. UNIQUE = deduplicación por
+  /// motor de base de datos. El reintento de Mercado Pago choca contra el
+  /// índice y no llega a ejecutar la lógica.
+  notificationId String @unique @map("notification_id")
+
+  topic      String
+  action     String?
+  /// `data.id`: el id del pago que hay que ir a consultar.
+  resourceId String? @map("resource_id")
+
+  signatureValid Boolean @map("signature_valid")
+  /// Motivo del rechazo cuando la firma no valida. Sin esto, depurar en
+  /// producción es adivinar.
+  rejectionReason String? @map("rejection_reason")
+
+  headers Json
+  payload Json
+
+  processedAt DateTime? @map("processed_at")
+  error       String?
+  receivedAt  DateTime  @default(now()) @map("received_at")
+
+  @@index([resourceId, receivedAt])
+  @@index([signatureValid, receivedAt])
+  @@map("mp_webhook_events")
+}
+
+/// Comprador con medio de pago guardado. Es lo que habilita la segunda compra
+/// en dos clics, que es el objetivo de producto del spike.
+///
+/// La tarjeta vive en Mercado Pago. Acá sólo se guarda la referencia.
+model SpikeCustomer {
+  id           String @id // cus_<ulid>
+  email        String @unique
+  mpCustomerId String @unique @map("mp_customer_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  cards SpikeCustomerCard[]
+
+  @@map("spike_customers")
+}
+
+model SpikeCustomerCard {
+  id         String @id // crd_<ulid>
+  customerId String @map("customer_id")
+
+  /// Referencia opaca de Mercado Pago. Para cobrar se pide un token nuevo a
+  /// partir de este id más el CVV; la tarjeta nunca pasa por nuestro backend.
+  mpCardId String @unique @map("mp_card_id")
+
+  lastFour        String  @map("last_four")
+  brand           String?
+  expirationMonth Int?    @map("expiration_month")
+  expirationYear  Int?    @map("expiration_year")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  customer SpikeCustomer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+  @@map("spike_customer_cards")
+}

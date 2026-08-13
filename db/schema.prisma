@@ -1,0 +1,830 @@
+// =============================================================================
+// LIVE SHOPPING ARGENTINA — Esquema Prisma
+//
+// NOTA IMPORTANTE (ver blueprint/07-inventory-reservation.md):
+// Prisma cubre ~90 % del acceso a datos. Las rutas de CONCURRENCIA
+// (reserva de stock, commit de reserva, publicación del outbox) se escriben
+// en SQL crudo con $queryRaw porque Prisma no expresa bien
+// `UPDATE ... WHERE guard` ni `FOR UPDATE SKIP LOCKED`.
+// Eso es deliberado, no una carencia.
+//
+// Columnas generadas (`available`, `search_vector`, `postal_code_core`) y
+// los CHECK constraints se definen en la migración SQL, no acá:
+// Prisma no los modela. La migración 0001_init.sql es la fuente de verdad
+// del esquema físico.
+// =============================================================================
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["fullTextSearchPostgres", "postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")   // ?pgbouncer=true en producción
+  extensions = [citext, pgcrypto, pg_trgm, unaccent]
+}
+
+// ============================== ENUMS ========================================
+
+enum AuthProvider     { google apple phone            @@map("auth_provider") }
+enum UserRole         { buyer seller moderator admin  @@map("user_role") }
+enum UserStatus       { active suspended deleted      @@map("user_status") }
+enum DocType          { dni cuil cuit passport        @@map("doc_type") }
+enum GeocodeStatus    { pending ok low_confidence failed @@map("geocode_status") }
+enum DevicePlatform   { android ios                   @@map("device_platform") }
+enum SellerStatus     { pending_review active suspended rejected @@map("seller_status") }
+enum ProductStatus    { draft active paused archived  @@map("product_status") }
+
+enum LiveStatus {
+  SCHEDULED STARTING LIVE RECONNECTING ENDED FAILED CANCELLED
+  @@map("live_status")
+}
+
+enum OrderStatus {
+  DRAFT RESERVED PAYMENT_PENDING PAID CONFIRMED
+  PREPARING READY_TO_SHIP SHIPPED DELIVERED
+  CANCELLED REFUNDED EXPIRED
+  @@map("order_status")
+}
+
+enum PaymentStatus {
+  INITIATED PENDING IN_PROCESS APPROVED REJECTED
+  CANCELLED REFUNDED PARTIALLY_REFUNDED CHARGED_BACK
+  @@map("payment_status")
+}
+
+enum PaymentProviderEnum { mercadopago modo @@map("payment_provider") }
+enum PaymentMethod {
+  credit_card debit_card account_money bank_transfer cash
+  @@map("payment_method")
+}
+
+enum ReservationStatus { ACTIVE COMMITTED RELEASED EXPIRED @@map("reservation_status") }
+
+enum ShipmentStatus {
+  PENDING LABEL_CREATED DISPATCHED IN_TRANSIT
+  OUT_FOR_DELIVERY DELIVERED FAILED RETURNED CANCELLED
+  @@map("shipment_status")
+}
+
+enum ShippingProviderEnum {
+  own_flex andreani correo_argentino mercado_envios pickup
+  @@map("shipping_provider")
+}
+
+enum NotificationKind {
+  LIVE_STARTED CONTENT_PUBLISHED ORDER_UPDATE PAYMENT_UPDATE
+  SHIPMENT_UPDATE SELLER_SALE MARKETING
+  @@map("notification_kind")
+}
+enum NotificationChannel { push whatsapp email in_app @@map("notification_channel") }
+enum NotificationState   { queued sent delivered opened failed @@map("notification_state") }
+
+// ============================== IDENTIDAD ====================================
+
+model User {
+  id                String       @id                              // usr_<ulid>
+  firstName         String       @map("first_name")
+  lastName          String       @map("last_name")
+  email             String       @db.Citext
+  emailVerified     Boolean      @default(false) @map("email_verified")
+
+  phoneE164         String       @map("phone_e164")
+  phoneVerified     Boolean      @default(false) @map("phone_verified")   // requisito para COMPRAR
+  whatsappOptIn     Boolean      @default(true)  @map("whatsapp_opt_in")
+
+  authProvider      AuthProvider @map("auth_provider")
+  providerSub       String?      @map("provider_sub")
+  avatarUrl         String?      @map("avatar_url")
+
+  /// Desnormalizados: se leen en cada apertura de la hoja de compra.
+  hasDefaultAddress Boolean      @default(false) @map("has_default_address")
+  hasSavedCard      Boolean      @default(false) @map("has_saved_card")
+
+  role              UserRole     @default(buyer)
+  status            UserStatus   @default(active)
+  locale            String       @default("es-AR")
+  timezone          String       @default("America/Argentina/Buenos_Aires")
+
+  createdAt         DateTime     @default(now()) @map("created_at")
+  updatedAt         DateTime     @updatedAt      @map("updated_at")
+  lastSeenAt        DateTime     @default(now()) @map("last_seen_at")
+  deletedAt         DateTime?    @map("deleted_at")
+
+  addresses         UserAddress[]
+  devices           Device[]
+  refreshTokens     RefreshToken[]
+  seller            Seller?
+  follows           Follow[]
+  orders            Order[]
+  reservations      InventoryReservation[]
+  notifications     Notification[]
+  idempotencyKeys   IdempotencyKey[]
+
+  @@index([email])
+  @@index([phoneE164])
+  @@map("users")
+}
+
+/// Se crea en la PRIMERA COMPRA, nunca en el registro (§12).
+model UserAddress {
+  id               String        @id                             // adr_<ulid>
+  userId           String        @map("user_id")
+  label            String        @default("Principal")
+  isDefault        Boolean       @default(true) @map("is_default")
+
+  docType          DocType       @map("doc_type")
+  docNumberEnc     Bytes         @map("doc_number_enc")          // pgcrypto
+  docNumberLast4   String        @map("doc_number_last4")
+  recipientName    String        @map("recipient_name")
+  contactPhone     String        @map("contact_phone")
+
+  /// Dirección DESGLOSADA. Sin desglose no hay zonificación ni ruteo (§19).
+  street           String
+  streetNumber     String        @map("street_number")           // TEXT: existe "s/n"
+  floor            String?
+  apartment        String?
+  betweenStreets   String?       @map("between_streets")
+  city             String
+  province         String                                        // ISO 3166-2:AR
+  postalCode       String        @map("postal_code")
+  /// Generada en SQL: 4 dígitos núcleo. Unidad de agrupación logística.
+  postalCodeCore   String?       @map("postal_code_core")
+  country          String        @default("AR") @db.Char(2)
+  deliveryNotes    String?       @map("delivery_notes")
+
+  lat              Decimal?      @db.Decimal(9, 6)
+  lng              Decimal?      @db.Decimal(9, 6)
+  geocodeStatus    GeocodeStatus @default(pending) @map("geocode_status")
+  geocodeConfidence Float?       @map("geocode_confidence")
+
+  zone             String?
+  zoneCluster      String?       @map("zone_cluster")
+
+  createdAt        DateTime      @default(now()) @map("created_at")
+  updatedAt        DateTime      @updatedAt      @map("updated_at")
+  deletedAt        DateTime?     @map("deleted_at")
+
+  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orders           Order[]
+
+  @@index([userId])
+  @@index([province, postalCodeCore])
+  @@map("user_addresses")
+}
+
+model Device {
+  id            String          @id
+  userId        String          @map("user_id")
+  pushToken     String          @unique @map("push_token")
+  platform      DevicePlatform
+  appVersion    String          @map("app_version")
+  osVersion     String          @map("os_version")
+  timezone      String          @default("America/Argentina/Buenos_Aires")
+  pushEnabled   Boolean         @default(true) @map("push_enabled")
+  failureCount  Int             @default(0) @db.SmallInt @map("failure_count")
+  lastSeenAt    DateTime        @default(now()) @map("last_seen_at")
+  createdAt     DateTime        @default(now()) @map("created_at")
+
+  user          User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshTokens RefreshToken[]
+
+  @@index([userId])
+  @@map("devices")
+}
+
+model RefreshToken {
+  id          String    @id
+  userId      String    @map("user_id")
+  tokenHash   String    @unique @map("token_hash")               // SHA-256, nunca el token
+  deviceId    String?   @map("device_id")
+  /// Rotación: si llega un token ya rotado, es robo → se revoca la familia.
+  replacedBy  String?   @map("replaced_by")
+  revokedAt   DateTime? @map("revoked_at")
+  expiresAt   DateTime  @map("expires_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device      Device?   @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+// ============================== VENDEDORES ===================================
+
+model Seller {
+  id                String        @id                            // sel_<ulid>
+  userId            String        @unique @map("user_id")
+  legalName         String        @map("legal_name")
+  taxId             String        @map("tax_id")                 // CUIT
+  status            SellerStatus  @default(pending_review)
+  verified          Boolean       @default(false)
+
+  mpUserId          String?       @map("mp_user_id")
+  mpAccessTokenEnc  Bytes?        @map("mp_access_token_enc")
+  payoutHoldDays    Int           @default(7) @db.SmallInt @map("payout_hold_days")
+  commissionBps     Int           @default(1000) @map("commission_bps")   // 10 %
+
+  hasFlexDelivery   Boolean       @default(false) @map("has_flex_delivery")
+  flexMinStops      Int           @default(5) @db.SmallInt @map("flex_min_stops")
+
+  rating            Decimal?      @db.Decimal(2, 1)
+  ratingCount       Int           @default(0) @map("rating_count")
+
+  createdAt         DateTime      @default(now()) @map("created_at")
+  updatedAt         DateTime      @updatedAt      @map("updated_at")
+  suspendedAt       DateTime?     @map("suspended_at")
+  suspendedReason   String?       @map("suspended_reason")
+
+  user              User          @relation(fields: [userId], references: [id])
+  store             Store?
+  products          Product[]
+  liveSessions      LiveSession[]
+  follows           Follow[]
+  orders            Order[]
+  counters          SellerCounter[]
+
+  @@index([status])
+  @@map("sellers")
+}
+
+model Store {
+  id          String   @id
+  sellerId    String   @unique @map("seller_id")
+  handle      String   @unique @db.Citext
+  displayName String   @map("display_name")
+  bio         String?
+  avatarUrl   String?  @map("avatar_url")
+  bannerUrl   String?  @map("banner_url")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt      @map("updated_at")
+
+  seller      Seller   @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  @@map("stores")
+}
+
+// ============================== CATÁLOGO =====================================
+
+model Category {
+  id       String     @id
+  parentId String?    @map("parent_id")
+  slug     String     @unique
+  name     String
+  icon     String?
+  position Int        @default(0) @db.SmallInt
+  active   Boolean    @default(true)
+
+  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id])
+  children Category[] @relation("CategoryTree")
+  products Product[]
+
+  @@map("categories")
+}
+
+model Product {
+  id            String         @id                               // prd_<ulid>
+  sellerId      String         @map("seller_id")
+  categoryId    String?        @map("category_id")
+  title         String
+  description   String?
+  brand         String?
+  status        ProductStatus  @default(draft)
+
+  minPriceCents BigInt?        @map("min_price_cents")
+  maxPriceCents BigInt?        @map("max_price_cents")
+  // search_vector: columna generada en SQL, no modelada por Prisma.
+
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt      @map("updated_at")
+  deletedAt     DateTime?      @map("deleted_at")
+
+  seller        Seller         @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  category      Category?      @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  images        ProductImage[]
+  variants      ProductVariant[]
+  featuredIn    LiveFeaturedProduct[]
+
+  @@index([sellerId, status])
+  @@map("products")
+}
+
+model ProductImage {
+  id        String   @id
+  productId String   @map("product_id")
+  url       String
+  thumbUrl  String?  @map("thumb_url")
+  position  Int      @default(0) @db.SmallInt
+  width     Int?
+  height    Int?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId, position])
+  @@map("product_images")
+}
+
+model ProductVariant {
+  id               String   @id                                  // var_<ulid>
+  productId        String   @map("product_id")
+  sku              String
+  label            String                                        // "M / Negro"
+  size             String?
+  color            String?
+  colorHex         String?  @db.Char(7) @map("color_hex")
+
+  priceCents       BigInt   @map("price_cents")
+  compareAtCents   BigInt?  @map("compare_at_cents")
+  costCents        BigInt?  @map("cost_cents")                   // guardarraíl de margen
+  currency         String   @default("ARS") @db.Char(3)
+
+  /// OBLIGATORIO: sin peso no hay cotización de envío posible.
+  weightGr         Int      @map("weight_gr")
+  lengthCm         Int?     @db.SmallInt @map("length_cm")
+  widthCm          Int?     @db.SmallInt @map("width_cm")
+  heightCm         Int?     @db.SmallInt @map("height_cm")
+
+  active           Boolean  @default(true)
+  position         Int      @default(0) @db.SmallInt
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt      @map("updated_at")
+
+  product          Product               @relation(fields: [productId], references: [id], onDelete: Cascade)
+  inventory        Inventory?
+  reservations     InventoryReservation[]
+  movements        InventoryMovement[]
+  orderItems       OrderItem[]
+  featuredIn       LiveFeaturedProduct[]
+
+  @@unique([productId, sku])
+  @@index([productId])
+  @@map("product_variants")
+}
+
+// ============================== INVENTARIO ===================================
+
+/// Tabla propia y no columna en variants: es la fila con más contención
+/// del sistema. Los CHECK que impiden la sobreventa están en la migración SQL.
+model Inventory {
+  variantId         String   @id @map("variant_id")
+  onHand            Int      @default(0) @map("on_hand")
+  reserved          Int      @default(0)
+  /// Columna GENERADA en SQL: on_hand - reserved. Solo lectura.
+  available         Int      @default(0)
+  lowStockThreshold Int      @default(3) @db.SmallInt @map("low_stock_threshold")
+  version           Int      @default(0)
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  variant           ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  @@map("inventory")
+}
+
+model InventoryReservation {
+  id             String            @id                           // rsv_<ulid>
+  variantId      String            @map("variant_id")
+  userId         String            @map("user_id")
+  orderId        String?           @map("order_id")
+  liveId         String?           @map("live_id")
+  quantity       Int
+  status         ReservationStatus @default(ACTIVE)
+  expiresAt      DateTime          @map("expires_at")
+  releasedAt     DateTime?         @map("released_at")
+  createdAt      DateTime          @default(now()) @map("created_at")
+  idempotencyKey String            @map("idempotency_key")
+
+  variant        ProductVariant    @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  user           User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  order          Order?            @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  orderItems     OrderItem[]
+
+  @@unique([userId, idempotencyKey])
+  @@index([expiresAt])
+  @@index([variantId])
+  @@map("inventory_reservations")
+}
+
+/// Trazabilidad de todo movimiento de stock: permite auditar un descuadre.
+model InventoryMovement {
+  id            BigInt   @id @default(autoincrement())
+  variantId     String   @map("variant_id")
+  deltaOnHand   Int      @default(0) @map("delta_on_hand")
+  deltaReserved Int      @default(0) @map("delta_reserved")
+  reason        String
+  refType       String?  @map("ref_type")
+  refId         String?  @map("ref_id")
+  actorId       String?  @map("actor_id")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  variant       ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  @@index([variantId, createdAt])
+  @@map("inventory_movements")
+}
+
+// ============================== LIVE =========================================
+
+model LiveSession {
+  id              String     @id                                 // liv_<ulid>
+  sellerId        String     @map("seller_id")
+  title           String
+  description     String?
+  coverUrl        String?    @map("cover_url")
+  status          LiveStatus @default(SCHEDULED)
+
+  livekitRoomName String     @unique @map("livekit_room_name")
+  hlsUrl          String?    @map("hls_url")
+  recordingUrl    String?    @map("recording_url")
+
+  scheduledFor    DateTime?  @map("scheduled_for")
+  startedAt       DateTime?  @map("started_at")
+  endedAt         DateTime?  @map("ended_at")
+  reconnectUntil  DateTime?  @map("reconnect_until")             // gracia de 90 s
+
+  viewerCount     Int        @default(0) @map("viewer_count")    // sincronizado desde Redis
+  peakViewers     Int        @default(0) @map("peak_viewers")
+  uniqueViewers   Int        @default(0) @map("unique_viewers")
+  ordersCount     Int        @default(0) @map("orders_count")
+  gmvCents        BigInt     @default(0) @map("gmv_cents")
+
+  createdAt       DateTime   @default(now()) @map("created_at")
+  updatedAt       DateTime   @updatedAt      @map("updated_at")
+
+  seller          Seller                @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  featured        LiveFeaturedProduct[]
+  viewers         LiveViewer[]
+  orders          Order[]
+
+  @@index([sellerId, startedAt])
+  @@map("live_sessions")
+}
+
+/// Invariante "un solo destacado a la vez" = índice único parcial en SQL.
+model LiveFeaturedProduct {
+  id            String    @id                                    // ftr_<ulid>
+  liveId        String    @map("live_id")
+  productId     String    @map("product_id")
+  variantId     String?   @map("variant_id")
+
+  featuredAt    DateTime  @default(now()) @map("featured_at")
+  unfeaturedAt  DateTime? @map("unfeatured_at")
+  offsetMs      BigInt    @map("offset_ms")                      // reconstruye el VOD
+  priceCents    BigInt    @map("price_cents")                    // snapshot histórico
+
+  /// Embudo: distingue "no lo miran" de "lo miran y no compran".
+  impressions   BigInt    @default(0)
+  taps          BigInt    @default(0)
+  ordersCount   BigInt    @default(0) @map("orders_count")
+  revenueCents  BigInt    @default(0) @map("revenue_cents")
+
+  live          LiveSession     @relation(fields: [liveId], references: [id], onDelete: Cascade)
+  product       Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variant       ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  orders        Order[]
+
+  @@index([liveId, offsetMs])
+  @@map("live_featured_products")
+}
+
+model LiveViewer {
+  id        BigInt      @id @default(autoincrement())
+  liveId    String      @map("live_id")
+  userId    String?     @map("user_id")
+  joinedAt  DateTime    @default(now()) @map("joined_at")
+  leftAt    DateTime?   @map("left_at")
+  watchSec  Int?        @map("watch_sec")
+  mode      String?                                              // webrtc | llhls
+  network   String?
+  carrier   String?                                              // "solo falla en Personal 4G"
+
+  live      LiveSession @relation(fields: [liveId], references: [id], onDelete: Cascade)
+
+  @@index([liveId, joinedAt])
+  @@map("live_viewers")
+}
+
+// ============================== COMERCIO =====================================
+
+model Order {
+  id                 String      @id                             // ord_<ulid>
+  userId             String      @map("user_id")
+  sellerId           String      @map("seller_id")
+  status             OrderStatus @default(DRAFT)
+
+  /// ⛔ Lo que impide el cobro doble.
+  idempotencyKey     String      @map("idempotency_key")
+
+  liveId             String?     @map("live_id")
+  featuredProductId  String?     @map("featured_product_id")
+  source             String      @default("live")
+  /// SOLO telemetría. La API nunca bifurca lógica por este campo (fase 2: "voice").
+  channel            String      @default("ui_button")
+
+  currency           String      @default("ARS") @db.Char(3)
+  subtotalCents      BigInt      @map("subtotal_cents")
+  discountCents      BigInt      @default(0) @map("discount_cents")
+  shippingCents      BigInt      @default(0) @map("shipping_cents")
+  totalCents         BigInt      @map("total_cents")
+  platformFeeCents   BigInt      @default(0) @map("platform_fee_cents")
+  sellerPayoutCents  BigInt      @default(0) @map("seller_payout_cents")
+
+  addressId          String?     @map("address_id")
+  /// SNAPSHOT de la dirección: si el comprador se muda, el pedido conserva
+  /// a dónde realmente se envió.
+  shippingSnapshot   Json?       @map("shipping_snapshot")
+
+  expiresAt          DateTime?   @map("expires_at")
+  paidAt             DateTime?   @map("paid_at")
+  confirmedAt        DateTime?   @map("confirmed_at")
+  cancelledAt        DateTime?   @map("cancelled_at")
+  cancelReason       String?     @map("cancel_reason")
+
+  createdAt          DateTime    @default(now()) @map("created_at")
+  updatedAt          DateTime    @updatedAt      @map("updated_at")
+
+  user               User                  @relation(fields: [userId], references: [id])
+  seller             Seller                @relation(fields: [sellerId], references: [id])
+  live               LiveSession?          @relation(fields: [liveId], references: [id], onDelete: SetNull)
+  featuredProduct    LiveFeaturedProduct?  @relation(fields: [featuredProductId], references: [id], onDelete: SetNull)
+  address            UserAddress?          @relation(fields: [addressId], references: [id], onDelete: SetNull)
+  items              OrderItem[]
+  payments           Payment[]
+  shipment           Shipment?
+  reservations       InventoryReservation[]
+
+  @@unique([userId, idempotencyKey])
+  @@index([userId, createdAt])
+  @@index([sellerId, status, createdAt])
+  @@index([liveId])
+  @@map("orders")
+}
+
+model OrderItem {
+  id             String  @id
+  orderId        String  @map("order_id")
+  variantId      String  @map("variant_id")
+  reservationId  String? @map("reservation_id")
+
+  /// SNAPSHOTS: el pedido conserva lo que realmente se vendió.
+  sku            String
+  productTitle   String  @map("product_title")
+  variantLabel   String  @map("variant_label")
+  imageUrl       String? @map("image_url")
+  unitPriceCents BigInt  @map("unit_price_cents")
+  quantity       Int
+  weightGr       Int     @map("weight_gr")
+  totalCents     BigInt  @map("total_cents")
+
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  order          Order                 @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  variant        ProductVariant        @relation(fields: [variantId], references: [id])
+  reservation    InventoryReservation? @relation(fields: [reservationId], references: [id], onDelete: SetNull)
+
+  @@unique([orderId, variantId])
+  @@index([orderId])
+  @@map("order_items")
+}
+
+model Payment {
+  id                   String              @id                   // pay_<ulid>
+  orderId              String              @map("order_id")
+  provider             PaymentProviderEnum
+  status               PaymentStatus       @default(INITIATED)
+
+  externalId           String?             @map("external_id")
+  externalStatus       String?             @map("external_status")
+  externalStatusDetail String?             @map("external_status_detail")
+  idempotencyKey       String              @map("idempotency_key")
+
+  method               PaymentMethod?
+  cardBrand            String?             @map("card_brand")
+  cardLast4            String?             @map("card_last4")
+  installments         Int                 @default(1) @db.SmallInt
+
+  amountCents          BigInt              @map("amount_cents")
+  currency             String              @default("ARS") @db.Char(3)
+  feeCents             BigInt              @default(0) @map("fee_cents")
+  netCents             BigInt?             @map("net_cents")
+  refundedCents        BigInt              @default(0) @map("refunded_cents")
+
+  approvedAt           DateTime?           @map("approved_at")
+  rejectedAt           DateTime?           @map("rejected_at")
+  rejectionReason      String?             @map("rejection_reason")
+
+  createdAt            DateTime            @default(now()) @map("created_at")
+  updatedAt            DateTime            @updatedAt      @map("updated_at")
+
+  order                Order               @relation(fields: [orderId], references: [id])
+
+  @@unique([provider, idempotencyKey])
+  @@index([orderId])
+  @@map("payments")
+}
+
+/// ⛔ La tabla que evita la doble acreditación. MP reenvía webhooks de rutina.
+model PaymentWebhookEvent {
+  id              String              @id
+  provider        PaymentProviderEnum
+  externalEventId String              @map("external_event_id")
+  eventType       String              @map("event_type")
+  payload         Json
+  signatureValid  Boolean             @map("signature_valid")
+  processedAt     DateTime?           @map("processed_at")
+  error           String?
+  attempts        Int                 @default(0) @db.SmallInt
+  receivedAt      DateTime            @default(now()) @map("received_at")
+
+  @@unique([provider, externalEventId])
+  @@map("payment_webhook_events")
+}
+
+model Shipment {
+  id                 String               @id                    // shp_<ulid>
+  orderId            String               @unique @map("order_id")
+  provider           ShippingProviderEnum
+  status             ShipmentStatus       @default(PENDING)
+
+  externalId         String?              @map("external_id")
+  trackingCode       String?              @map("tracking_code")
+  labelUrl           String?              @map("label_url")
+  qrPayload          String?              @map("qr_payload")
+
+  /// Persistidos al confirmar el pago: alimentan la agrupación por CP (§19).
+  zone               String?
+  zoneCluster        String?              @map("zone_cluster")
+  postalCodeCore     String?              @map("postal_code_core")
+
+  weightGr           Int                  @map("weight_gr")
+  declaredValueCents BigInt               @map("declared_value_cents")
+  costCents          BigInt?              @map("cost_cents")
+
+  dispatchedAt       DateTime?            @map("dispatched_at")
+  deliveredAt        DateTime?            @map("delivered_at")
+  deliveredBy        String?              @map("delivered_by")
+
+  createdAt          DateTime             @default(now()) @map("created_at")
+  updatedAt          DateTime             @updatedAt      @map("updated_at")
+
+  order              Order                @relation(fields: [orderId], references: [id])
+  events             ShipmentEvent[]
+
+  @@index([zoneCluster, status])
+  @@map("shipments")
+}
+
+model ShipmentEvent {
+  id         BigInt         @id @default(autoincrement())
+  shipmentId String         @map("shipment_id")
+  status     ShipmentStatus
+  note       String?
+  occurredAt DateTime       @default(now()) @map("occurred_at")
+
+  shipment   Shipment       @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+
+  @@index([shipmentId, occurredAt])
+  @@map("shipment_events")
+}
+
+// ============================== SOCIAL =======================================
+
+model Follow {
+  followerId      String    @map("follower_id")
+  sellerId        String    @map("seller_id")
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  notifyLive      Boolean   @default(true)  @map("notify_live")
+  notifyContent   Boolean   @default(true)  @map("notify_content")
+  /// Único permiso que autoriza saltarse el horario de silencio.
+  isFavorite      Boolean   @default(false) @map("is_favorite")
+  mutedUntil      DateTime? @map("muted_until")
+
+  lastWatchedAt   DateTime? @map("last_watched_at")
+  totalWatchSec   Int       @default(0) @map("total_watch_sec")
+  ordersCount     Int       @default(0) @map("orders_count")
+  engagementScore Float     @default(0) @map("engagement_score")
+
+  follower        User      @relation(fields: [followerId], references: [id], onDelete: Cascade)
+  seller          Seller    @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  /// ⛔ El follow duplicado es imposible. ON CONFLICT DO NOTHING es idempotente.
+  @@id([followerId, sellerId])
+  @@index([sellerId, engagementScore])
+  @@index([followerId, engagementScore])
+  @@map("follows")
+}
+
+/// Contadores FRAGMENTADOS: evitan la fila caliente cuando 3.000 personas
+/// siguen al mismo vendedor durante un live viral.
+model SellerCounter {
+  sellerId  String @map("seller_id")
+  shard     Int    @db.SmallInt
+  followers BigInt @default(0)
+
+  seller    Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  @@id([sellerId, shard])
+  @@map("seller_counters")
+}
+
+model Notification {
+  id            String               @id
+  userId        String               @map("user_id")
+  kind          NotificationKind
+  channel       NotificationChannel
+  state         NotificationState    @default(queued)
+
+  title         String
+  body          String
+  deepLink      String?              @map("deep_link")
+  data          Json?
+
+  /// ⛔ Deduplicación: un reintento de la cola no genera un segundo push.
+  dedupeKey     String               @unique @map("dedupe_key")
+
+  providerMsgId String?              @map("provider_msg_id")
+  sentAt        DateTime?            @map("sent_at")
+  deliveredAt   DateTime?            @map("delivered_at")
+  openedAt      DateTime?            @map("opened_at")
+  failedReason  String?              @map("failed_reason")
+  createdAt     DateTime             @default(now()) @map("created_at")
+
+  user          User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("notifications")
+}
+
+// ============================== INFRAESTRUCTURA ==============================
+
+/// Transactional outbox: el evento se inserta en la MISMA transacción que
+/// el cambio de estado. Si el proceso muere, el evento no se pierde.
+model Outbox {
+  id            BigInt    @id @default(autoincrement())
+  aggregateType String    @map("aggregate_type")
+  aggregateId   String    @map("aggregate_id")
+  eventType     String    @map("event_type")
+  payload       Json
+  publishedAt   DateTime? @map("published_at")
+  attempts      Int       @default(0) @db.SmallInt
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  @@map("outbox")
+}
+
+model IdempotencyKey {
+  key            String
+  userId         String    @map("user_id")
+  endpoint       String
+  requestHash    String    @map("request_hash")                  // misma clave, cuerpo distinto
+  responseStatus Int?      @db.SmallInt @map("response_status")
+  responseBody   Json?     @map("response_body")
+  lockedAt       DateTime? @map("locked_at")
+  completedAt    DateTime? @map("completed_at")
+  expiresAt      DateTime  @map("expires_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, key])
+  @@index([expiresAt])
+  @@map("idempotency_keys")
+}
+
+model AuditLog {
+  id         BigInt   @id @default(autoincrement())
+  actorType  String   @map("actor_type")
+  actorId    String?  @map("actor_id")
+  action     String
+  entityType String   @map("entity_type")
+  entityId   String   @map("entity_id")
+  before     Json?
+  after      Json?
+  ip         String?  @db.Inet
+  userAgent  String?  @map("user_agent")
+  traceId    String?  @map("trace_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([entityType, entityId, createdAt])
+  @@index([actorId, createdAt])
+  @@map("audit_logs")
+}
+
+model AnalyticsEvent {
+  id         BigInt   @id @default(autoincrement())
+  userId     String?  @map("user_id")
+  sessionId  String?  @map("session_id")
+  name       String
+  liveId     String?  @map("live_id")
+  sellerId   String?  @map("seller_id")
+  productId  String?  @map("product_id")
+  props      Json?
+  occurredAt DateTime @default(now()) @map("occurred_at")
+
+  @@index([name, occurredAt])
+  @@index([liveId, occurredAt])
+  @@map("analytics_events")
+}

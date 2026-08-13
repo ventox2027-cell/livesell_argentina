@@ -1,0 +1,13 @@
+# pnpm bloquea por defecto los scripts de instalación de las dependencias, que
+# es lo correcto: un `postinstall` es ejecución de código arbitrario de un
+# tercero en la máquina de quien instala.
+#
+# Estas cinco lo necesitan de verdad —Prisma baja sus engines, swc y esbuild
+# sus binarios nativos— y se habilitan de forma explícita. Sin esta lista, pnpm
+# abre un prompt interactivo que en CI deja la build colgada hasta el timeout.
+allowBuilds:
+  '@prisma/client': true
+  '@prisma/engines': true
+  '@swc/core': true
+  esbuild: true
+  prisma: true

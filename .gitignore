@@ -1,0 +1,44 @@
+# ─── Secretos ───
+# Regla dura del proyecto: ninguna clave viaja en el repositorio.
+# Los .env viven sólo en la máquina y en `fly secrets`.
+.env
+.env.local
+.env.*.local
+**/.env
+**/.env.local
+!**/.env.example
+
+# ─── Dependencias y compilados ───
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+*.iml
+**/android/.gradle/
+**/android/local.properties
+**/android/app/debug/
+**/android/app/profile/
+**/android/app/release/
+**/ios/Pods/
+**/ios/Flutter/Flutter.framework/
+**/ios/Flutter/ephemeral/
+
+# ─── Resultados de spikes ───
+# Pueden traer identificadores de red y de dispositivo: se comparten por
+# otro canal, no por el repositorio.
+spike-results/*.json
+!spike-results/.gitkeep
+
+# ─── Entorno local ───
+.DS_Store
+Thumbs.db
+*.log
+.idea/
+.vscode/*
+!.vscode/extensions.json

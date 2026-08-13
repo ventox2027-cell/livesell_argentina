@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Glass-to-glass · reloj de referencia</title>
+<style>
+  :root { color-scheme: dark; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #000; color: #0f0;
+    font-family: "SF Mono", "Roboto Mono", Consolas, monospace;
+    height: 100vh; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 2vh;
+    overflow: hidden;
+  }
+  /* Enorme a propósito: tiene que leerse en una foto sacada a un metro,
+     a través de una cámara de celular, con la compresión del video encima. */
+  #clock { font-size: 22vw; font-weight: 700; line-height: 1; letter-spacing: -0.02em; }
+  #ms    { font-size: 8vw;  opacity: .85; }
+  .bar   { display: flex; gap: 1vw; }
+  /* Franjas alternadas: dan una referencia visual del movimiento incluso si
+     los dígitos salen borrosos por el shutter de la cámara. */
+  .tick  { width: 6vw; height: 4vh; background: #0f0; opacity: .18; border-radius: 3px; }
+  .tick.on { opacity: 1; }
+  #status { position: fixed; top: 12px; left: 12px; font-size: 13px; opacity: .7; }
+  #status.bad { color: #f55; opacity: 1; }
+  #hint { position: fixed; bottom: 12px; font-size: 12px; opacity: .45; text-align: center; padding: 0 16px; }
+  .setup { display: flex; flex-direction: column; gap: 10px; width: min(520px, 90vw); }
+  .setup input, .setup button {
+    font: inherit; font-size: 15px; padding: 10px 12px; border-radius: 8px;
+    border: 1px solid #0f04; background: #0a0a0a; color: #0f0;
+  }
+  .setup button { cursor: pointer; background: #0f0; color: #000; font-weight: 700; border: none; }
+  #app { display: none; flex-direction: column; align-items: center; gap: 2vh; }
+</style>
+</head>
+<body>
+
+<div id="status">sin sincronizar</div>
+
+<!-- Configuración: se pide una vez y queda en localStorage. -->
+<div class="setup" id="setup">
+  <div style="font-size:18px;font-weight:700">Reloj de referencia · glass-to-glass</div>
+  <div style="font-size:13px;opacity:.6;line-height:1.5">
+    Se sincroniza contra <code>/api/v1/spike/time</code>, el <strong>mismo</strong> reloj que usa la app.
+    Sin eso, la resta entre este reloj y el overlay del teléfono no significa nada.
+  </div>
+  <input id="baseUrl" placeholder="https://livesell-api-staging.fly.dev" />
+  <input id="apiKey" placeholder="SPIKE_API_KEY" type="password" />
+  <button id="go">SINCRONIZAR Y EMPEZAR</button>
+
+  <div style="height:1px;background:#0f03;margin:6px 0"></div>
+
+  <!--
+    Modo local: NO sincroniza con el servidor.
+    Sirve SOLO para el método de "dos pantallas en la misma foto" (notebook y
+    celular B juntos en el encuadre): ahí se comparan dos vistas del MISMO
+    reloj, así que no hace falta sincronizar nada.
+    Para el método del overlay del celular B sí hace falta sincronizar, porque
+    se comparan dos relojes distintos.
+  -->
+  <button id="local" style="background:#333;color:#0f0">
+    MODO LOCAL (sin backend) — para foto de notebook + celular juntos
+  </button>
+</div>
+
+<div id="app">
+  <div id="clock">00:00</div>
+  <div id="ms">.000</div>
+  <div class="bar" id="bar"></div>
+</div>
+
+<div id="hint">
+  Apuntá la cámara del teléfono A a esta pantalla · Fotografiá la pantalla del teléfono B
+</div>
+
+<script>
+(() => {
+  'use strict';
+
+  const SAMPLES = 9;
+  let offsetMs = 0;
+  let bestRtt = Infinity;
+
+  const $ = (id) => document.getElementById(id);
+
+  // Persistimos la URL, nunca la clave: no queda en el equipo que se lleva a la calle.
+  $('baseUrl').value = localStorage.getItem('spikeBaseUrl') || '';
+
+  /**
+   * Algoritmo de Cristian, idéntico al de ClockSync en Flutter.
+   * Se conserva la muestra de MENOR RTT, no el promedio: es la que menos
+   * asimetría de red arrastra.
+   */
+  async function sync(baseUrl, apiKey) {
+    for (let i = 0; i < SAMPLES; i++) {
+      const t0 = Date.now();
+      const res = await fetch(`${baseUrl}/api/v1/spike/time?clientSentAtMs=${t0}`, {
+        headers: { 'x-spike-key': apiKey },
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const { serverTimeMs } = await res.json();
+      const t1 = Date.now();
+      const rtt = t1 - t0;
+
+      if (rtt < bestRtt) {
+        bestRtt = rtt;
+        offsetMs = serverTimeMs + Math.round(rtt / 2) - t1;
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+
+  const pad = (n, w) => String(n).padStart(w, '0');
+
+  function render() {
+    const t = new Date(Date.now() + offsetMs);
+    $('clock').textContent = `${pad(t.getMinutes(), 2)}:${pad(t.getSeconds(), 2)}`;
+    $('ms').textContent = `.${pad(t.getMilliseconds(), 3)}`;
+
+    // 10 franjas: una por cada 100 ms del segundo en curso.
+    const lit = Math.floor(t.getMilliseconds() / 100);
+    document.querySelectorAll('.tick').forEach((el, i) => el.classList.toggle('on', i <= lit));
+
+    requestAnimationFrame(render);
+  }
+
+  function startRendering() {
+    $('setup').style.display = 'none';
+    $('app').style.display = 'flex';
+    for (let i = 0; i < 10; i++) {
+      const d = document.createElement('div');
+      d.className = 'tick';
+      $('bar').appendChild(d);
+    }
+    requestAnimationFrame(render);
+  }
+
+  // Modo local: offset 0. Válido únicamente cuando notebook y celular B
+  // entran en la MISMA foto (se compara el reloj consigo mismo a través
+  // del video, no contra otro reloj).
+  $('local').addEventListener('click', () => {
+    offsetMs = 0;
+    $('status').textContent = 'MODO LOCAL · sin sincronizar — solo para foto de las dos pantallas juntas';
+    startRendering();
+  });
+
+  $('go').addEventListener('click', async () => {
+    const baseUrl = $('baseUrl').value.trim().replace(/\/$/, '');
+    const apiKey = $('apiKey').value.trim();
+    if (!baseUrl || !apiKey) return;
+
+    $('status').textContent = 'sincronizando…';
+    try {
+      await sync(baseUrl, apiKey);
+      localStorage.setItem('spikeBaseUrl', baseUrl);
+
+      $('status').textContent = `sincronizado · offset ${offsetMs} ms · mejor RTT ${bestRtt} ms`;
+      $('status').classList.remove('bad');
+      startRendering();
+
+      // Los relojes derivan. Con una sesión de media hora, sin resincronizar
+      // se acumula error suficiente para ensuciar las últimas mediciones.
+      setInterval(() => sync(baseUrl, apiKey).catch(() => {}), 5 * 60 * 1000);
+    } catch (err) {
+      $('status').textContent = `ERROR: ${err.message} — no midas sin sincronizar`;
+      $('status').classList.add('bad');
+    }
+  });
+})();
+</script>
+</body>
+</html>

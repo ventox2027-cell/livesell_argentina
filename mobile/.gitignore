@@ -1,0 +1,19 @@
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+pubspec.lock
+
+# Secretos y firmas — jamás versionados
+*.jks
+*.keystore
+key.properties
+ios/Runner/GoogleService-Info.plist
+android/app/google-services.json
+**/*.env
+
+.idea/
+.vscode/
+*.iml
+.DS_Store
