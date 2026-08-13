@@ -31,9 +31,34 @@ android {
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
+            // ⚠️ FIRMADO CON LA CLAVE DE DEBUG.
+            //
+            // Sirve para instalar en teléfonos propios y nada más. Antes de
+            // publicar hay que generar una clave propia y guardarla donde no se
+            // pierda: si se pierde, NO se puede volver a publicar una
+            // actualización de la app. Nunca. Hay que subir una app nueva y
+            // pedirle a todo el mundo que la instale de cero.
+            //
+            // Al cambiarla también cambia la huella SHA-1, así que hay que
+            // agregar un cliente de OAuth de Android nuevo en Google Cloud.
             signingConfig = signingConfigs.getByName("debug")
+        }
+    }
+
+    // Nombre del archivo APK.
+    //
+    // Por defecto Gradle emite "app-arm64-v8a-release.apk", que al descargarlo
+    // no dice de qué app es. Con varias versiones en la carpeta de descargas
+    // no hay forma de saber cuál es cuál.
+    applicationVariants.all {
+        val variante = this
+        variante.outputs.all {
+            val salida = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
+            val abi = salida.filters
+                .firstOrNull { it.filterType == "ABI" }
+                ?.identifier
+                ?.let { "-$it" } ?: ""
+            salida.outputFileName = "VendoX-${variante.versionName}$abi.apk"
         }
     }
 }

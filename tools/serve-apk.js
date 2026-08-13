@@ -41,12 +41,30 @@ function lanAddress() {
   );
 }
 
+/**
+ * Nombre con el que se descarga el archivo.
+ *
+ * Flutter emite "app-arm64-v8a-release.apk", que en la carpeta de descargas no
+ * dice de qué app es ni de qué versión. Con tres compilaciones encima no hay
+ * forma de saber cuál instalar.
+ */
+function nombreDeDescarga(archivo) {
+  const abi = /(arm64-v8a|armeabi-v7a|x86_64)/.exec(archivo)?.[1];
+  return abi ? `VendoX-${abi}.apk` : 'VendoX.apk';
+}
+
 function listApks() {
   if (!fs.existsSync(APK_DIR)) return [];
   return fs
     .readdirSync(APK_DIR)
     .filter((f) => f.endsWith('.apk'))
-    .map((f) => ({ name: f, sizeMb: (fs.statSync(path.join(APK_DIR, f)).size / 1048576).toFixed(1) }));
+    .map((f) => ({
+      name: f,
+      descarga: nombreDeDescarga(f),
+      sizeMb: (fs.statSync(path.join(APK_DIR, f)).size / 1048576).toFixed(1),
+      // Fecha de compilación: evita instalar una versión vieja por error.
+      hora: fs.statSync(path.join(APK_DIR, f)).mtime.toTimeString().slice(0, 5),
+    }));
 }
 
 const server = http.createServer((req, res) => {
@@ -70,8 +88,8 @@ const server = http.createServer((req, res) => {
         // arm64-v8a es el de prácticamente todos los celulares desde 2018.
         const recommended = a.name.includes('arm64-v8a');
         return `<li>
-          <a href="/${a.name}" download>${a.name}</a>
-          <span class="mb">${a.sizeMb} MB</span>
+          <a href="/${a.name}" download="${a.descarga}">${a.descarga}</a>
+          <span class="mb">${a.sizeMb} MB · ${a.hora}</span>
           ${recommended ? '<b class="rec">← este</b>' : ''}
         </li>`;
       })
@@ -80,7 +98,7 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     res.end(`<!doctype html><html lang="es"><head>
       <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-      <title>Instalar LiveSell Spike</title>
+      <title>Instalar VendoX</title>
       <style>
         body{font-family:system-ui,sans-serif;background:#111;color:#eee;padding:24px;line-height:1.6}
         h1{font-size:20px;margin:0 0 4px}
@@ -92,8 +110,8 @@ const server = http.createServer((req, res) => {
         .rec{color:#4ade80;font-size:13px;margin-left:8px}
         .note{background:#1a1a2e;border-left:3px solid #4ea8ff;padding:12px;border-radius:6px;font-size:13px;color:#bbb}
       </style></head><body>
-      <h1>LiveSell · Spike</h1>
-      <p>Descargá e instalá el APK en este celular.</p>
+      <h1>VendoX</h1>
+      <p>Descargá e instalá la app en este celular.</p>
       <ul>${rows || '<li>No hay APKs compilados todavía.</li>'}</ul>
       <p style="margin-top:24px">
         En la <b>notebook</b>, el reloj de referencia:
@@ -119,7 +137,7 @@ const server = http.createServer((req, res) => {
   res.writeHead(200, {
     'content-type': 'application/vnd.android.package-archive',
     'content-length': size,
-    'content-disposition': `attachment; filename="${path.basename(file)}"`,
+    'content-disposition': `attachment; filename="${nombreDeDescarga(path.basename(file))}"`,
   });
   fs.createReadStream(file).pipe(res);
 });

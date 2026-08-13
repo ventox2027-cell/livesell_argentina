@@ -45,7 +45,7 @@ class LiveSellApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Live Shopping',
+      title: 'VendoX',
       debugShowCheckedModeBanner: false,
       theme: buildAppTheme(),
       // Sin tema claro: la app es video a pantalla completa y un fondo claro

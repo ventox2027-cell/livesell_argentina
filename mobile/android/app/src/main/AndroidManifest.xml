@@ -28,7 +28,7 @@
          ⛔ La app del producto va siempre por HTTPS: esta línea NO debe existir
          allí. Es una de las razones por las que este proyecto es descartable. -->
     <application
-        android:label="LiveSell Spike"
+        android:label="VendoX"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true">

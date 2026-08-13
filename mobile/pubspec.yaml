@@ -1,5 +1,5 @@
-name: livesell_spike
-description: "Sprint 0 · Spike de LiveKit — medición de latencia real desde Argentina"
+name: vendox
+description: "VendoX — venta en vivo. Feed vertical, transmisiones y compra integrada."
 publish_to: "none"
 version: 0.1.0+1
 
