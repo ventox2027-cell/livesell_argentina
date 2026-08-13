@@ -11,6 +11,10 @@ import {
 } from '@/modules/payments/mp.client';
 import { asString, diagnoseSignature, verifyMpSignature } from '@/modules/payments/mp-signature';
 import {
+  describePaymentOutcome,
+  MENSAJE_INCIERTO,
+} from '@/modules/payments/payment-messages';
+import {
   amountToCents,
   canAttemptPayment,
   centsToAmount,
@@ -181,6 +185,8 @@ export class PaymentsService {
         return {
           order: await this.prisma.spikeOrder.findUniqueOrThrow({ where: { id: order.id } }),
           outcome: 'UNKNOWN' as const,
+          message: MENSAJE_INCIERTO.text,
+          remedy: MENSAJE_INCIERTO.remedy,
         };
       }
 
@@ -190,10 +196,18 @@ export class PaymentsService {
           status: err.status,
           body: scrubMpPayment(err.body),
         });
+        /**
+         * El mensaje que sale hacia la app es el TRADUCIDO, no el de Mercado
+         * Pago. "invalid card_number_validation" es correcto, preciso e
+         * inútil para quien está comprando. El código técnico igual queda en
+         * la auditoría, que es donde sirve.
+         */
+        const explicacion = describePaymentOutcome({ errorBody: err.body });
         return {
           order: await this.prisma.spikeOrder.findUniqueOrThrow({ where: { id: order.id } }),
           outcome: 'REJECTED' as const,
-          message: err.message,
+          message: explicacion.text,
+          remedy: explicacion.remedy,
         };
       }
       throw err;
@@ -207,7 +221,17 @@ export class PaymentsService {
       await this.saveCardSafely(order.buyerEmail, mpPayment);
     }
 
-    return { order: applied.order, outcome: 'RESOLVED' as const, payment: applied.payment };
+    // También cuando el banco rechaza: `cc_rejected_insufficient_amount` le
+    // dice tan poco a un comprador como el código de validación.
+    const explicacion = describePaymentOutcome({ statusDetail: mpPayment.status_detail });
+
+    return {
+      order: applied.order,
+      outcome: 'RESOLVED' as const,
+      payment: applied.payment,
+      message: explicacion.text,
+      remedy: explicacion.remedy,
+    };
   }
 
   /**

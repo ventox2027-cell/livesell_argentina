@@ -87,23 +87,24 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       }
 
       setState(() => _orden = resultado.order);
+
+      /// El texto viene traducido del backend. La app NO arma mensajes de
+      /// error de pago por su cuenta: si lo hiciera, habría dos lugares donde
+      /// mantener las mismas explicaciones y uno de los dos quedaría viejo.
+      final texto = resultado.message;
       switch (resultado.outcome) {
         case PayOutcome.resuelto:
+          final pagado = resultado.order.status == OrderStatus.paid;
           _avisar(
-            resultado.order.status == OrderStatus.paid
-                ? '✅ Pago acreditado'
-                : 'Estado: ${resultado.order.status.etiqueta}',
+            pagado ? '✅ Pago acreditado' : (texto ?? resultado.order.status.etiqueta),
+            error: !pagado,
           );
         case PayOutcome.rechazado:
-          _avisar(
-            'Rechazado: ${resultado.message ?? "probá con otra tarjeta"}',
-            error: true,
-          );
+          _avisar(texto ?? 'No se pudo completar el pago.', error: true);
         case PayOutcome.desconocido:
-          _avisar(
-            'No sabemos si se cobró. Se está verificando contra Mercado Pago.',
-            error: true,
-          );
+          // Ojo: acá NO se dice "rechazado". No sabemos si se cobró, y decir
+          // que falló haría que la persona pague de nuevo.
+          _avisar(texto ?? 'Estamos confirmando el pago.', error: false);
       }
     } catch (e) {
       _avisar('No se pudo iniciar la compra: $e', error: true);
