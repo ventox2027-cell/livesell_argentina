@@ -636,7 +636,7 @@ asumir que el camino feliz es el único que termina.
 | Compra completa | — | — | **1,8 s** ✅ |
 | Chat de extremo a extremo | ≤ 300 ms | 800 ms | sin medir |
 
-**Tests:** 366 en backend (unitarios + integración contra PostgreSQL real).
+**Tests:** 370 en backend + 17 de contrato en la app (unitarios + integración contra PostgreSQL real).
 Typecheck, lint y `flutter analyze` en verde.
 
 ---
@@ -744,7 +744,7 @@ backend/
                       sobreviven al spike
   src/shared/         errores, guards, observabilidad, Prisma, Redis
   prisma/schema.prisma
-  test/               366 tests · test/stress/ prueba de 1000 compradores
+  test/               370 tests · test/stress/ prueba de 1000 compradores
 mobile/
   lib/core/           design, auth, network, config
   lib/features/       auth, feed, seller, inventory, profile, search, lives, orders, spike

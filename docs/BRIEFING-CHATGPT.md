@@ -60,7 +60,7 @@ Tres principios que atraviesan todo:
 | Search / Notifications | ⛔ |
 | Admin Lite | ⛔ **requisito previo al lanzamiento** |
 
-**366 tests** en backend contra PostgreSQL real. Lint, typecheck y
+**370 tests** en backend, **17 en la app** contra PostgreSQL real. Lint, typecheck y
 `flutter analyze` en verde.
 
 ---
@@ -227,6 +227,7 @@ producción.
 | 10 | BullMQ 6 rechaza `:` en nombres de cola | El proceso no arrancaba |
 | 11 | `tsx` no emite metadata de decoradores | 500 desde adentro de un guard, sin pista de la causa |
 | 12 | Dio manda `content-type: application/json` sin cuerpo | **Los cuatro DELETE de la app rotos a la vez**, con la suite entera en verde |
+| 13 | Los listados mandaban sólo `url` en las imágenes; el modelo de Flutter exigía el objeto completo | `type 'Null' is not a subtype of type 'String'`: **la lista de productos del vendedor se caía entera**, y sólo cuando un producto tenía foto |
 
 **El patrón:** el error nunca estuvo en el camino feliz. Estuvo en qué pasa
 cuando algo se corta a la mitad, cuando el aviso llega tarde o cuando llega dos
@@ -236,6 +237,13 @@ veces.
 armaban la aplicación por su cuenta sin ejecutar `main.ts`, así que probaban un
 servidor que no era el de producción. Se resolvió moviendo toda la
 configuración a un archivo único que usan `main.ts` y los tests.
+
+**La lección del 12 y el 13:** los dos defectos viven **en la costura** entre
+backend y app. Las dos mitades estaban bien probadas por separado y nadie
+probaba el medio. Ahora hay tests de contrato en los dos lados: el backend
+afirma la forma de lo que devuelve, y la app tiene sus primeros 17 tests
+parseando respuestas reales del servidor —incluido el caso degradado, porque
+un campo que falta tiene que degradar lo que se ve, nunca tumbar la pantalla.
 
 ---
 

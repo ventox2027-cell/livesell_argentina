@@ -358,7 +358,7 @@ export class ProductsService {
         ...PRODUCT_SELECT,
         // `take: 1` evita el N+1: una consulta con join en vez de una por
         // producto para traer la portada.
-        images: { where: { position: 0 }, take: 1, select: { url: true } },
+        images: { where: { position: 0 }, take: 1, select: { id: true, url: true, position: true } },
         _count: { select: { variants: { where: { deletedAt: null } } } },
       },
       orderBy: { id: 'desc' },
@@ -391,7 +391,7 @@ export class ProductsService {
       },
       select: {
         ...PRODUCT_SELECT,
-        images: { orderBy: { position: 'asc' }, take: 1, select: { url: true } },
+        images: { orderBy: { position: 'asc' }, take: 1, select: { id: true, url: true, position: true } },
       },
       orderBy: { id: 'desc' },
       take: query.limit + 1,
@@ -434,7 +434,7 @@ export class ProductsService {
       },
       select: {
         ...PRODUCT_SELECT,
-        images: { orderBy: { position: 'asc' }, take: 1, select: { url: true } },
+        images: { orderBy: { position: 'asc' }, take: 1, select: { id: true, url: true, position: true } },
         // Un solo join en vez de una consulta por producto. Con 20 productos
         // por página, el N+1 serían 41 viajes a la base para armar un scroll.
         store: {

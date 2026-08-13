@@ -929,6 +929,74 @@ describe('Feed de descubrimiento', () => {
   });
 });
 
+describe('⛔ Forma de las imágenes en los listados', () => {
+  /**
+   * ─── El defecto que estos tests fijan ───
+   *
+   * Los listados mandaban SÓLO `url` en cada imagen —alcanza para dibujar la
+   * portada— pero el modelo de Flutter esperaba el objeto completo y hacía
+   * `j['id'] as String`. La lista de productos del vendedor se caía entera con
+   * `type 'Null' is not a subtype of type 'String'`.
+   *
+   * Y sólo pasaba cuando un producto TENÍA foto, así que sobrevivió a toda la
+   * suite, a `flutter analyze` limpio y a varias pruebas en el teléfono.
+   *
+   * La lección: una proyección más chica "para ahorrar" no ahorra nada —esas
+   * columnas ya están en la fila que se trajo— y rompe el contrato con quien
+   * consume. Una imagen es siempre `{id, url, position}`, en todos los
+   * endpoints.
+   */
+  const CAMPOS = ['id', 'url', 'position'];
+
+  it('en el listado del vendedor', async () => {
+    const { token } = await nuevoVendedor();
+    const p = await crearProducto(token);
+    await subirArchivo(token, p.id, jpegDePrueba());
+
+    const r = await call('GET', '/api/v1/products/mine?limit=10', { token });
+    const item = r.body.items.find((i: { id: string }) => i.id === p.id);
+
+    expect(item.images).toHaveLength(1);
+    expect(Object.keys(item.images[0]).sort()).toEqual([...CAMPOS].sort());
+  });
+
+  it('en la vidriera pública de una tienda', async () => {
+    const { token, store } = await nuevoVendedor();
+    const p = await crearProducto(token, { status: 'ACTIVE' });
+    await subirArchivo(token, p.id, jpegDePrueba());
+
+    const r = await call('GET', `/api/v1/stores/by-slug/${store.slug}/products`);
+    const item = r.body.items.find((i: { id: string }) => i.id === p.id);
+
+    expect(Object.keys(item.images[0]).sort()).toEqual([...CAMPOS].sort());
+  });
+
+  it('en el feed', async () => {
+    const { token } = await nuevoVendedor();
+    const p = await crearProducto(token, { status: 'ACTIVE' });
+    await subirArchivo(token, p.id, jpegDePrueba());
+
+    const r = await call('GET', '/api/v1/discover/products?limit=50');
+    const item = r.body.items.find((i: { id: string }) => i.id === p.id);
+
+    expect(Object.keys(item.images[0]).sort()).toEqual([...CAMPOS].sort());
+  });
+
+  it('en el detalle, que además trae el texto alternativo', async () => {
+    const { token } = await nuevoVendedor();
+    const p = await crearProducto(token);
+    await subirArchivo(token, p.id, jpegDePrueba());
+
+    const r = await call('GET', `/api/v1/products/${p.id}`, { token });
+
+    // El detalle es un superconjunto: los tres campos comunes están, y suma
+    // `altText`, que en un listado no se usa.
+    for (const campo of CAMPOS) {
+      expect(Object.keys(r.body.images[0])).toContain(campo);
+    }
+  });
+});
+
 describe('Paginación', () => {
   it('pagina por cursor sin repetir ni saltear', async () => {
     const { token } = await nuevoVendedor();

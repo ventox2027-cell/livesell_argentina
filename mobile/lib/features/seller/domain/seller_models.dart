@@ -168,8 +168,21 @@ class Variante {
 class ImagenProducto {
   const ImagenProducto({required this.id, required this.url, required this.position});
 
+  /// ─── Por qué nada de acá es un cast estricto ───
+  ///
+  /// Esto crasheaba la lista de productos del vendedor con
+  /// `type 'Null' is not a subtype of type 'String'`: los endpoints de listado
+  /// mandaban sólo `url` —alcanza para la portada— y el `j['id'] as String`
+  /// reventaba. Y no reventaba una imagen: reventaba la pantalla entera, y
+  /// sólo cuando un producto tenía foto, que es la razón por la que tardó en
+  /// aparecer.
+  ///
+  /// El contrato del backend se unificó para que siempre manden los tres
+  /// campos. Esto queda tolerante igual: **un campo que falta tiene que
+  /// degradar lo que muestra, nunca tumbar la pantalla**. La app está en
+  /// teléfonos que no se pueden actualizar al mismo tiempo que el servidor.
   factory ImagenProducto.fromJson(Map<String, dynamic> j) => ImagenProducto(
-        id: j['id'] as String,
+        id: j['id'] as String? ?? '',
         url: j['url'] as String? ?? '',
         position: _int(j['position']),
       );
@@ -177,6 +190,9 @@ class ImagenProducto {
   final String id;
   final String url;
   final int position;
+
+  /// Sin id no se puede borrar ni reordenar: vino de una proyección parcial.
+  bool get esManipulable => id.isNotEmpty;
 }
 
 class Producto {
