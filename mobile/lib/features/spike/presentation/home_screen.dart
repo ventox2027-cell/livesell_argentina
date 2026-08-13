@@ -19,14 +19,14 @@ import 'viewer_screen.dart';
 /// Flujo: el teléfono A crea la sesión y transmite; el teléfono B se une
 /// pegando el sessionId. Es la forma más simple de coordinar dos dispositivos
 /// en la calle sin construir un sistema de emparejamiento.
-class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+class SpikeHomeScreen extends StatefulWidget {
+  const SpikeHomeScreen({super.key});
 
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  State<SpikeHomeScreen> createState() => _SpikeHomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _SpikeHomeScreenState extends State<SpikeHomeScreen> {
   final _api = SpikeApi();
   late final _clock = ClockSync(_api);
 

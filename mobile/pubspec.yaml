@@ -35,6 +35,10 @@ dependencies:
   # No es una preferencia de implementación: es el motivo por el que podemos
   # cobrar sin una auditoría anual encima.
   webview_flutter: ^4.10.0
+  flutter_secure_storage: ^10.3.1
+  go_router: ^17.5.0
+  google_fonts: ^8.2.1
+  cached_network_image: ^3.4.1
 
 dev_dependencies:
   flutter_test:

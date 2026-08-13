@@ -1,55 +1,70 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'app/app_shell.dart';
 import 'core/config/runtime_config.dart';
-import 'features/spike/presentation/home_screen.dart';
+import 'core/design/theme.dart';
 
+/// Live Shopping Argentina.
+///
+/// El arranque hace lo mínimo indispensable y nada más: cada milisegundo acá
+/// es tiempo de pantalla en blanco. La sesión se restaura en segundo plano,
+/// desde `AppShell`, para que la primera imagen aparezca cuanto antes.
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Tiene que cargar ANTES de runApp: SpikeApi lee la URL del backend al
-  // construirse y RuntimeConfig.instance lanza si no estÃ¡ inicializado.
+  // La URL del backend se lee del almacenamiento local: permite reapuntar la
+  // app sin recompilar, que en pruebas de campo con dos teléfonos es la
+  // diferencia entre cinco segundos y veinte minutos.
   await RuntimeConfig.load();
 
-  // El producto es vertical. Bloquear la orientaciÃ³n evita que una rotaciÃ³n
-  // accidental durante una mediciÃ³n cambie la resoluciÃ³n de captura y
-  // contamine la muestra.
+  // Barra de estado transparente: el video llega hasta arriba de todo.
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Brightness.light,
+      systemNavigationBarColor: Color(0xFF0A0A0C),
+      systemNavigationBarIconBrightness: Brightness.light,
+    ),
+  );
+
+  // Sólo vertical. Un feed de video en horizontal no tiene sentido en este
+  // producto, y soportarlo obligaría a diseñar dos veces cada pantalla.
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,
   ]);
 
-  runApp(const ProviderScope(child: SpikeApp()));
+  runApp(const ProviderScope(child: LiveSellApp()));
 }
 
-class SpikeApp extends StatelessWidget {
-  const SpikeApp({super.key});
+class LiveSellApp extends StatelessWidget {
+  const LiveSellApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'LiveSell Â· Spike',
+      title: 'Live Shopping',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        brightness: Brightness.dark,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFFFF2D55),
-          brightness: Brightness.dark,
-        ),
-        // Botones grandes: se opera con una mano, en la calle, mirando la pantalla
-        // de reojo mientras se sostiene otro telÃ©fono.
-        filledButtonTheme: FilledButtonThemeData(
-          style: FilledButton.styleFrom(
-            minimumSize: const Size.fromHeight(56),
-            textStyle: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
-          ),
-        ),
-      ),
-      // Si falta la clave, la pantalla de inicio igual permite cargarla a mano:
-      // ya no hace falta recompilar para configurar la app.
-      home: const HomeScreen(),
+      theme: buildAppTheme(),
+      // Sin tema claro: la app es video a pantalla completa y un fondo claro
+      // le roba contraste a lo único que importa. Ver core/design/tokens.dart.
+      themeMode: ThemeMode.dark,
+      home: const AppShell(),
+      builder: (context, child) {
+        // El tamaño de fuente del sistema se respeta hasta 1.3×. Más allá, los
+        // precios y los botones de compra se rompen: es preferible acotarlo a
+        // que alguien no pueda comprar porque el botón quedó fuera de pantalla.
+        final escala = MediaQuery.textScalerOf(context).clamp(
+          minScaleFactor: 0.85,
+          maxScaleFactor: 1.3,
+        );
+        return MediaQuery(
+          data: MediaQuery.of(context).copyWith(textScaler: escala),
+          child: child!,
+        );
+      },
     );
   }
 }
