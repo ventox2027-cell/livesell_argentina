@@ -27,6 +27,16 @@ export const ID_PREFIX = {
   refreshToken: 'rtk',
   session: 'ses',
   authEvent: 'aev',
+  // Comercio
+  seller: 'sel',
+  store: 'sto',
+  category: 'cat',
+  product: 'prd',
+  productOption: 'opt',
+  optionValue: 'opv',
+  variant: 'var',
+  productImage: 'img',
+  auditLog: 'aud',
 } as const;
 
 export type IdPrefix = (typeof ID_PREFIX)[keyof typeof ID_PREFIX];

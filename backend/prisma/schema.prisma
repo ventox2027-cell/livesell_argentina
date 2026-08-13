@@ -513,6 +513,7 @@ model User {
   identities    UserIdentity[]
   devices       Device[]
   refreshTokens RefreshToken[]
+  seller        Seller?
 
   @@index([phoneE164])
   @@index([status, createdAt])
@@ -666,4 +667,418 @@ model AuthEvent {
   @@index([userId, at])
   @@index([kind, at])
   @@map("auth_events")
+}
+
+// =============================================================================
+// BLOQUE COMERCIAL — Sellers · Stores · Products · Variants · Images
+//
+// ─── LA CONVENCIÓN DE DINERO ───
+//
+// Enteros en CENTAVOS. Nunca Float, nunca Decimal, nunca String.
+//
+// `$12.500,50` se guarda como `1250050`. Sumar, restar y comparar es exacto,
+// que es lo único que importa cuando el número es plata de alguien.
+//
+// Se eligió `Int` (int4) y no `BigInt` por dos motivos concretos:
+//
+//   1. Es lo que YA usa el módulo de pagos (`amountCents`). Dos convenciones de
+//      dinero en un mismo sistema es cómo aparece un error de 100×.
+//   2. `BigInt` en Prisma llega a JavaScript como `BigInt`, que `JSON.stringify`
+//      no sabe serializar. Obliga a un serializador propio en Fastify, en los
+//      tests y en el parseo de Flutter — tres lugares donde alguien se olvida.
+//
+// El techo de `Int` es 2.147.483.647 centavos = **$21.474.836,47**. Está muy
+// por encima del catálogo de esta app (indumentaria, accesorios, cosmética,
+// hogar). El día que deje de alcanzar, migrar int4 → int8 es un ALTER TABLE de
+// ensanchamiento: no pierde datos y no reescribe la tabla.
+//
+// ─── EL PRINCIPIO DE AUTORIZACIÓN ───
+//
+// Toda la jerarquía cuelga del usuario autenticado:
+//
+//     User → Seller → Store → Product → Variant/Image
+//
+// Ningún servicio busca por id y después comprueba el dueño. Busca SIEMPRE
+// filtrando por el dueño. Con eso, un IDOR no es un chequeo que alguien pueda
+// olvidar: es una consulta que no devuelve la fila.
+// =============================================================================
+
+enum SellerStatus {
+  /// Creado, todavía sin revisar. Puede preparar su tienda; no puede vender.
+  PENDING
+  ACTIVE
+  /// Suspendido temporalmente por una infracción. Puede volver.
+  SUSPENDED
+  /// Bloqueado por fraude. No vuelve.
+  BLOCKED
+  /// Cerrado por decisión propia.
+  CLOSED
+
+  @@map("seller_status")
+}
+
+enum VerificationStatus {
+  UNVERIFIED
+  PENDING
+  VERIFIED
+  REJECTED
+
+  @@map("verification_status")
+}
+
+enum StoreStatus {
+  ACTIVE
+  /// De vacaciones. Los productos siguen existiendo pero no se venden.
+  PAUSED
+  CLOSED
+
+  @@map("store_status")
+}
+
+enum ProductStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  ARCHIVED
+
+  @@map("product_status")
+}
+
+enum VariantStatus {
+  ACTIVE
+  /// Combinación que el vendedor no comercializa. Se genera pero no se vende.
+  INACTIVE
+
+  @@map("variant_status")
+}
+
+/// Vendedor.
+///
+/// Relación 1:1 con `User`. Una persona compra sin ser vendedor; para vender
+/// necesita un Seller.
+///
+/// ─── Regla de dominio para Live Sessions (todavía no implementado) ───
+///
+/// Un seller en `SUSPENDED` o `BLOCKED` **no puede iniciar una transmisión**.
+/// Se comprueba al emitir el token de LiveKit, no en la app: el token es lo
+/// único que el servidor controla y lo único que no se puede falsificar.
+model Seller {
+  id     String @id // sel_<ulid>
+  userId String @unique @map("user_id")
+
+  displayName String @map("display_name")
+  /// Identificador público en la URL: `vendox.com/<slug>`. Global y único.
+  slug        String @unique
+
+  bio       String?
+  avatarUrl String? @map("avatar_url")
+  coverUrl  String? @map("cover_url")
+
+  /// Nace ACTIVO.
+  ///
+  /// La alternativa —nacer en PENDING y esperar aprobación— deja la vidriera
+  /// invisible hasta que alguien la revise, y hoy no hay quién: el panel de
+  /// administración todavía no existe. Un vendedor que carga diez productos y
+  /// no los ve publicados abandona.
+  ///
+  /// La moderación es REACTIVA: se suspende ante una denuncia. `PENDING` queda
+  /// en el enum para cuando exista revisión previa —por ejemplo para otorgar
+  /// el sello de verificado— y para poder frenar a alguien sin bloquearlo.
+  status             SellerStatus       @default(ACTIVE)
+  verificationStatus VerificationStatus @default(UNVERIFIED) @map("verification_status")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  stores Store[]
+
+  @@index([status, createdAt])
+  @@map("sellers")
+}
+
+/// Tienda.
+///
+/// Hoy cada vendedor tiene UNA, creada junto con el Seller. La tabla igual
+/// modela la relación como 1:N y `isPrimary` marca cuál es la principal.
+///
+/// No es sobre-ingeniería: pasar de 1:1 a 1:N después obligaría a migrar
+/// `storeId` en productos, variantes, órdenes e inventario, con datos vivos.
+/// El costo hoy es una columna booleana.
+model Store {
+  id       String @id // sto_<ulid>
+  sellerId String @map("seller_id")
+
+  name        String
+  /// Global y único: la tienda tiene URL propia.
+  slug        String @unique
+  description String?
+  logoUrl     String? @map("logo_url")
+  coverUrl    String? @map("cover_url")
+
+  status StoreStatus @default(ACTIVE)
+  /// Tienda principal del vendedor. Hoy siempre hay exactamente una.
+  isPrimary Boolean @default(true) @map("is_primary")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  seller   Seller           @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  products Product[]
+  variants ProductVariant[]
+
+  @@index([sellerId, status])
+  @@map("stores")
+}
+
+/// Categoría. Árbol simple, plano por ahora.
+model Category {
+  id       String  @id // cat_<ulid>
+  name     String
+  slug     String  @unique
+  parentId String? @map("parent_id")
+  position Int     @default(0) @db.SmallInt
+
+  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children Category[] @relation("CategoryTree")
+  products Product[]
+
+  @@map("categories")
+}
+
+/// Producto.
+///
+/// ─── Por qué el precio vive acá Y en la variante ───
+///
+/// `basePriceCents` es el precio del producto. Una variante puede tener
+/// `priceOverrideCents` cuando difiere —el talle XXL sale más caro— y `null`
+/// cuando no. Guardar el precio SÓLO en la variante obligaría a escribir el
+/// mismo número en las seis combinaciones de una remera, y a que cambiar el
+/// precio fueran seis escrituras que pueden quedar a medias.
+model Product {
+  id         String  @id // prd_<ulid>
+  storeId    String  @map("store_id")
+  categoryId String? @map("category_id")
+
+  name        String
+  /// Único DENTRO de la tienda. Dos vendedores pueden tener "remera-negra".
+  slug        String
+  description String?
+
+  status   ProductStatus @default(DRAFT)
+  /// ISO 4217. Hoy siempre ARS; la columna existe para no migrar cuando deje
+  /// de serlo.
+  currency String        @default("ARS") @db.Char(3)
+
+  /// Centavos. Ver la nota de convención al inicio del bloque.
+  basePriceCents      Int  @map("base_price_cents")
+  /// Precio tachado. DEBE ser mayor que el base o no se muestra: un "antes"
+  /// menor que el "ahora" es publicidad engañosa.
+  compareAtPriceCents Int? @map("compare_at_price_cents")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  /// Borrado lógico.
+  ///
+  /// Una orden futura tiene que poder seguir apuntando al producto que se
+  /// vendió. Borrarlo de verdad rompería el historial del comprador, el del
+  /// vendedor y la contabilidad. Orders todavía no existe y por eso hay que
+  /// dejarlo bien ahora: después ya hay datos.
+  deletedAt DateTime? @map("deleted_at")
+
+  store    Store            @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  category Category?        @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  options  ProductOption[]
+  variants ProductVariant[]
+  images   ProductImage[]
+
+  @@unique([storeId, slug])
+  @@index([storeId, status, deletedAt])
+  @@index([status, createdAt])
+  @@map("products")
+}
+
+/// Eje de variación: "Color", "Talle", "Capacidad", "Sabor".
+///
+/// ─── Por qué una tabla y no columnas ───
+///
+/// Con columnas `size`, `color`, `capacity`, cada categoría nueva de producto
+/// obliga a una migración, y el 90 % de las filas quedan en `null`. Una tabla
+/// de opciones deja que el vendedor invente el eje que necesite —"Aroma",
+/// "Largo de cordón"— sin tocar la base.
+model ProductOption {
+  id        String @id // opt_<ulid>
+  productId String @map("product_id")
+
+  name     String
+  /// Orden en que se muestran y en que se arma el título de la variante:
+  /// "Negro / M" y no "M / Negro".
+  position Int    @default(0) @db.SmallInt
+
+  product Product              @relation(fields: [productId], references: [id], onDelete: Cascade)
+  values  ProductOptionValue[]
+
+  @@unique([productId, name])
+  @@index([productId, position])
+  @@map("product_options")
+}
+
+model ProductOptionValue {
+  id       String @id // opv_<ulid>
+  optionId String @map("option_id")
+
+  value    String
+  position Int    @default(0) @db.SmallInt
+
+  option   ProductOption          @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  variants ProductVariantOption[]
+
+  @@unique([optionId, value])
+  @@index([optionId, position])
+  @@map("product_option_values")
+}
+
+/// Variante: lo que de verdad se vende y lo que va a tener stock.
+///
+/// ─── Todo producto tiene al menos una ───
+///
+/// Un producto "sin variantes" recibe una `DEFAULT` automática. Sin eso
+/// habría dos arquitecturas de inventario —stock de producto y stock de
+/// variante— y cada consulta de stock tendría que preguntar cuál de las dos
+/// aplica. Inventory va a apuntar SIEMPRE a `productVariantId`.
+model ProductVariant {
+  id        String @id // var_<ulid>
+  productId String @map("product_id")
+
+  /// Desnormalizado desde el producto.
+  ///
+  /// Existe sólo para que el SKU pueda ser único POR TIENDA con un índice de
+  /// base de datos. Sin esta columna, la unicidad habría que comprobarla en
+  /// código con una consulta previa, y ahí hay una ventana de carrera. Los
+  /// productos no cambian de tienda, así que no se desincroniza.
+  storeId String @map("store_id")
+
+  /// Código interno del vendedor. Opcional: muchos no usan.
+  sku String?
+
+  /// "Negro / M". Derivado de los valores de opción al crear o modificar.
+  /// Se guarda para no resolver tres tablas cada vez que se lista un carrito.
+  title String @default("Default")
+
+  /// Precio propio. `null` = usa el del producto.
+  priceOverrideCents          Int? @map("price_override_cents")
+  compareAtPriceOverrideCents Int? @map("compare_at_price_override_cents")
+
+  status VariantStatus @default(ACTIVE)
+  /// La variante única de un producto sin opciones.
+  isDefault Boolean @default(false) @map("is_default")
+  position  Int     @default(0) @db.SmallInt
+
+  /**
+   * Huella canónica de la combinación de opciones.
+   *
+   * Es la concatenación ordenada de los ids de valor. Existe para que la base
+   * —y no el código— garantice que no haya dos variantes con la misma
+   * combinación. Comprobarlo en código deja una ventana de carrera entre la
+   * consulta y la inserción, y dos "Negro / M" en el mismo producto rompen el
+   * inventario de forma silenciosa.
+   */
+  optionsKey String @map("options_key")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  product Product                @relation(fields: [productId], references: [id], onDelete: Cascade)
+  store   Store                  @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  options ProductVariantOption[]
+
+  @@unique([productId, optionsKey])
+  @@unique([storeId, sku])
+  @@index([productId, status])
+  @@map("product_variants")
+}
+
+/// Une una variante con los valores de opción que la definen.
+model ProductVariantOption {
+  variantId     String @map("variant_id")
+  optionValueId String @map("option_value_id")
+
+  variant     ProductVariant     @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  optionValue ProductOptionValue @relation(fields: [optionValueId], references: [id], onDelete: Cascade)
+
+  @@id([variantId, optionValueId])
+  @@index([optionValueId])
+  @@map("product_variant_options")
+}
+
+/// Imagen de producto.
+///
+/// El archivo NUNCA vive en PostgreSQL. Acá va la referencia; los bytes están
+/// en el proveedor de almacenamiento (R2 en producción, disco en desarrollo).
+///
+/// `position = 0` es la principal.
+model ProductImage {
+  id        String @id // img_<ulid>
+  productId String @map("product_id")
+
+  /// URL pública para mostrar.
+  url        String
+  /// Ruta interna en el proveedor. Es lo que se usa para BORRAR el archivo:
+  /// derivarla de la URL sería frágil ante un cambio de dominio o de CDN.
+  storageKey String @map("storage_key")
+
+  position Int     @default(0) @db.SmallInt
+  altText  String? @map("alt_text")
+
+  width     Int?
+  height    Int?
+  sizeBytes Int?    @map("size_bytes")
+  mimeType  String  @map("mime_type")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  /// Índice, no UNIQUE.
+  ///
+  /// Con `@@unique([productId, position])`, reordenar exigiría mover las filas
+  /// a posiciones temporales para no chocar consigo mismas a mitad de camino.
+  /// El orden se mantiene en una transacción del servicio.
+  @@index([productId, position])
+  @@map("product_images")
+}
+
+/// Bitácora de auditoría general.
+///
+/// Append-only. Responde "quién cambió esto y cuándo" seis meses después, que
+/// es exactamente cuando nadie se acuerda.
+model AuditLog {
+  id String @id // aud_<ulid>
+
+  /// `user`, `system`, `admin`.
+  actorType String  @map("actor_type")
+  actorId   String? @map("actor_id")
+
+  /// `seller.created`, `product.archived`, `variant.deleted`.
+  action String
+
+  entityType String @map("entity_type")
+  entityId   String @map("entity_id")
+
+  /// Estado antes y después. Sólo los campos que cambiaron, y nunca datos
+  /// sensibles: la auditoría se lee entera cuando se investiga algo.
+  before Json?
+  after  Json?
+
+  ip        String?
+  userAgent String? @map("user_agent")
+  traceId   String? @map("trace_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([entityType, entityId, createdAt])
+  @@index([actorId, createdAt])
+  @@index([action, createdAt])
+  @@map("audit_logs")
 }

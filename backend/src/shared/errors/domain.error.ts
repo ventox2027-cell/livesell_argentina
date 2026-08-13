@@ -49,6 +49,34 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<string, number>> = {
   ACCOUNT_SUSPENDED: 403,
   EMAIL_TAKEN: 409,
   PHONE_INVALID: 400,
+
+  // ─── Dominio comercial ───
+  SELLER_EXISTS: 409,
+  SELLER_NOT_ACTIVE: 403,
+  /**
+   * 404 y no 403 para lo que no es propio.
+   *
+   * Responder 403 sobre un producto ajeno CONFIRMA que ese id existe. Con eso,
+   * alguien puede enumerar el catálogo de la competencia probando ids: los que
+   * dan 403 existen, los que dan 404 no.
+   *
+   * Con 404 uniforme, "no existe" y "no es tuyo" son indistinguibles desde
+   * afuera. Adentro sí se distinguen: la bitácora registra el intento.
+   */
+  SELLER_NOT_FOUND: 404,
+  STORE_NOT_FOUND: 404,
+  PRODUCT_NOT_FOUND: 404,
+  VARIANT_NOT_FOUND: 404,
+  IMAGE_NOT_FOUND: 404,
+
+  SLUG_TAKEN: 409,
+  SLUG_RESERVED: 422,
+  SKU_TAKEN: 409,
+  INVALID_PRICE: 422,
+  VARIANT_COMBINATION_EXISTS: 409,
+  TOO_MANY_IMAGES: 422,
+  INVALID_FILE: 415,
+  FILE_TOO_LARGE: 413,
 };
 
 export class NotFoundError extends DomainError {

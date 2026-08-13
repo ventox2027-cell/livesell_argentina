@@ -2,6 +2,8 @@ import 'reflect-metadata';
 
 import { RequestMethod, VersioningType } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import multipart from '@fastify/multipart';
+import fastifyStatic from '@fastify/static';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Logger } from 'nestjs-pino';
 
@@ -49,6 +51,46 @@ async function bootstrap(): Promise<void> {
   });
 
   app.useLogger(app.get(Logger));
+
+  /**
+   * Carga de archivos.
+   *
+   * El límite de tamaño se aplica ACÁ, antes de que el archivo llegue al
+   * controlador. Validarlo después obligaría a alojar en memoria lo que se va a
+   * rechazar: alguien manda 500 MB y el servidor los recibe enteros para
+   * decirle que no.
+   *
+   * `files: 1` porque cada petición sube una sola imagen. Permitir varias
+   * abriría la puerta a mandar diez de 10 MB en un solo pedido.
+   */
+  await app.register(multipart, {
+    limits: {
+      fileSize: 10 * 1024 * 1024,
+      files: 1,
+      fields: 10,
+      // Sin este tope, un nombre de campo de 1 MB es un vector de agotamiento
+      // de memoria antes de que nada lo valide.
+      fieldSize: 4 * 1024,
+    },
+  });
+
+  /**
+   * Imágenes de producto en desarrollo.
+   *
+   * Servir archivos desde el proceso de la API es aceptable en local y NO en
+   * producción: cada imagen ocupa una conexión del servidor de aplicación en
+   * vez de salir por un CDN. En producción las sirve Cloudflare R2 y esta ruta
+   * no existe.
+   */
+  if (isLocalEnv(env.NODE_ENV)) {
+    await app.register(fastifyStatic, {
+      root: `${process.cwd()}/storage`,
+      prefix: '/media/',
+      // Sin listado de directorios: expondría los ids de todos los productos.
+      index: false,
+      list: false,
+    });
+  }
 
   // /api/v1/... desde el día 1.
   //

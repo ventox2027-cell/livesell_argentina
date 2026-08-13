@@ -4,7 +4,10 @@ import { LoggerModule } from 'nestjs-pino';
 
 import { env } from '@/config/env.schema';
 import { HealthModule } from '@/modules/health/health.module';
+import { EventEmitterModule } from '@nestjs/event-emitter';
+
 import { AuthModule } from '@/modules/auth/auth.module';
+import { CommerceModule } from '@/modules/commerce/commerce.module';
 import { LiveKitModule } from '@/modules/livekit/livekit.module';
 import { PaymentsModule } from '@/modules/payments/payments.module';
 import { SpikeModule } from '@/modules/spike/spike.module';
@@ -32,6 +35,8 @@ function optionalModules(): DynamicModule['imports'] {
 @Module({
   imports: [
     LoggerModule.forRoot(loggerConfig),
+    // Bus de eventos de dominio en proceso. Ver shared/events/domain-events.ts.
+    EventEmitterModule.forRoot({ maxListeners: 20, verboseMemoryLeak: true }),
     ObservabilityModule,
     PrismaModule,
     RedisModule,
@@ -40,6 +45,7 @@ function optionalModules(): DynamicModule['imports'] {
     // Va antes que los módulos opcionales: registra los guards globales, y
     // todo lo que se monte después queda cerrado por defecto.
     AuthModule,
+    CommerceModule,
     ...(optionalModules() ?? []),
   ],
   providers: [

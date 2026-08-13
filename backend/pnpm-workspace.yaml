@@ -11,3 +11,12 @@ allowBuilds:
   '@swc/core': true
   esbuild: true
   prisma: true
+
+# Una sola versión de Fastify en todo el árbol.
+#
+# NestJS resolvía 5.11.0 por su cuenta mientras los plugins se compilaron
+# contra 5.11.3. Los tipos de `FastifyInstance` difieren entre ambas, así que
+# registrar un plugin no compilaba — con un error de tipos de veinte líneas
+# que no dice "tenés dos versiones".
+overrides:
+  fastify: 5.11.3

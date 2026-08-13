@@ -105,6 +105,15 @@ export const envSchema = z
     LIVEKIT_BROADCASTER_TOKEN_TTL_S: z.coerce.number().int().min(60).default(21_600),
     LIVEKIT_VIEWER_TOKEN_TTL_S: z.coerce.number().int().min(60).default(7_200),
 
+    /**
+     * URL pública del backend, tal como la ve un teléfono.
+     *
+     * Se usa para armar los enlaces de las imágenes. No se puede derivar de la
+     * petición: detrás de un túnel o del proxy de Fly.io, el host que ve
+     * Fastify no es el que el cliente puede volver a pedir.
+     */
+    PUBLIC_BASE_URL: z.string().url().default('http://localhost:3100'),
+
     // ─── Auth ───────────────────────────────────────────────────────────────
     /**
      * Clave de firma de los access tokens (HS256).
