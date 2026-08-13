@@ -1,11 +1,13 @@
-import { VersioningType, type INestApplication } from '@nestjs/common';
-import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
+import { type INestApplication } from '@nestjs/common';
+import { type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { JwtService } from '@/modules/auth/jwt.service';
 import type { PrismaService } from '@/shared/prisma/prisma.service';
 import { newId } from '@/shared/utils/id';
+
+import { crearAppDePrueba } from '../helpers/app';
 
 /**
  * Prueba de estrés del inventario.
@@ -64,11 +66,7 @@ beforeAll(async () => {
     .useValue({ wsUrl: '', ensureRoom: vi.fn(), issueToken: vi.fn(), verifyWebhook: vi.fn() })
     .compile();
 
-  app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
-  app.setGlobalPrefix('api', { exclude: ['health', 'ready', 'metrics', 'webhooks/(.*)'] });
-  app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
-  await app.init();
-  await (app as NestFastifyApplication).getHttpAdapter().getInstance().ready();
+  app = await crearAppDePrueba(moduleRef);
 
   prisma = app.get(PrismaService);
   jwt = app.get(JwtService);

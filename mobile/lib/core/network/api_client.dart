@@ -60,6 +60,35 @@ class ApiClient {
   }
 
   Future<void> _alPedir(RequestOptions options, RequestInterceptorHandler handler) async {
+    /**
+     * Sin cuerpo, sin `content-type`.
+     *
+     * ─── El bug que esto arregla ───
+     *
+     * `content-type: application/json` estaba puesto como cabecera POR DEFECTO
+     * de todas las peticiones. Un DELETE no lleva cuerpo, así que salía
+     * anunciando JSON y mandando cero bytes — y Fastify contesta:
+     *
+     *     400 · Body cannot be empty when content-type is set to
+     *           'application/json'
+     *
+     * Eso rompía TODOS los DELETE de la app a la vez: cancelar una reserva,
+     * borrar un producto, borrar una foto y eliminar la cuenta. Cuatro
+     * funciones distintas con una sola causa.
+     *
+     * Y no lo detectó nadie: los tests usan `inject()`, que sólo manda
+     * `content-type` cuando hay cuerpo, y las pruebas con curl tampoco lo
+     * mandaban. O sea que el servidor estaba bien probado contra un cliente
+     * que no era el nuestro.
+     *
+     * La cabecera describe el cuerpo. Si no hay cuerpo, no hay nada que
+     * describir.
+     */
+    if (options.data == null) {
+      options.headers.remove('content-type');
+      options.headers.remove('Content-Type');
+    }
+
     if (options.extra['sinAuth'] == true) return handler.next(options);
 
     /// Refresco PREVENTIVO.

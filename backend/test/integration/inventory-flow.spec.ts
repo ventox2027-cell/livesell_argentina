@@ -1,5 +1,5 @@
-import { VersioningType, type INestApplication } from '@nestjs/common';
-import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
+import { type INestApplication } from '@nestjs/common';
+import { type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -9,6 +9,8 @@ import type { InventoryService } from '@/modules/inventory/inventory.service';
 import type { InventoryReconciler } from '@/modules/inventory/reconciler.service';
 import type { PrismaService } from '@/shared/prisma/prisma.service';
 import type { RedisService } from '@/shared/redis/redis.service';
+
+import { crearAppDePrueba } from '../helpers/app';
 
 /**
  * Inventario y reservas contra PostgreSQL REAL.
@@ -84,11 +86,7 @@ beforeAll(async () => {
     .useValue({ wsUrl: '', ensureRoom: vi.fn(), issueToken: vi.fn(), verifyWebhook: vi.fn() })
     .compile();
 
-  app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
-  app.setGlobalPrefix('api', { exclude: ['health', 'ready', 'metrics', 'webhooks/(.*)'] });
-  app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
-  await app.init();
-  await (app as NestFastifyApplication).getHttpAdapter().getInstance().ready();
+  app = await crearAppDePrueba(moduleRef);
 
   prisma = app.get(PrismaService);
   redis = app.get(RedisService);
@@ -1156,6 +1154,83 @@ describe('Auditoría', () => {
   });
 });
 
+describe('⛔ Peticiones tal como las manda la app de verdad', () => {
+  /**
+   * ─── El test que faltaba, y lo que costó no tenerlo ───
+   *
+   * Dio deja `content-type: application/json` puesto como cabecera por defecto
+   * de TODAS sus peticiones. Un DELETE sale entonces anunciando JSON y con cero
+   * bytes de cuerpo, y Fastify responde:
+   *
+   *     400 · Body cannot be empty when content-type is set to 'application/json'
+   *
+   * Eso rompió los CUATRO DELETE de la aplicación al mismo tiempo —cancelar
+   * una reserva, borrar un producto, borrar una foto, eliminar la cuenta— con
+   * la suite entera en verde, porque el ayudante `call()` sólo manda
+   * `content-type` cuando hay cuerpo.
+   *
+   * O sea: el servidor estaba muy bien probado contra un cliente que no era el
+   * nuestro. Estos tests mandan la cabecera igual que la app.
+   */
+  async function comoLaApp(method: string, url: string, token: string) {
+    const res = await (app as NestFastifyApplication)
+      .getHttpAdapter()
+      .getInstance()
+      .inject({
+        method: method as never,
+        url,
+        headers: {
+          authorization: `Bearer ${token}`,
+          // La cabecera que manda Dio aunque no haya cuerpo.
+          'content-type': 'application/json',
+        },
+      });
+    return { status: res.statusCode, body: res.body ? JSON.parse(res.body) : null };
+  }
+
+  it('DELETE de una reserva con content-type y sin cuerpo', async () => {
+    const { variantId } = await nuevaVarianteConStock(3);
+    const { token } = await nuevoComprador();
+    const r = await reservar(token, variantId);
+
+    const cancel = await comoLaApp(
+      'DELETE',
+      `/api/v1/inventory/reservations/${r.body.reservationId}`,
+      token,
+    );
+
+    expect(cancel.status, JSON.stringify(cancel.body)).toBe(200);
+    expect(cancel.body.status).toBe('CANCELLED');
+    expect((await leerInventario(variantId)).reserved).toBe(0);
+  });
+
+  it('DELETE de un producto con content-type y sin cuerpo', async () => {
+    const { productId, sellerToken } = await nuevaVarianteConStock(1);
+
+    const r = await comoLaApp('DELETE', `/api/v1/products/${productId}`, sellerToken);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+  });
+
+  it('GET con content-type y sin cuerpo', async () => {
+    // El mismo problema afectaría a cualquier GET que Dio mande con la
+    // cabecera puesta.
+    const { token } = await nuevoComprador();
+
+    const r = await comoLaApp('GET', '/api/v1/inventory/reservations/mine', token);
+    expect(r.status).toBe(200);
+  });
+
+  it('un POST con cuerpo sigue funcionando', async () => {
+    // La contracara: quitar la cabecera cuando no hay cuerpo no puede romper
+    // las peticiones que sí lo tienen.
+    const { variantId } = await nuevaVarianteConStock(2);
+    const { token } = await nuevoComprador();
+
+    const r = await reservar(token, variantId);
+    expect(r.status).toBe(201);
+  });
+});
+
 describe('El feed refleja el stock', () => {
   it('trae la variante y su disponibilidad, sin el número exacto', async () => {
     // El botón "Comprar" del feed tiene que poder apartar stock de una variante
@@ -1208,12 +1283,36 @@ describe('El feed refleja el stock', () => {
     const { variantId } = await nuevaVarianteConStock(137);
 
     const r = await call('GET', '/api/v1/discover/products?limit=50');
-    const crudo = JSON.stringify(r.body);
 
-    expect(crudo).not.toContain('onHand');
-    expect(crudo).not.toContain('"reserved"');
-    expect(crudo).not.toContain('137');
-    expect(crudo).toContain(variantId);
+    // Se recorre la respuesta entera buscando las claves prohibidas, en vez de
+    // buscar "137" como texto: ese número aparece como subcadena dentro de
+    // cualquier ULID y el test fallaría según qué otros datos haya en la base.
+    const prohibidas = new Set(['onHand', 'on_hand', 'reserved', 'inventory']);
+    const encontradas: string[] = [];
+
+    const recorrer = (valor: unknown, ruta: string): void => {
+      if (Array.isArray(valor)) {
+        valor.forEach((v, i) => recorrer(v, `${ruta}[${i}]`));
+        return;
+      }
+      if (valor === null || typeof valor !== 'object') return;
+
+      for (const [clave, v] of Object.entries(valor)) {
+        if (prohibidas.has(clave)) encontradas.push(`${ruta}.${clave}`);
+        recorrer(v, `${ruta}.${clave}`);
+      }
+    };
+    recorrer(r.body, 'respuesta');
+
+    expect(encontradas).toEqual([]);
+
+    // Y lo que SÍ tiene que estar: la variante y su etiqueta.
+    const item = r.body.items.find(
+      (i: { variants: { id: string }[] }) => i.variants.some((v) => v.id === variantId),
+    );
+    expect(item.variants.find((v: { id: string }) => v.id === variantId).availability).toBe(
+      'IN_STOCK',
+    );
   });
 });
 

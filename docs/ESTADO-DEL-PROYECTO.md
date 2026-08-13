@@ -580,6 +580,13 @@ Ninguno lo hubiera encontrado un test. **Cinco habrían llegado a producción.**
 | 9 | Una reserva vencida que el barrido todavía no tocó bloqueaba la siguiente | El índice único parcial la ve ACTIVE y rechaza la nueva. El comprador recibía de vuelta **una reserva muerta con el contador en 00:00** |
 | 10 | BullMQ 6 rechaza `:` en nombres de cola | El proceso no arrancaba. Apareció al ejecutar, no al leer |
 | 11 | `tsx` no emite metadata de decoradores | La inyección de dependencias entregaba `undefined` y el síntoma era un 500 desde adentro de un guard. El proyecto ya lo había resuelto para los tests con swc; el script de estrés lo volvió a pisar |
+| 12 | Dio manda `content-type: application/json` en TODAS las peticiones, incluso sin cuerpo | Fastify responde `400 · Body cannot be empty`. **Los cuatro DELETE de la app estaban rotos a la vez** —cancelar reserva, borrar producto, borrar foto, eliminar cuenta— con la suite entera en verde, porque `inject()` sólo manda la cabecera cuando hay cuerpo. Lo encontró el usuario probando, no un test |
+
+**Lo que enseñó el defecto 12** (y el 8, que es el mismo error con otro
+disfraz): los tests armaban la aplicación por su cuenta y **no ejecutaban
+`main.ts`**, así que probaban un servidor que no era el de producción. Se
+resolvió moviendo toda la configuración del servidor a `src/http-setup.ts`,
+que ahora usan `main.ts` y los tests. Ya no hay dos lugares donde acordarse.
 
 **El patrón:** el error nunca estuvo en el camino feliz. Estuvo en qué pasa
 cuando algo se corta a la mitad, cuando el aviso llega tarde, o cuando llega dos
@@ -629,7 +636,7 @@ asumir que el camino feliz es el único que termina.
 | Compra completa | — | — | **1,8 s** ✅ |
 | Chat de extremo a extremo | ≤ 300 ms | 800 ms | sin medir |
 
-**Tests:** 362 en backend (unitarios + integración contra PostgreSQL real).
+**Tests:** 366 en backend (unitarios + integración contra PostgreSQL real).
 Typecheck, lint y `flutter analyze` en verde.
 
 ---
@@ -737,7 +744,7 @@ backend/
                       sobreviven al spike
   src/shared/         errores, guards, observabilidad, Prisma, Redis
   prisma/schema.prisma
-  test/               362 tests · test/stress/ prueba de 1000 compradores
+  test/               366 tests · test/stress/ prueba de 1000 compradores
 mobile/
   lib/core/           design, auth, network, config
   lib/features/       auth, feed, seller, inventory, profile, search, lives, orders, spike

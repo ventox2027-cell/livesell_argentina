@@ -2,13 +2,13 @@ import 'reflect-metadata';
 
 import { RequestMethod, VersioningType } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Logger } from 'nestjs-pino';
 
 import { AppModule } from './app.module';
 import { env, isLocalEnv } from './config/env.schema';
+import { configurarAdaptador, registrarMultipart } from './http-setup';
 
 const SHUTDOWN_LB_DRAIN_MS = 5_000;
 
@@ -21,28 +21,10 @@ async function bootstrap(): Promise<void> {
     genReqId: () => crypto.randomUUID(),
   });
 
-  // LiveKit envía sus webhooks con Content-Type `application/webhook+json`.
-  // Fastify no conoce ese tipo y devolvería 415, así que hay que registrarlo.
-  //
-  // Además se conserva el cuerpo CRUDO: la firma se calcula sobre los bytes
-  // exactos, y un JSON.parse + JSON.stringify de por medio la invalidaría.
-  //
-  // Para `application/json` NO se registra nada: lo hace Nest con la opción
-  // `rawBody: true` de abajo. Registrarlo a mano choca con el suyo.
-  adapter
-    .getInstance()
-    .addContentTypeParser(
-      'application/webhook+json',
-      { parseAs: 'string' },
-      (req, body: string, done) => {
-        (req as typeof req & { rawBody: Buffer }).rawBody = Buffer.from(body, 'utf8');
-        try {
-          done(null, JSON.parse(body));
-        } catch (err) {
-          done(err as Error, undefined);
-        }
-      },
-    );
+  // Hooks, parsers de contenido y todo lo que cambie el comportamiento del
+  // servidor viven en http-setup.ts, que también usan los tests. Ver ahí por
+  // qué no puede haber dos lugares.
+  configurarAdaptador(adapter);
 
   const app = await NestFactory.create<NestFastifyApplication>(AppModule, adapter, {
     bufferLogs: true,
@@ -52,27 +34,7 @@ async function bootstrap(): Promise<void> {
 
   app.useLogger(app.get(Logger));
 
-  /**
-   * Carga de archivos.
-   *
-   * El límite de tamaño se aplica ACÁ, antes de que el archivo llegue al
-   * controlador. Validarlo después obligaría a alojar en memoria lo que se va a
-   * rechazar: alguien manda 500 MB y el servidor los recibe enteros para
-   * decirle que no.
-   *
-   * `files: 1` porque cada petición sube una sola imagen. Permitir varias
-   * abriría la puerta a mandar diez de 10 MB en un solo pedido.
-   */
-  await app.register(multipart, {
-    limits: {
-      fileSize: 10 * 1024 * 1024,
-      files: 1,
-      fields: 10,
-      // Sin este tope, un nombre de campo de 1 MB es un vector de agotamiento
-      // de memoria antes de que nada lo valide.
-      fieldSize: 4 * 1024,
-    },
-  });
+  await registrarMultipart(app);
 
   /**
    * Imágenes de producto en desarrollo.

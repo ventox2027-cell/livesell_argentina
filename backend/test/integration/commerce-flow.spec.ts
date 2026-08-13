@@ -1,11 +1,12 @@
-import multipart from '@fastify/multipart';
-import { VersioningType, type INestApplication } from '@nestjs/common';
-import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
+import { type INestApplication } from '@nestjs/common';
+import { type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { PrismaService } from '@/shared/prisma/prisma.service';
 import type { RedisService } from '@/shared/redis/redis.service';
+
+import { crearAppDePrueba } from '../helpers/app';
 
 /**
  * Bloque comercial contra PostgreSQL REAL.
@@ -53,27 +54,7 @@ beforeAll(async () => {
     .useValue({ wsUrl: '', ensureRoom: vi.fn(), issueToken: vi.fn(), verifyWebhook: vi.fn() })
     .compile();
 
-  app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
-  app.setGlobalPrefix('api', { exclude: ['health', 'ready', 'metrics', 'webhooks/(.*)'] });
-  app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
-
-  /**
-   * Multipart, con los MISMOS límites que `main.ts`.
-   *
-   * Sin esto Fastify no tiene parser para `multipart/form-data` y devuelve 415
-   * antes de llegar al controlador — el test estaría probando un servidor que
-   * no es el que corre en producción, que es peor que no tener test.
-   *
-   * Los límites se repiten a propósito en vez de importarse: si un día alguien
-   * los baja en `main.ts` y acá siguen altos, el test de "archivo demasiado
-   * grande" pasaría contra un servidor que ya lo rechaza antes.
-   */
-  await (app as NestFastifyApplication).register(multipart, {
-    limits: { fileSize: 10 * 1024 * 1024, files: 1, fields: 10, fieldSize: 4 * 1024 },
-  });
-
-  await app.init();
-  await (app as NestFastifyApplication).getHttpAdapter().getInstance().ready();
+  app = await crearAppDePrueba(moduleRef);
 
   prisma = app.get(PrismaService);
   redis = app.get(RedisService);

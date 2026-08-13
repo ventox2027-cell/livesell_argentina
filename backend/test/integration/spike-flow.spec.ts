@@ -1,7 +1,9 @@
-import { type INestApplication, VersioningType } from '@nestjs/common';
-import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
+import { type INestApplication } from '@nestjs/common';
+import { type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+
+import { crearAppDePrueba } from '../helpers/app';
 
 /**
  * Recorrido completo del spike contra PostgreSQL REAL (docker compose).
@@ -55,11 +57,7 @@ beforeAll(async () => {
     })
     .compile();
 
-  app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
-  app.setGlobalPrefix('api', { exclude: ['health', 'ready', 'metrics', 'webhooks/(.*)'] });
-  app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
-  await app.init();
-  await (app as NestFastifyApplication).getHttpAdapter().getInstance().ready();
+  app = await crearAppDePrueba(moduleRef);
 });
 
 afterAll(async () => {
