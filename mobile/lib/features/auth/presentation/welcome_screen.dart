@@ -109,9 +109,23 @@ class _WelcomeScreenState extends ConsumerState<WelcomeScreen> {
                   // Acceso de desarrollo. Se muestra sólo si el backend lo
                   // habilita, que en producción está prohibido por configuración.
                   const SizedBox(height: Gap.sm),
-                  TextButton(
-                    onPressed: _ocupado ? null : _accesoDePrueba,
-                    child: const Text('Entrar en modo prueba'),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      TextButton(
+                        onPressed: _ocupado ? null : _accesoDePrueba,
+                        child: const Text('Entrar en modo prueba'),
+                      ),
+                      const Text('·', style: TextStyle(color: AppColor.textoDebil)),
+                      /// Configurar el backend TIENE que estar disponible antes
+                      /// de entrar. Escondido detrás del login, una instalación
+                      /// nueva apuntando a una URL vieja no tiene salida: no se
+                      /// puede iniciar sesión ni cambiar a dónde apunta.
+                      TextButton(
+                        onPressed: _ocupado ? null : _configurarBackend,
+                        child: const Text('Configurar servidor'),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -145,6 +159,80 @@ class _WelcomeScreenState extends ConsumerState<WelcomeScreen> {
       context,
       'Apple se habilita junto con la cuenta de desarrollador. Usá "modo prueba" por ahora.',
     );
+  }
+
+  /// Cambia a qué backend apunta la app, sin recompilar.
+  ///
+  /// En pruebas de campo la URL del túnel cambia cada vez que se reinicia, y
+  /// recompilar e instalar en dos teléfonos por eso cuesta veinte minutos.
+  Future<void> _configurarBackend() async {
+    final ctrl = TextEditingController(text: RuntimeConfig.instance.apiBaseUrl);
+    final nueva = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(
+          left: Gap.xl,
+          right: Gap.xl,
+          top: Gap.sm,
+          bottom: MediaQuery.viewInsetsOf(ctx).bottom + Gap.xl,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('Servidor', style: Theme.of(ctx).textTheme.titleLarge),
+            const SizedBox(height: Gap.sm),
+            const Text(
+              'A qué backend se conecta la app. Con el túnel de Cloudflare, la '
+              'URL cambia cada vez que se reinicia.',
+              style: TextStyle(color: AppColor.textoSuave, fontSize: 13, height: 1.4),
+            ),
+            const SizedBox(height: Gap.lg),
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              keyboardType: TextInputType.url,
+              autocorrect: false,
+              decoration: const InputDecoration(
+                labelText: 'URL del backend',
+                hintText: 'https://algo.trycloudflare.com',
+              ),
+            ),
+            const SizedBox(height: Gap.lg),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
+              child: const Text('Guardar y probar'),
+            ),
+          ],
+        ),
+      ),
+    );
+    ctrl.dispose();
+
+    if (nueva == null || nueva.isEmpty || !mounted) return;
+
+    await _correr(() async {
+      await RuntimeConfig.instance.setApiBaseUrl(nueva);
+      // El cliente HTTP guarda la URL base al construirse: hay que reapuntarlo
+      // o seguiría hablando con el servidor anterior.
+      ref.read(apiClientProvider).applyConfig();
+
+      // Se comprueba de inmediato. Guardar una URL que no responde y
+      // enterarse recién al intentar entrar es hacer perder tiempo.
+      final res = await ref.read(apiClientProvider).get<Map<String, dynamic>>(
+            '/auth/me',
+            sinAuth: true,
+          );
+      if (!mounted) return;
+      // 401 es la respuesta esperada sin sesión: significa que el backend está
+      // vivo y respondiendo.
+      if (res.statusCode == 401 || res.statusCode == 200) {
+        AppSnack.exito(context, 'Servidor OK');
+      } else {
+        AppSnack.error(context, 'El servidor respondió ${res.statusCode}');
+      }
+    });
   }
 
   /// Acceso de prueba: pide sólo un email y entra.
