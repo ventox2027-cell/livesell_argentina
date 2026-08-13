@@ -57,6 +57,31 @@ describe('página de checkout', () => {
     expect(conAtaque).not.toContain("'; window.MpBridge");
   });
 
+  it('⛔ lee el formulario por la instancia guardada, no por `this`', () => {
+    // Costó una prueba de campo entera: dentro de los callbacks del SDK, `this`
+    // no es el cardForm. `this.getCardFormData()` lanza un TypeError que muere
+    // adentro del SDK, el botón queda en "Procesando…" para siempre y no llega
+    // ni un pedido al backend. Sin ningún mensaje de error.
+    // Se comprueba la ASIGNACIÓN, no la mención: el comentario del código
+    // nombra la llamada incorrecta a propósito, para que quede explicado.
+    expect(html).toContain('datos = cardForm.getCardFormData()');
+    expect(html).not.toMatch(/=\s*this\.getCardFormData\(\)/);
+  });
+
+  it('reporta a la app cualquier error de JavaScript', () => {
+    // La contramedida general contra fallos silenciosos en el WebView.
+    expect(html).toContain('window.onerror');
+    expect(html).toContain("motivo: 'js_error'");
+  });
+
+  it('muestra el monto en formato argentino', () => {
+    // "$ 15499.00" se lee como precio de otro país. En una pantalla de pago,
+    // cualquier cosa que genere desconfianza cuesta ventas.
+    expect(html).toMatch(/15\.499,00/);
+    // Pero al SDK se le pasa el formato que espera: punto decimal, sin miles.
+    expect(html).toContain("amount: '15499.00'");
+  });
+
   it('un monto no numérico no rompe la página', () => {
     const html = renderCheckoutPage({ ...BASE, amount: Number.NaN });
     expect(html).toContain('0.00');

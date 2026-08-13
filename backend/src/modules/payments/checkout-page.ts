@@ -48,7 +48,19 @@ export function renderCheckoutPage(p: CheckoutPageParams): string {
   const email = escapeHtml(p.buyerEmail);
   const description = escapeHtml(p.description);
   const publicKey = escapeHtml(p.publicKey);
+
+  // El SDK de Mercado Pago espera el monto con punto decimal y sin separador
+  // de miles: "15499.00". No es lo mismo que lo que se le muestra a la persona.
   const amount = Number.isFinite(p.amount) ? p.amount.toFixed(2) : '0.00';
+
+  // Formato argentino para mostrar: punto para miles, coma para decimales.
+  // "$ 15499.00" se lee como precio de otro país y desconfianza en una pantalla
+  // de pago es exactamente lo que no queremos.
+  const amountVisible = new Intl.NumberFormat('es-AR', {
+    style: 'currency',
+    currency: 'ARS',
+    minimumFractionDigits: 2,
+  }).format(Number.isFinite(p.amount) ? p.amount : 0);
 
   return `<!doctype html>
 <html lang="es-AR">
@@ -96,7 +108,7 @@ export function renderCheckoutPage(p: CheckoutPageParams): string {
 
 <div class="resumen">
   <div class="desc">${description}</div>
-  <div class="monto">$ ${amount}</div>
+  <div class="monto">${amountVisible}</div>
 </div>
 
 <form id="form-checkout">
@@ -168,6 +180,19 @@ export function renderCheckoutPage(p: CheckoutPageParams): string {
     }
   }
 
+  /**
+   * Cualquier error de JavaScript se reporta a la app.
+   *
+   * Sin esto, un fallo dentro de un callback del SDK deja el botón en
+   * "Procesando…" para siempre y sin una sola pista de qué pasó. Ya ocurrió:
+   * un TypeError silencioso costó una prueba de campo entera.
+   */
+  window.onerror = function (msg, fuente, linea) {
+    mostrar('Error interno del formulario.', true);
+    avisarApp({ tipo: 'error', motivo: 'js_error', detalle: msg + ' @' + linea });
+    return false;
+  };
+
   if (typeof MercadoPago === 'undefined') {
     mostrar('No se pudo cargar Mercado Pago. Revisá la conexión.', true);
     avisarApp({ tipo: 'error', motivo: 'sdk_no_cargo' });
@@ -176,7 +201,10 @@ export function renderCheckoutPage(p: CheckoutPageParams): string {
 
   var mp = new MercadoPago('${publicKey}', { locale: 'es-AR' });
 
-  mp.cardForm({
+  // Se GUARDA la instancia. Dentro de los callbacks, "this" NO es el cardForm:
+  // hay que usar esta referencia. Llamar a this.getCardFormData() lanza un
+  // TypeError que muere dentro del SDK sin dejar rastro.
+  var cardForm = mp.cardForm({
     amount: '${amount}',
     // iframe: true es LA línea que mantiene el alcance PCI en SAQ-A.
     // Sin ella, los campos serían inputs nuestros y el número de tarjeta
@@ -202,7 +230,7 @@ export function renderCheckoutPage(p: CheckoutPageParams): string {
           return;
         }
         boton.disabled = false;
-        boton.textContent = 'Pagar $ ${amount}';
+        boton.textContent = 'Pagar ${amountVisible}';
         avisarApp({ tipo: 'listo' });
       },
 
@@ -212,12 +240,24 @@ export function renderCheckoutPage(p: CheckoutPageParams): string {
         boton.textContent = 'Procesando…';
         mostrar('');
 
-        var datos = this.getCardFormData();
-
-        if (!datos.token) {
+        function volverAHabilitar(texto) {
           boton.disabled = false;
-          boton.textContent = 'Pagar $ ${amount}';
-          mostrar('Revisá los datos de la tarjeta.', true);
+          boton.textContent = 'Pagar ${amountVisible}';
+          mostrar(texto, true);
+        }
+
+        var datos;
+        try {
+          // Se usa cardForm, no this. Ver el comentario donde se declara.
+          datos = cardForm.getCardFormData();
+        } catch (e) {
+          volverAHabilitar('No se pudieron leer los datos de la tarjeta.');
+          avisarApp({ tipo: 'error', motivo: 'get_card_form_data', detalle: String(e) });
+          return;
+        }
+
+        if (!datos || !datos.token) {
+          volverAHabilitar('Revisá los datos de la tarjeta.');
           return;
         }
 
@@ -235,7 +275,7 @@ export function renderCheckoutPage(p: CheckoutPageParams): string {
 
       onError: function (errores) {
         boton.disabled = false;
-        boton.textContent = 'Pagar $ ${amount}';
+        boton.textContent = 'Pagar ${amountVisible}';
         var texto = (errores && errores.length && errores[0].message)
           ? errores[0].message
           : 'No se pudo validar la tarjeta.';
