@@ -349,8 +349,9 @@ Mercado Pago real, por el túnel.
 | Sin firma → rechazado | ✅ | ✅ `MISSING_SIGNATURE` |
 | Pago inexistente → archivado, sin pedir reintento | ✅ | ✅ `UNKNOWN_PAYMENT` |
 | Notificación huérfana → no revienta | ✅ | — |
-| Doble toque en "Pagar" → un solo cobro | ✅ | pendiente |
-| Timeout de red → queda PROCESSING, nunca FAILED | ✅ | pendiente |
+| Doble toque en "Pagar" → un solo cobro | ✅ | — |
+| **Corte de red → queda PROCESSING, nunca FAILED** | ✅ | ✅ **ver abajo** |
+| **Cobro inexistente → la orden se libera y se puede reintentar** | ✅ | ✅ |
 | **Webhook perdido → el conciliador lo resuelve** | ✅ | ✅ **ver abajo** |
 | **Rechazo → reintento con otra tarjeta funciona** | ✅ | ✅ |
 | Orden paga no se despaga con webhook desordenado | ✅ | — |
@@ -377,6 +378,53 @@ aprobado y lo acreditó. **Sin él, esa venta quedaba cobrada y sin entregar.**
 
 Es el escenario que ninguna otra capa cubre: la firma es correcta al rechazar,
 el webhook hizo lo suyo, y aun así el sistema tenía que recuperarse solo.
+
+### Corte de red durante el cobro
+
+El pago resultó **demasiado rápido para probarlo con el modo avión**: 1,8
+segundos no dan tiempo a apagar los datos. Se forzó de una forma más fiel,
+bajando a 1 segundo el timeout de nuestra llamada: la petición sale y nosotros
+cortamos antes de recibir la respuesta.
+
+```
+09:34:42  API  payment.attempt        PENDING_PAYMENT → PROCESSING
+09:34:43  API  payment.network_error  PROCESSING      → PROCESSING
+```
+
+| Verificación | Resultado |
+|---|---|
+| La orden queda en `PROCESSING` | ✅ |
+| **NUNCA pasa a `FAILED`** | ✅ |
+| La app no dice "rechazado" | ✅ dice que está confirmando |
+| El conciliador busca en Mercado Pago | ✅ encontró **0 pagos** |
+| No inventa un pago que no existe | ✅ |
+
+Los dos invariantes que evitan el doble cobro, contra un corte real.
+
+#### 🚨 Y un agujero que sólo apareció acá
+
+**La orden quedaba trabada para siempre.** `canAttemptPayment` no permite
+reintentar sobre una orden con un cobro en vuelo, así que nadie podía pagarla
+nunca más, y el conciliador repetía "no hay pago" indefinidamente.
+
+Es el mismo callejón sin salida que tenía la clave de idempotencia, con otra
+causa. Se escapó porque **todos los tests asumían que el pago existía**.
+
+Corregido: si Mercado Pago confirma que no hay ningún pago y pasó una ventana
+de seguridad de 5 minutos, el conciliador libera la orden a `FAILED`.
+
+```
+09:40:31  RECONCILER  reconcile.released  PROCESSING → FAILED
+```
+
+Dos decisiones detrás de eso:
+
+- **La ventana no es capricho.** Liberar al instante sería peligroso: si el
+  pago sí se creó y todavía no aparece en la búsqueda, el comprador pagaría
+  dos veces.
+- **Liberar a `FAILED` es seguro aunque nos equivoquemos.** La guarda de
+  monotonía permite `FAILED → PAID`, así que un webhook tardío corrige el
+  estado solo. Hay un test que lo comprueba por esa vía.
 
 ### Recuperación después de un rechazo
 
@@ -451,6 +499,22 @@ por la primera compra.
 pantalla de "pagar con tarjeta guardada" que falla en el último paso es peor
 que no tenerla, porque parece terminada.
 
+### Los cuatro defectos que encontró la prueba de campo
+
+Ninguno lo hubiera encontrado un test. Los tres últimos habrían llegado a
+producción, y dos de ellos cuestan ventas o plata.
+
+| # | Defecto | Cómo se veía | Consecuencia si llegaba a producción |
+|---|---|---|---|
+| 1 | `this` no era el CardForm | El botón quedaba en "Procesando…" para siempre | Nadie podía pagar |
+| 2 | Errores sin traducir | "invalid card_number_validation" | El comprador no sabe qué corregir y se va |
+| 3 | **Clave de idempotencia por orden** | El reintento devolvía la respuesta vieja | **Una orden rechazada no se podía pagar nunca más** |
+| 4 | **Orden trabada sin pago** | `PROCESSING` eterno | **La orden queda inutilizable y el comprador no puede reintentar** |
+
+Los defectos 3 y 4 son el mismo error de razonamiento con dos disfraces:
+**asumir que el camino feliz es el único que termina**. Los dos dejaban una
+orden en un estado del que no se sale.
+
 ### Deuda anotada
 
 1. **Migrar a la API de Orders** antes de producción. Mercado Pago la marca
@@ -460,7 +524,14 @@ que no tenerla, porque parece terminada.
 2. **Habilitación de Checkout API para producción.** Con credenciales de
    prueba funciona sin trámite; falta confirmar qué pide Mercado Pago para
    activar el ambiente productivo.
-3. **Segunda compra en dos clics** con medio de pago guardado.
+3. **Segunda compra en dos clics** con medio de pago guardado. Bloqueada por
+   Mercado Pago, no por nosotros.
+4. **El conciliador tiene que ser un trabajo periódico**, no un botón. Hoy se
+   dispara a mano; en producción va en BullMQ cada pocos minutos.
+5. **La pantalla de pago del spike no ofrece "empezar otra compra" después de
+   una compra exitosa** — el botón sigue diciendo "Reintentar el pago". Es de
+   la pantalla de prueba, no del módulo real, pero confundió durante la
+   medición y vale anotarlo.
 
 ### Decisión
 
@@ -477,8 +548,47 @@ toca ningún sistema nuestro.
 
 ## Decisión conjunta del Sprint 0
 
-☐ **GO** — ambos spikes pasan. Se arranca con Auth.
-☐ **GO PARCIAL** — uno pasa, el otro necesita otra vuelta. Detalle: ____
-☐ **NO GO** — se replantea antes de seguir. Detalle: ____
+☑ **GO** — los dos spikes pasan. **Se arranca con Auth.**
+☐ GO PARCIAL — uno pasa, el otro necesita otra vuelta
+☐ NO GO — se replantea antes de seguir
 
-**Firmado:** ____ **Fecha:** ____
+**Fecha:** 13/08/2026
+
+### Los dos riesgos técnicos que podían matar el proyecto, respondidos
+
+| | Pregunta | Respuesta |
+|---|---|---|
+| **R2** | ¿La latencia alcanza desde redes argentinas? | **Sí.** p95 de 577 ms contra un objetivo de 800 ms |
+| **R1** | ¿Podemos cobrar sin arrastrar el alcance PCI completo? | **Sí.** SAQ-A, con cero datos de tarjeta verificado sobre datos reales |
+
+Quedan **R3** (mercado de dos lados vacío) y **R4** (costo de video por
+espectador). Ninguno es técnico: no se responden midiendo, se responden
+lanzando y vigilando.
+
+### Lo que hay que llevarse de este sprint
+
+**Medir en campo encontró lo que ningún test encontró.** Siete defectos reales
+aparecieron sólo al salir a probar con teléfonos y dinero de verdad:
+
+- El corte de video se estaba midiendo con un error de **12×**, siempre hacia
+  abajo, porque el SFU tarda 15 s en admitir que un emisor se cayó.
+- El interruptor que apagaba los módulos de spike **no apagaba nada**:
+  `Boolean("false")` es `true`.
+- Dos formas distintas de dejar una orden en un estado del que no se sale.
+- Un formulario que se colgaba en silencio, sin un solo mensaje.
+
+Ninguno era detectable leyendo el código, y cuatro habrían llegado a
+producción.
+
+**El patrón que se repite:** el error nunca estuvo en el camino feliz. Estuvo
+en qué pasa cuando algo se corta a la mitad, cuando el aviso llega tarde, o
+cuando llega dos veces. Es donde hay que seguir mirando.
+
+### Condiciones para arrancar Auth
+
+Ninguna de las deudas anotadas bloquea el siguiente módulo, pero **tres tienen
+que estar cerradas antes del lanzamiento**, no antes de seguir:
+
+1. Watchdog de cuadros en el cliente (Sprint 0A, hallazgo principal).
+2. Migración a la API de Orders de Mercado Pago.
+3. El conciliador como trabajo periódico, no como botón.

@@ -14,11 +14,18 @@ Vendedor transmite  →  espectador ve con < 600 ms de retraso  →  compra sin 
 | Sprint | Qué valida | Estado |
 |---|---|---|
 | **0A · LiveKit** | ¿La latencia alcanza desde redes argentinas? | ✅ **GO** — p95 de 577 ms |
-| **0B · Mercado Pago** | ¿Podemos cobrar sin arrastrar alcance PCI? | 🔄 en curso |
-| 1 · Auth → Stores release | Producto | ⛔ bloqueado hasta cerrar 0B |
+| **0B · Mercado Pago** | ¿Podemos cobrar sin arrastrar alcance PCI? | ✅ **GO** — SAQ-A, 0 datos de tarjeta |
+| **1 · Auth** | Producto | ▶️ **siguiente** |
 
 La evidencia de las decisiones está en [docs/sprint-0/RESULTS.md](docs/sprint-0/RESULTS.md).
-**Ningún módulo de producto arranca antes de que los dos spikes tengan veredicto.**
+
+**Sprint 0 cerrado con GO el 13/08/2026.** Los dos riesgos técnicos que podían
+matar el proyecto están respondidos con mediciones, no con opiniones.
+
+> Siete defectos reales aparecieron sólo al probar con teléfonos y dinero de
+> verdad. Cuatro habrían llegado a producción. El error nunca estuvo en el
+> camino feliz: estuvo en qué pasa cuando algo se corta a la mitad, cuando el
+> aviso llega tarde, o cuando llega dos veces.
 
 ---
 
