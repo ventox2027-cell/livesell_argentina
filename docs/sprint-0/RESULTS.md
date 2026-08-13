@@ -260,33 +260,70 @@ del transporte sino de cómo la app lo cuenta, y eso lo controlamos nosotros.
 
 ## 0B · Mercado Pago
 
-> Se completa en el bloque siguiente del Sprint 0.
-
-**Fecha:** ____ **Responsables:** ____
+**Fecha:** 13/08/2026 · **Backend:** local + túnel Cloudflare
+**Credenciales:** de prueba (`TEST-`) · **Integración:** Checkout API + API de Pagos
 
 ### Camino de tokenización elegido
 
-☐ **Plan A** — CardForm / Bricks de MP en WebView · alcance PCI **SAQ-A**
-☐ **Plan B** — REST directo desde la app · alcance **SAQ-A-EP**
-☐ **Plan C** — Checkout Pro con deep link · **degrada la UX**
+☑ **Plan A** — CardForm de MP en WebView, modo `iframe` · alcance PCI **SAQ-A**
+☐ Plan B — REST directo desde la app · alcance **SAQ-A-EP**
+☐ Plan C — Checkout Pro con deep link · **degrada la UX**
 
-**Justificación:**
+**Justificación:** con `iframe: true`, los campos del número y del código de
+seguridad son iframes servidos por Mercado Pago. El PAN no pasa por el DOM de
+la página, ni por Dart, ni por nuestro backend. Verificado sobre datos reales
+más abajo. Es la diferencia entre un cuestionario y una auditoría anual con
+escaneos trimestrales.
 
 ### Primera compra
 
-| Paso | ✅/❌ | Tiempo | Nota |
-|---|---|---|---|
-| Producto de prueba visible | | | |
-| Ingreso de medio de pago | | | |
-| Tokenización | | | |
-| `POST /orders` idempotente | | | |
-| Llamada a Mercado Pago | | | |
-| Pago aprobado | | | |
-| Webhook recibido | | | |
-| Firma verificada | | | |
-| Estado consultado contra la API de MP | | | |
-| ORDER = PAID | | | |
-| **Tiempo total** | | | |
+| Paso | ✅/❌ | Nota |
+|---|---|---|
+| Producto de prueba visible | ✅ | |
+| Formulario de tarjeta carga en el celular | ✅ | Detectó Banco Santander y cuotas solo |
+| Tokenización | ✅ | El token nunca se persiste |
+| `POST /orders` idempotente | ✅ | |
+| Llamada a Mercado Pago | ✅ | |
+| Pago aprobado | ✅ | `visa` · `accredited` · pago `1327860846` |
+| Webhook recibido | ✅ | 681 ms después de la respuesta directa |
+| Firma verificada | ✅ | `signature_valid = t` |
+| Estado consultado contra la API de MP | ✅ | El cuerpo del webhook no se usa para decidir |
+| ORDER = PAID | ✅ | |
+| **Tiempo total** | **1,8 s** | de tocar *Pagar* a `PAID` |
+
+### 🔍 Hallazgo: la guarda de monotonía funcionando en vivo
+
+La bitácora de auditoría de la compra real:
+
+```
+07:46:10.502  API      payment.attempt          PENDING_PAYMENT → PROCESSING
+07:46:12.307  API      payment.status_changed   PROCESSING      → PAID
+07:46:12.988  WEBHOOK  payment.no_change        PAID            → PAID
+```
+
+El webhook llegó **681 ms después** de que la respuesta directa de Mercado Pago
+ya hubiera acreditado el pago. El sistema reconoció que no había nada que
+cambiar y registró `no_change` en vez de acreditar por segunda vez.
+
+Es el escenario de doble acreditación, ocurriendo de forma natural en la
+primera compra real — no provocado en un test. **Sin la guarda, la ruta de la
+API y la del webhook habrían acreditado el mismo pago dos veces.**
+
+### ⛔ Datos de tarjeta
+
+Consultado sobre la base después de una compra real con `4509 9535 6623 3704`:
+
+| Verificación | Resultado |
+|---|---|
+| Filas con `cardholder`, `first_six`, `security_code` o `token` | **0** |
+| El BIN `450995` en la tabla de pagos | **0** |
+| El BIN `450995` en la auditoría | **0** |
+| El BIN `450995` en los webhooks guardados | **0** |
+| Coincidencias en los logs del backend | **0** |
+| Lo que sí se guarda | `card_last_four = 3704`, `brand = visa` |
+
+**Es el resultado que sostiene todo el argumento de PCI**, y el único que, de
+haber fallado, habría dado NO-GO por más que el cobro funcionara.
 
 ### Segunda compra (objetivo: 2 clics)
 
@@ -300,20 +337,61 @@ del transporte sino de cómo la app lo cuenta, y eso lo controlamos nosotros.
 
 ### Robustez
 
-| Prueba | ✅/❌ |
-|---|---|
-| Webhook duplicado → una sola acreditación | |
-| Firma inválida → rechazado | |
-| Doble toque en "Pagar" → un solo cobro | |
-| Timeout de red → queda PENDING, nunca REJECTED | |
-| Webhook perdido → conciliador lo resuelve | |
-| Datos de tarjeta ausentes de logs y base | |
+Los 20 casos automáticos corren contra un doble de Mercado Pago
+(`test/integration/payments-flow.spec.ts`). La columna de campo es contra el
+Mercado Pago real, por el túnel.
+
+| Prueba | Automático | En campo |
+|---|---|---|
+| Webhook duplicado → una sola acreditación | ✅ | ✅ ocurrió sola en la 1.ª compra |
+| Firma inválida → rechazado | ✅ | ✅ `HASH_MISMATCH` |
+| Reenvío de notificación vieja → rechazado | ✅ | ✅ `STALE_TIMESTAMP` |
+| Sin firma → rechazado | ✅ | ✅ `MISSING_SIGNATURE` |
+| Pago inexistente → archivado, sin pedir reintento | ✅ | ✅ `UNKNOWN_PAYMENT` |
+| Notificación huérfana → no revienta | ✅ | — |
+| Doble toque en "Pagar" → un solo cobro | ✅ | pendiente |
+| Timeout de red → queda PROCESSING, nunca FAILED | ✅ | pendiente |
+| Webhook perdido → el conciliador lo resuelve | ✅ | pendiente |
+| Orden paga no se despaga con webhook desordenado | ✅ | — |
+| Datos de tarjeta ausentes de logs y base | ✅ | ✅ verificado sobre datos reales |
+
+Los tres rechazos quedan registrados con su motivo en `mp_webhook_events`, que
+es lo que permite detectar si alguien está probando el endpoint.
+
+### Casos de rechazo
+
+| Titular | Estado esperado | Resultado |
+|---|---|---|
+| `FUND` — fondos insuficientes | `FAILED` | pendiente |
+| `SECU` — código inválido | `FAILED` | pendiente |
+| `CALL` — requiere autorización | `FAILED` | pendiente |
+| `CONT` — pendiente | `PROCESSING` | pendiente |
+
+### Segunda compra (objetivo: 2 clics)
+
+Pendiente. Se construye después de confirmar la primera, que ya está.
+
+### Deuda anotada
+
+1. **Migrar a la API de Orders** antes de producción. Mercado Pago la marca
+   como recomendada y las funcionalidades nuevas van a aparecer ahí primero.
+   Costo acotado a `mp.client.ts` y al parseo del webhook: la máquina de
+   estados, la idempotencia y el conciliador no se tocan.
+2. **Habilitación de Checkout API para producción.** Con credenciales de
+   prueba funciona sin trámite; falta confirmar qué pide Mercado Pago para
+   activar el ambiente productivo.
+3. **Segunda compra en dos clics** con medio de pago guardado.
 
 ### Decisión
 
-**Seguimos con Mercado Pago + Checkout API:** ☐ Sí ☐ No
+**Seguimos con Mercado Pago + Checkout API:** ☑ **Sí**
 
-**Justificación:**
+**Justificación:** una compra real terminó en `PAID` en 1,8 segundos, con
+firma verificada, una sola acreditación pese a que llegaron dos caminos de
+confirmación, y **cero datos de tarjeta** en base, auditoría y logs. El riesgo
+R1 —que tokenizar desde Flutter arrastrara el alcance PCI completo— queda
+descartado: los campos sensibles son iframes de Mercado Pago y el número no
+toca ningún sistema nuestro.
 
 ---
 
