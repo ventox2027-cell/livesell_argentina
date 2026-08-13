@@ -351,21 +351,64 @@ Mercado Pago real, por el túnel.
 | Notificación huérfana → no revienta | ✅ | — |
 | Doble toque en "Pagar" → un solo cobro | ✅ | pendiente |
 | Timeout de red → queda PROCESSING, nunca FAILED | ✅ | pendiente |
-| Webhook perdido → el conciliador lo resuelve | ✅ | pendiente |
+| **Webhook perdido → el conciliador lo resuelve** | ✅ | ✅ **ver abajo** |
+| **Rechazo → reintento con otra tarjeta funciona** | ✅ | ✅ |
 | Orden paga no se despaga con webhook desordenado | ✅ | — |
 | Datos de tarjeta ausentes de logs y base | ✅ | ✅ verificado sobre datos reales |
 
 Los tres rechazos quedan registrados con su motivo en `mp_webhook_events`, que
 es lo que permite detectar si alguien está probando el endpoint.
 
+### El conciliador, contra Mercado Pago real
+
+Se provocó el peor caso: **un cobro acreditado del que nunca nos enteramos.**
+Para forzarlo se cambió la clave de firma por una señuelo, de modo que la
+notificación de Mercado Pago llegara y fuera rechazada.
+
+```
+08:43:24  API          order.created                       → PENDING_PAYMENT
+08:43:28  (webhook recibido y RECHAZADO: HASH_MISMATCH)
+          ── plata cobrada en Mercado Pago, orden colgada en PROCESSING ──
+08:44:19  RECONCILER   payment.status_changed  PROCESSING  → PAID
+```
+
+El conciliador preguntó por nuestra referencia de orden, encontró el pago
+aprobado y lo acreditó. **Sin él, esa venta quedaba cobrada y sin entregar.**
+
+Es el escenario que ninguna otra capa cubre: la firma es correcta al rechazar,
+el webhook hizo lo suyo, y aun así el sistema tenía que recuperarse solo.
+
+### Recuperación después de un rechazo
+
+| # | Intento | Clave de idempotencia | Pago | Resultado |
+|---|---|---|---|---|
+| 1 | `FUND` | `…c8e66188a952eb8f` | `1350331981` | `REJECTED` · fondos insuficientes |
+| 2 | `APRO` | `…cedf3693094e413b` | `1350327949` | `APPROVED` |
+
+La orden pasó `FAILED → PAID`. Claves distintas, pagos distintos.
+
+> **Encontrado acá y corregido.** La primera versión usaba el id de la orden
+> como clave de idempotencia. En el reintento se mandaba la misma y Mercado
+> Pago devolvía la respuesta guardada del primer intento: **una orden
+> rechazada no podía pagarse nunca más, con ninguna tarjeta.** La clave ahora
+> se deriva del token, que es la unidad correcta de "un cobro".
+
 ### Casos de rechazo
 
 | Titular | Estado esperado | Resultado |
 |---|---|---|
-| `FUND` — fondos insuficientes | `FAILED` | pendiente |
+| `FUND` — fondos insuficientes | `FAILED` | ✅ mensaje: *"La tarjeta no tiene fondos suficientes"* |
+| Número mal tipeado | `FAILED` | ✅ mensaje: *"Revisá el número de la tarjeta"* |
 | `SECU` — código inválido | `FAILED` | pendiente |
 | `CALL` — requiere autorización | `FAILED` | pendiente |
 | `CONT` — pendiente | `PROCESSING` | pendiente |
+
+> **Deuda de producto encontrada acá.** El primer mensaje que vio el comprador
+> fue `invalid card_number_validation`: correcto, preciso e inútil. Ahora los
+> errores de Mercado Pago se traducen, y cada uno clasifica **qué puede hacer
+> la persona** — corregir datos, usar otra tarjeta, llamar al banco o esperar.
+> Ofrecer "reintentar" ante fondos insuficientes es hacerle perder el tiempo a
+> alguien que quiere comprar.
 
 ### Segunda compra (objetivo: 2 clics)
 
