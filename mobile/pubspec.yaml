@@ -28,6 +28,14 @@ dependencies:
   shared_preferences: ^2.3.3
   intl: ^0.19.0
 
+  # ── Pagos (Sprint 0B) ──────────────────────────────────────────────────────
+  # El formulario de tarjeta corre en un WebView contra el CardForm de Mercado
+  # Pago, en modo iframe. Es lo que impide que el número de tarjeta pase por
+  # nuestro código y mantiene el alcance PCI en SAQ-A en vez de SAQ-D.
+  # No es una preferencia de implementación: es el motivo por el que podemos
+  # cobrar sin una auditoría anual encima.
+  webview_flutter: ^4.10.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

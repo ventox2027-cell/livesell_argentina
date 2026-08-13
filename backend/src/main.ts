@@ -67,6 +67,9 @@ async function bootstrap(): Promise<void> {
       { path: 'metrics', method: RequestMethod.GET },
       { path: 'webhooks/livekit', method: RequestMethod.POST },
       { path: 'webhooks/mercadopago', method: RequestMethod.POST },
+      // La carga un WebView desde una URL que arma la app. Fuera del prefijo
+      // para que no dependa de la versión de la API.
+      { path: 'checkout', method: RequestMethod.GET },
     ],
   });
   app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });

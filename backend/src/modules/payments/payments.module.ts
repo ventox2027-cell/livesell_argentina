@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 
 import { SpikeKeyGuard } from '@/modules/spike/spike-key.guard';
 
+import { CheckoutPageController } from './checkout-page.controller';
 import { MercadoPagoService } from './mp.client';
 import { MpWebhookController } from './mp-webhook.controller';
 import { PaymentsController } from './payments.controller';
@@ -19,7 +20,7 @@ import { PaymentsService } from './payments.service';
  * el controlador de spike y las tablas `spike_*`.
  */
 @Module({
-  controllers: [PaymentsController, MpWebhookController],
+  controllers: [PaymentsController, MpWebhookController, CheckoutPageController],
   providers: [PaymentsService, MercadoPagoService, SpikeKeyGuard],
   exports: [PaymentsService],
 })

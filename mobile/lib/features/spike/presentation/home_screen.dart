@@ -9,6 +9,7 @@ import '../../../core/config/runtime_config.dart';
 import '../../../core/device/device_info.dart';
 import '../../../core/network/spike_api.dart';
 import '../../../core/time/clock_sync.dart';
+import '../../payments/presentation/checkout_screen.dart';
 import '../domain/models.dart';
 import 'broadcaster_screen.dart';
 import 'viewer_screen.dart';
@@ -402,6 +403,30 @@ class _HomeScreenState extends State<HomeScreen> {
               icon: const Icon(Icons.play_circle),
               label: const Text('UNIRSE COMO ESPECTADOR'),
               style: FilledButton.styleFrom(backgroundColor: Colors.teal),
+            ),
+
+            const SizedBox(height: 32),
+            const Divider(),
+            const SizedBox(height: 16),
+
+            // ── C. Sprint 0B ─────────────────────────────────────────────────
+            const _SectionTitle('💳 Sprint 0B — cobrar'),
+            const SizedBox(height: 8),
+            const Text(
+              'Prueba de tokenización y cobro con Mercado Pago. '
+              'Independiente del spike de video.',
+              style: TextStyle(color: Colors.white60),
+            ),
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              onPressed: _busy
+                  ? null
+                  : () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(builder: (_) => const CheckoutScreen()),
+                      ),
+              icon: const Icon(Icons.credit_card),
+              label: const Text('PROBAR UN PAGO'),
+              style: FilledButton.styleFrom(backgroundColor: Colors.indigo),
             ),
 
             const SizedBox(height: 24),
