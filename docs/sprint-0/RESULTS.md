@@ -410,9 +410,46 @@ La orden pasó `FAILED → PAID`. Claves distintas, pagos distintos.
 > Ofrecer "reintentar" ante fondos insuficientes es hacerle perder el tiempo a
 > alguien que quiere comprar.
 
-### Segunda compra (objetivo: 2 clics)
+### Segunda compra (objetivo: 2 clics) — 🚧 BLOQUEADA
 
-Pendiente. Se construye después de confirmar la primera, que ya está.
+Investigada a fondo contra Mercado Pago real. **Dos de los tres eslabones
+funcionan; el tercero devuelve un error sin causa que no depende de nosotros.**
+
+| Paso | Resultado |
+|---|---|
+| Crear el cliente (`POST /v1/customers`) | ✅ |
+| Guardar la tarjeta (`POST /v1/customers/{id}/cards`) | ✅ HTTP 201, devuelve el `card_id` |
+| Tokenizar desde la tarjeta guardada | ✅ y **funciona sin pedir el código de seguridad** |
+| **Cobrar con ese token** | ❌ **`internal_error` 500, sin causa** |
+
+Se probaron cuatro formas del bloque `payer` —`type`+`id`, `id`+`email`, con
+`issuer_id`, con `identification`— y las cuatro devuelven exactamente:
+
+```json
+{"cause":[],"error":null,"message":"internal_error","status":500}
+```
+
+Un 500 con la lista de causas vacía es un fallo del lado de Mercado Pago, no
+un payload mal armado. Seguir probando combinaciones es adivinar.
+
+**Dato secundario que puede ser la pista:** al guardar la tarjeta, Mercado Pago
+descarta el número de documento —queda `identification.number: null`— aunque el
+token se haya creado con él. Puede que el cobro lo necesite y no lo encuentre.
+
+**Además hay un problema de diseño por resolver.** Guardar la tarjeta consume
+un token, y cobrar consume otro. Una pasada por el formulario produce **uno
+solo**. Hacen falta dos tokens del mismo ingreso de datos, y con `iframe: true`
+los campos no son nuestros, así que no se puede simplemente volver a leerlos.
+Hay que verificar si `cardForm` permite emitir un segundo token.
+
+**Qué hacer:** consultar a soporte de Mercado Pago con estos datos, o probar
+con una aplicación habilitada para producción. **No bloquea el veredicto de
+0B**: el riesgo R1 —tokenizar sin arrastrar el alcance PCI— ya está respondido
+por la primera compra.
+
+**Lo que NO se hizo, a propósito:** dejar el flujo a medias en la app. Una
+pantalla de "pagar con tarjeta guardada" que falla en el último paso es peor
+que no tenerla, porque parece terminada.
 
 ### Deuda anotada
 
