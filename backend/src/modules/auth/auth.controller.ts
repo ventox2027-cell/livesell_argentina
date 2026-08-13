@@ -1,6 +1,8 @@
 import { Body, Controller, Delete, Get, Patch, Post, Req } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
 
+import { env } from '@/config/env.schema';
+
 import { RateLimit } from '@/shared/http/rate-limit.guard';
 import { ZodValidationPipe } from '@/shared/http/zod-validation.pipe';
 
@@ -47,6 +49,29 @@ export class AuthController {
     return {
       ip: req.ip,
       userAgent: typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : undefined,
+    };
+  }
+
+  /**
+   * Configuración que la app necesita para iniciar sesión.
+   *
+   * Se sirve desde el backend en vez de compilarla dentro del APK por un
+   * motivo práctico: cambiar un client ID no puede obligar a publicar una
+   * versión nueva en las tiendas y esperar a que la gente actualice.
+   *
+   * Todo lo que devuelve es público por diseño. El client ID de Google viaja
+   * dentro de cada token de identidad; no es un secreto y no sirve para
+   * autenticarse con él.
+   */
+  @Public()
+  @Get('config')
+  config() {
+    return {
+      googleServerClientId: env.GOOGLE_CLIENT_ID_WEB ?? null,
+      appleBundleId: env.APPLE_BUNDLE_ID ?? null,
+      // Permite que la app esconda el acceso de prueba cuando no está
+      // disponible, en vez de ofrecer un botón que va a fallar.
+      devLoginEnabled: env.AUTH_DEV_LOGIN_ENABLED,
     };
   }
 

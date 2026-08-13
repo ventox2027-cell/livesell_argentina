@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/auth/google_signin_service.dart';
 import '../../../core/config/runtime_config.dart';
 import '../../../core/design/tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
+import '../data/auth_config.dart';
 import '../domain/session.dart';
 import '../state/auth_providers.dart';
 
@@ -45,6 +47,11 @@ class _WelcomeScreenState extends ConsumerState<WelcomeScreen> {
       SinSesion(motivo: final m) => m,
       _ => null,
     };
+
+    // La configuración decide qué botones tienen sentido. Ofrecer "modo
+    // prueba" contra un servidor que lo tiene apagado es prometer algo que va
+    // a fallar.
+    final config = ref.watch(authConfigProvider).valueOrNull ?? const AuthConfig();
 
     return Scaffold(
       body: Stack(
@@ -112,11 +119,13 @@ class _WelcomeScreenState extends ConsumerState<WelcomeScreen> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      TextButton(
-                        onPressed: _ocupado ? null : _accesoDePrueba,
-                        child: const Text('Entrar en modo prueba'),
-                      ),
-                      const Text('·', style: TextStyle(color: AppColor.textoDebil)),
+                      if (config.devLoginEnabled) ...[
+                        TextButton(
+                          onPressed: _ocupado ? null : _accesoDePrueba,
+                          child: const Text('Entrar en modo prueba'),
+                        ),
+                        const Text('·', style: TextStyle(color: AppColor.textoDebil)),
+                      ],
                       /// Configurar el backend TIENE que estar disponible antes
                       /// de entrar. Escondido detrás del login, una instalación
                       /// nueva apuntando a una URL vieja no tiene salida: no se
@@ -142,16 +151,27 @@ class _WelcomeScreenState extends ConsumerState<WelcomeScreen> {
   }
 
   Future<void> _google() async {
-    /// Google Sign-In todavía no está conectado: requiere los client IDs del
-    /// proyecto de Firebase, que se configuran junto con las notificaciones.
-    ///
-    /// El backend YA verifica estos tokens (`identity.service.ts`), así que lo
-    /// único que falta es obtenerlos. Mientras tanto se dice claramente en vez
-    /// de mostrar un botón que no hace nada.
-    AppSnack.info(
-      context,
-      'Falta configurar Google en el proyecto de Firebase. Usá "modo prueba" por ahora.',
-    );
+    final config = ref.read(authConfigProvider).valueOrNull;
+    final serverClientId = config?.googleServerClientId;
+
+    if (serverClientId == null || serverClientId.isEmpty) {
+      AppSnack.info(
+        context,
+        'Google no está configurado en este servidor. Usá "modo prueba" por ahora.',
+      );
+      return;
+    }
+
+    await _correr(() async {
+      await GoogleSignInService.instance.inicializar(serverClientId: serverClientId);
+      final idToken = await GoogleSignInService.instance.obtenerIdToken();
+
+      // `null` = la persona cerró el selector. No es un error y no se le
+      // muestra nada: cancelar es una decisión válida.
+      if (idToken == null) return;
+
+      await ref.read(sesionProvider.notifier).conGoogle(idToken);
+    });
   }
 
   Future<void> _apple() async {
