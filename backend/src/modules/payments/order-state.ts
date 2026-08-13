@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import type { PayOrderStatus, PayPaymentStatus } from '@prisma/client';
 
 /**
@@ -141,6 +143,40 @@ export function canAttemptPayment(status: PayOrderStatus): boolean {
 /** ¿Hay que preguntarle a Mercado Pago por esta orden? */
 export function needsReconciliation(status: PayOrderStatus): boolean {
   return status === 'PROCESSING';
+}
+
+/**
+ * Clave de idempotencia de un INTENTO de cobro.
+ *
+ * ─── El error que corrige ───
+ *
+ * La primera versión usaba sólo el id de la orden. Parecía razonable y estaba
+ * mal: en el reintento se mandaba la misma clave, y Mercado Pago —haciendo
+ * exactamente lo que debe hacer— devolvía la respuesta guardada del primer
+ * intento. Medido en campo:
+ *
+ *   08:14:50  intento con FUND   clave pay-ord_X  → pago 1350327873 rechazado
+ *   08:15:39  intento con APRO   clave pay-ord_X  → pago 1350327873, el MISMO
+ *
+ * El segundo cobro nunca se procesó. Una orden rechazada quedaba condenada:
+ * ninguna tarjeta podía pagarla, para siempre.
+ *
+ * ─── Por qué el token es la unidad correcta ───
+ *
+ * Una clave de idempotencia identifica UN COBRO, no una orden. Y el token de
+ * tarjeta es exactamente eso: se genera uno nuevo por cada vez que alguien
+ * completa el formulario, y Mercado Pago sólo lo acepta una vez.
+ *
+ *   · Doble toque en "Pagar" → mismo token → misma clave → un solo cobro.
+ *   · Reintento con otra tarjeta → token nuevo → clave nueva → cobro nuevo.
+ *
+ * Se guarda el HASH y no el token: la clave viaja en un encabezado y termina
+ * en la bitácora de auditoría, y ahí no puede quedar nada que sirva para
+ * cobrar.
+ */
+export function paymentIdempotencyKey(orderId: string, cardToken: string): string {
+  const huella = createHash('sha256').update(cardToken).digest('hex').slice(0, 16);
+  return `pay-${orderId}-${huella}`;
 }
 
 /** Centavos → unidades de moneda, que es como los quiere Mercado Pago. */

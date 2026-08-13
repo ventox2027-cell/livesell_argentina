@@ -20,6 +20,7 @@ import {
   centsToAmount,
   mapMpStatus,
   nextOrderStatus,
+  paymentIdempotencyKey,
 } from '@/modules/payments/order-state';
 import { DomainError } from '@/shared/errors/domain.error';
 import { PrismaService } from '@/shared/prisma/prisma.service';
@@ -137,12 +138,13 @@ export class PaymentsService {
     if (!canAttemptPayment(order.status)) throw new OrderNotPayableError(order.status);
 
     /**
-     * La clave de idempotencia del cobro es el id de la orden, no algo
-     * aleatorio: si este mismo request se reintenta —porque el teléfono
-     * perdió la respuesta y la app volvió a mandar— Mercado Pago reconoce la
-     * clave y devuelve el pago YA CREADO en vez de crear uno nuevo.
+     * Clave por INTENTO, derivada del token de tarjeta. La explicación
+     * completa —y el incidente que la motivó— está en `paymentIdempotencyKey`.
+     *
+     * En corto: si fuera por orden, reintentar con otra tarjeta devolvería la
+     * respuesta guardada del intento anterior y la orden quedaría condenada.
      */
-    const idempotencyKey = `pay-${order.id}`;
+    const idempotencyKey = paymentIdempotencyKey(order.id, input.token);
 
     // La orden se mueve a PROCESSING ANTES de llamar. Si el proceso se muere
     // en el medio, queda el rastro de que había un cobro en vuelo.

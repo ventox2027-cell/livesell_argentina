@@ -7,6 +7,7 @@ import {
   mapMpStatus,
   needsReconciliation,
   nextOrderStatus,
+  paymentIdempotencyKey,
 } from '../../src/modules/payments/order-state';
 
 describe('mapMpStatus', () => {
@@ -144,6 +145,41 @@ describe('needsReconciliation', () => {
     expect(needsReconciliation('PROCESSING')).toBe(true);
     expect(needsReconciliation('PAID')).toBe(false);
     expect(needsReconciliation('PENDING_PAYMENT')).toBe(false);
+  });
+});
+
+describe('clave de idempotencia del cobro', () => {
+  const ORDEN = 'ord_01ABC';
+
+  it('⛔ un token distinto da una clave distinta', () => {
+    // EL BUG QUE MOTIVÓ ESTA FUNCIÓN. Con la clave por orden, el reintento
+    // mandaba la misma y Mercado Pago devolvía la respuesta guardada del
+    // primer intento: una orden rechazada no podía pagarse nunca más, con
+    // ninguna tarjeta.
+    const primerIntento = paymentIdempotencyKey(ORDEN, 'token-de-la-tarjeta-que-rebotó');
+    const segundoIntento = paymentIdempotencyKey(ORDEN, 'token-de-la-tarjeta-buena');
+    expect(primerIntento).not.toBe(segundoIntento);
+  });
+
+  it('el mismo token da la misma clave: doble toque = un solo cobro', () => {
+    const a = paymentIdempotencyKey(ORDEN, 'token-abc');
+    const b = paymentIdempotencyKey(ORDEN, 'token-abc');
+    expect(a).toBe(b);
+  });
+
+  it('el mismo token en otra orden da otra clave', () => {
+    expect(paymentIdempotencyKey('ord_1', 'tok')).not.toBe(paymentIdempotencyKey('ord_2', 'tok'));
+  });
+
+  it('⛔ la clave NO contiene el token', () => {
+    // Termina en un encabezado HTTP y en la bitácora de auditoría. Ahí no
+    // puede quedar nada que sirva para cobrar.
+    const token = 'token-secreto-de-un-solo-uso';
+    expect(paymentIdempotencyKey(ORDEN, token)).not.toContain(token);
+  });
+
+  it('entra en el límite de longitud de Mercado Pago', () => {
+    expect(paymentIdempotencyKey('ord_01JBQZ9K3M4N5P6Q7R8S9T0V1W', 'tok').length).toBeLessThan(80);
   });
 });
 

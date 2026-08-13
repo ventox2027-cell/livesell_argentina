@@ -66,7 +66,24 @@ class MpFake {
 
   private siguienteId = 700000001;
 
-  async createPayment(input: { externalReference: string; transactionAmount: number }) {
+  /**
+   * Respuestas ya devueltas por clave de idempotencia.
+   *
+   * Reproduce el comportamiento REAL de Mercado Pago, que es justamente el que
+   * destapó el bug de campo: ante una clave repetida no procesa nada nuevo,
+   * devuelve la respuesta guardada.
+   */
+  porClaveIdempotencia = new Map<string, ReturnType<MpFake['pago']>>();
+  /** Estado que devolverá el próximo `createPayment`. */
+  proximoEstado = 'approved';
+
+  async createPayment(
+    input: { externalReference: string; transactionAmount: number },
+    idempotencyKey: string,
+  ) {
+    const guardada = this.porClaveIdempotencia.get(idempotencyKey);
+    if (guardada) return guardada;
+
     this.llamadasCreate += 1;
     if (this.proximoTimeout) {
       this.proximoTimeout = false;
@@ -74,8 +91,11 @@ class MpFake {
       throw new MpNetworkError('timeout simulado');
     }
     const id = this.siguienteId++;
-    this.estados.set(String(id), 'approved');
-    return this.pago(id, 'approved', input.externalReference, input.transactionAmount);
+    const estado = this.proximoEstado;
+    this.estados.set(String(id), estado);
+    const respuesta = this.pago(id, estado, input.externalReference, input.transactionAmount);
+    this.porClaveIdempotencia.set(idempotencyKey, respuesta);
+    return respuesta;
   }
 
   /// Ids que la "API" va a reportar como inexistentes (404).
@@ -198,6 +218,8 @@ beforeEach(() => {
   mp.estados.clear();
   mp.porReferencia.clear();
   mp.noExiste.clear();
+  mp.porClaveIdempotencia.clear();
+  mp.proximoEstado = 'approved';
   mp.proximoTimeout = false;
   mp.llamadasCreate = 0;
 });
@@ -332,6 +354,49 @@ describe('Cobro', () => {
 
     expect(segundo.status).toBe(409);
     expect(mp.llamadasCreate).toBe(1); // no se volvió a llamar a Mercado Pago
+  });
+
+  it('⛔ después de un rechazo se puede pagar con OTRA tarjeta', async () => {
+    /**
+     * El bug de campo del 13/08/2026.
+     *
+     * La clave de idempotencia era el id de la orden, así que el reintento
+     * mandaba la misma y Mercado Pago devolvía la respuesta guardada del
+     * primer intento. La orden quedaba condenada: ninguna tarjeta podía
+     * pagarla nunca más.
+     *
+     * El doble de Mercado Pago replica ese comportamiento —cachea por clave—
+     * para que este test falle de verdad si la clave vuelve a ser por orden.
+     */
+    const orden = await crearOrden();
+
+    mp.proximoEstado = 'rejected';
+    const rechazado = await call('POST', `/api/v1/payments/orders/${orden.id}/pay`, {
+      body: { token: 'token-de-la-tarjeta-sin-fondos', paymentMethodId: 'visa', installments: 1 },
+    });
+    expect(rechazado.body.order.status).toBe('FAILED');
+
+    // Otra tarjeta ⇒ otro token ⇒ otro intento.
+    mp.proximoEstado = 'approved';
+    const aprobado = await call('POST', `/api/v1/payments/orders/${orden.id}/pay`, {
+      body: { token: 'token-de-la-tarjeta-buena', paymentMethodId: 'visa', installments: 1 },
+    });
+
+    expect(aprobado.body.order.status).toBe('PAID');
+    expect(mp.llamadasCreate).toBe(2); // se procesaron los DOS cobros
+  });
+
+  it('⛔ pero el MISMO token dos veces sigue siendo un solo cobro', async () => {
+    // La otra mitad del invariante: la clave protege contra el doble toque
+    // sin bloquear el reintento legítimo.
+    const orden = await crearOrden();
+    const cuerpo = { token: 'token-repetido-abc', paymentMethodId: 'visa', installments: 1 };
+
+    await call('POST', `/api/v1/payments/orders/${orden.id}/pay`, { body: cuerpo });
+    expect(mp.llamadasCreate).toBe(1);
+
+    const pagos = await prisma.spikePayment.count({ where: { orderId: orden.id } });
+    expect(pagos).toBe(1);
   });
 
   it('⛔ un timeout deja la orden en PROCESSING, NUNCA en FAILED', async () => {
