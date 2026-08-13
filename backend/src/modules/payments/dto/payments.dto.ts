@@ -42,6 +42,12 @@ export const ReconcileSchema = z.object({
    * evita perseguir cobros que todavía están en vuelo.
    */
   olderThanMs: z.number().int().min(0).max(86_400_000).default(60_000),
+  /**
+   * Cuánto esperar antes de liberar una orden para la que Mercado Pago no
+   * registra ningún pago. Configurable para poder demostrarlo en la prueba de
+   * campo sin esperar cinco minutos.
+   */
+  releaseAfterMs: z.number().int().min(0).max(86_400_000).default(5 * 60_000),
 });
 export type ReconcileDto = z.infer<typeof ReconcileSchema>;
 

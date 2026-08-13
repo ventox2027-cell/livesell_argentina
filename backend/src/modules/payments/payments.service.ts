@@ -45,6 +45,15 @@ export interface CreateOrderInput {
   amountCents: number;
 }
 
+/**
+ * Cuánto se espera antes de liberar una orden en PROCESSING para la que
+ * Mercado Pago no registra ningún pago.
+ *
+ * Cinco minutos: holgado para que un cobro en vuelo aparezca en la búsqueda, y
+ * corto para que un comprador no quede esperando frente a una orden trabada.
+ */
+export const RELEASE_AFTER_MS = 5 * 60_000;
+
 export interface PayOrderInput {
   /** Token de un solo uso generado en el cliente. No se persiste jamás. */
   token: string;
@@ -492,7 +501,7 @@ export class PaymentsService {
    * En producción esto es un trabajo periódico. Acá se expone como endpoint
    * para poder ejecutarlo a mano durante la prueba de campo y ver que funciona.
    */
-  async reconcile(olderThanMs = 60_000) {
+  async reconcile(olderThanMs = 60_000, releaseAfterMs = RELEASE_AFTER_MS) {
     /**
      * `olderThanMs = 0` significa "todas", sin filtro de tiempo.
      *
@@ -517,8 +526,54 @@ export class PaymentsService {
         // Se busca por NUESTRA referencia: no hace falta conocer el id del
         // pago, que es justo lo que no tenemos cuando el webhook se perdió.
         const payments = await this.mp.searchPaymentsByExternalReference(order.id);
+
         if (payments.length === 0) {
-          await this.audit(order.id, 'RECONCILER', 'reconcile.no_payment', order.status, order.status);
+          /**
+           * Mercado Pago no tiene NINGÚN pago para esta orden.
+           *
+           * Pasa cuando la petición se cortó antes de que llegara: el cobro
+           * nunca ocurrió. Verificado en campo el 13/08/2026 con un timeout
+           * de 1 s.
+           *
+           * Si la dejáramos en PROCESSING, la orden quedaría trabada para
+           * siempre: `canAttemptPayment` no permite reintentar sobre una orden
+           * con un cobro en vuelo, así que nadie podría pagarla nunca más.
+           * Es el mismo tipo de callejón sin salida que tenía la clave de
+           * idempotencia, con otra causa.
+           *
+           * ─── Por qué se espera antes de liberar ───
+           *
+           * Liberarla al instante sería peligroso: si el pago SÍ se creó y
+           * todavía no aparece en la búsqueda, el comprador reintentaría y
+           * pagaría dos veces. La ventana da tiempo a que cualquier cobro en
+           * vuelo se materialice.
+           *
+           * Y liberar a FAILED es seguro incluso si nos equivocamos: si más
+           * tarde apareciera el pago, la guarda de monotonía permite
+           * FAILED → PAID, así que el webhook o el propio conciliador
+           * corrigen el estado.
+           */
+          const enProcesoMs = Date.now() - order.updatedAt.getTime();
+          if (enProcesoMs >= releaseAfterMs) {
+            await this.transition(
+              order.id,
+              order.status,
+              'FAILED',
+              'RECONCILER',
+              'reconcile.released',
+              { motivo: 'Mercado Pago no registra ningún pago para esta orden', enProcesoMs },
+            );
+            results.push({ orderId: order.id, before: order.status, after: 'FAILED' });
+          } else {
+            await this.audit(
+              order.id,
+              'RECONCILER',
+              'reconcile.no_payment',
+              order.status,
+              order.status,
+              { enProcesoMs, liberaEnMs: releaseAfterMs - enProcesoMs },
+            );
+          }
           continue;
         }
 

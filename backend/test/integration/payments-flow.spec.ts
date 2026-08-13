@@ -519,10 +519,76 @@ describe('Conciliación · el webhook que nunca llegó', () => {
       body: { token: 'tok-de-prueba-12345', paymentMethodId: 'visa', installments: 1 },
     });
 
-    await call('POST', '/api/v1/payments/reconcile', { body: { olderThanMs: 0 } });
+    // Con la ventana de liberación por delante, la orden NO se toca: podría
+    // haber un cobro en vuelo que todavía no aparece en la búsqueda.
+    await call('POST', '/api/v1/payments/reconcile', {
+      body: { olderThanMs: 0, releaseAfterMs: 300_000 },
+    });
 
     const sigue = await prisma.spikeOrder.findUniqueOrThrow({ where: { id: orden.id } });
     expect(sigue.status).toBe('PROCESSING');
+  });
+
+  it('⛔ libera la orden cuando el cobro nunca llegó a existir', async () => {
+    /**
+     * Encontrado en campo el 13/08/2026: con un timeout de 1 s, la petición se
+     * cortó antes de llegar a Mercado Pago. Cero pagos registrados allá, y la
+     * orden en PROCESSING para siempre — `canAttemptPayment` no deja
+     * reintentar, así que nadie podía pagarla nunca más.
+     */
+    const orden = await crearOrden();
+    mp.proximoTimeout = true;
+    await call('POST', `/api/v1/payments/orders/${orden.id}/pay`, {
+      body: { token: 'tok-de-prueba-12345', paymentMethodId: 'visa', installments: 1 },
+    });
+
+    // Pasada la ventana, con Mercado Pago confirmando que no hay ningún pago.
+    const r = await call('POST', '/api/v1/payments/reconcile', {
+      body: { olderThanMs: 0, releaseAfterMs: 0 },
+    });
+    expect(r.body.changed.some((c: { orderId: string }) => c.orderId === orden.id)).toBe(true);
+
+    const liberada = await prisma.spikeOrder.findUniqueOrThrow({ where: { id: orden.id } });
+    expect(liberada.status).toBe('FAILED');
+
+    // Y lo que importa: ahora sí se puede volver a intentar.
+    mp.proximoEstado = 'approved';
+    const reintento = await call('POST', `/api/v1/payments/orders/${orden.id}/pay`, {
+      body: { token: 'otro-token-distinto', paymentMethodId: 'visa', installments: 1 },
+    });
+    expect(reintento.body.order.status).toBe('PAID');
+  });
+
+  it('liberar es seguro: un webhook tardío corrige la orden a PAID', async () => {
+    /**
+     * Es lo que hace aceptable liberar la orden.
+     *
+     * Si nos equivocáramos —si el pago sí existía y la búsqueda todavía no lo
+     * mostraba— la orden queda en FAILED, no en un estado terminal. La guarda
+     * de monotonía permite FAILED → PAID, así que la notificación que llegue
+     * después corrige el estado sola.
+     */
+    const orden = await crearOrden();
+    mp.proximoTimeout = true;
+    await call('POST', `/api/v1/payments/orders/${orden.id}/pay`, {
+      body: { token: 'tok-de-prueba-12345', paymentMethodId: 'visa', installments: 1 },
+    });
+    await call('POST', '/api/v1/payments/reconcile', {
+      body: { olderThanMs: 0, releaseAfterMs: 0 },
+    });
+    expect((await prisma.spikeOrder.findUniqueOrThrow({ where: { id: orden.id } })).status).toBe(
+      'FAILED',
+    );
+
+    // El pago existía después de todo, y Mercado Pago avisa tarde.
+    const mpPaymentId = '900000777';
+    mp.referencias.set(mpPaymentId, orden.id);
+    mp.estados.set(mpPaymentId, 'approved');
+    await enviarWebhook(webhookFirmado({ mpPaymentId }));
+
+    expect((await prisma.spikeOrder.findUniqueOrThrow({ where: { id: orden.id } })).status).toBe(
+      'PAID',
+    );
   });
 });
 

@@ -73,7 +73,7 @@ export class PaymentsController {
    */
   @Post('reconcile')
   reconcile(@Body(new ZodValidationPipe(ReconcileSchema)) dto: ReconcileDto) {
-    return this.payments.reconcile(dto.olderThanMs);
+    return this.payments.reconcile(dto.olderThanMs, dto.releaseAfterMs);
   }
 
   @Get('cards')
