@@ -32,10 +32,10 @@ Tres principios que atraviesan todas las decisiones:
 | **Auth** | ✅ funcionando | Login con Google real verificado end-to-end |
 | App móvil (base) | ✅ instalable | Diseño, navegación, feed, perfil |
 | **Sellers / Stores / Products / Variantes / Imágenes** | ✅ funcionando | Backend + Flutter. Catálogo real de punta a punta |
-| Feed (descubrimiento) | 🟡 parcial | Consume productos reales. Falta el video: llega con Live Sessions |
-| Inventory / Reservation | ⛔ no empezado | **Siguiente** |
+| **Inventory / Reservation** | ✅ funcionando | Sobreventa imposible por construcción. 1000 compradores → 5 reservas exactas |
+| Feed (descubrimiento) | 🟡 parcial | Productos y stock reales. Falta el video: llega con Live Sessions |
+| Orders / Payments (producción) | ⛔ no empezado | **Siguiente.** El spike ya validó el camino e `InventoryService.consume()` está listo esperándolo |
 | Live Sessions / Realtime | ⛔ no empezado | |
-| Orders / Payments (producción) | ⛔ no empezado | El spike ya validó el camino |
 | Search / Notifications | ⛔ no empezado | |
 | Admin Lite | ⛔ no empezado | **Requisito previo al lanzamiento** |
 
@@ -400,6 +400,169 @@ Ningún endpoint acepta `sellerId` ni `storeId` del cliente. Salen del token.
 
 ---
 
+## 5c · Inventario y reservas
+
+### El principio
+
+**PostgreSQL es la única autoridad sobre el stock.** Redis no decide stock.
+Flutter no decide stock. LiveKit no decide stock.
+
+> **Es mejor rechazar una venta que vender stock que no existe.**
+
+### Lo que NO se hace, en ningún camino
+
+```ts
+const inv = await prisma.inventory.findUnique(...)   // 1. leer
+if (inv.onHand - inv.reserved >= qty) {              // 2. decidir
+  await prisma.inventory.update(...)                 // 3. escribir
+}
+```
+
+Entre el paso 1 y el 3 hay una ventana. Durante un vivo son microsegundos y
+pasan cien peticiones por ella: las cien leen "queda 1", las cien deciden que
+sí, y las cien escriben.
+
+**No se arregla achicando la ventana. Se arregla eliminándola:**
+
+```sql
+UPDATE inventory
+   SET reserved = reserved + $qty
+ WHERE id = $id AND (on_hand - reserved) >= $qty
+RETURNING on_hand, reserved
+```
+
+La condición y la escritura son la misma operación. PostgreSQL serializa las
+escrituras sobre la fila: la tercera petición evalúa el WHERE contra el valor
+que dejaron las dos primeras. Cero filas afectadas **es** la respuesta:
+`OUT_OF_STOCK`. Sin reintentos, sin bloqueo optimista, sin `SELECT FOR UPDATE`.
+
+**Verificado, no supuesto.** Se reemplazó a propósito ese UPDATE por el patrón
+ingenuo y el test de los 100 compradores pasó de 2 reservas a **45**. El test
+detecta la sobreventa.
+
+### Tres capas de defensa
+
+| | Qué impide |
+|---|---|
+| 1 · El UPDATE condicional | Que dos peticiones aparten la misma unidad |
+| 2 · `CHECK (reserved <= on_hand)` | Que un bug futuro sobrevenda: la transacción explota en vez de vender |
+| 3 · Índice único parcial | Dos reservas activas de la misma persona y variante |
+
+### Reglas del modelo
+
+**El inventario cuelga de la variante, nunca del producto.** Todo producto
+tiene al menos una variante —los simples reciben una `DEFAULT`— así que no hay
+dos lógicas de stock conviviendo.
+
+**`available` no se guarda: se calcula.** Persistirlo obligaría a mantener tres
+columnas sincronizadas, y la tercera se desincronizaría el día que alguien
+escriba un UPDATE que se la olvide.
+
+**Sin columna `version`.** El bloqueo optimista resuelve lo mismo que el UPDATE
+condicional pero peor: obliga a reintentar en el código.
+
+**Consumir descuenta de las DOS columnas.**
+
+```
+antes:   onHand 10 · reserved 2 · disponibles 8
+consume 1
+después: onHand  9 · reserved 1 · disponibles 8
+```
+
+Restar sólo de `reserved` devolvería la unidad vendida al mostrador.
+
+### Máquina de estados
+
+```
+        ┌──────────────┐
+        │    ACTIVE    │  ← el único estado que ocupa `reserved`
+        └───┬───┬───┬──┘
+   consume ─┘   │   └─ cancela el comprador
+                │
+      CONSUMED  EXPIRED  CANCELLED
+```
+
+Los tres finales son definitivos. **La liberación va pegada a la transición, y
+la transición ocurre una sola vez** — por eso liberar stock dos veces es
+imposible sin necesidad de un `if`:
+
+```sql
+UPDATE inventory_reservations
+   SET status = 'EXPIRED', expired_at = now()
+ WHERE id = $1 AND status = 'ACTIVE' AND expires_at <= now()
+RETURNING quantity, inventory_id
+```
+
+Dos workers simultáneos: uno afecta una fila, el otro cero.
+
+### TTL: dos mecanismos, uno solo obligatorio
+
+| | Da | Si falla |
+|---|---|---|
+| Job diferido de BullMQ | Precisión al segundo | El reconciliador lo cubre |
+| Reconciliador cada 30 s | La garantía | Nada más lo cubre |
+
+**¿Se puede vender con Redis caído? Sí.** `expires_at` ya está en PostgreSQL;
+el job sólo sirve para que alguien mire en el momento exacto. `programar()`
+**nunca lanza**: se llama después de que la reserva ya está cometida, y un
+fallo ahí no puede deshacer una venta que ya ocurrió.
+
+La regla, escrita para que no se erosione: **si perder Redis puede impedir una
+venta, el diseño está mal.**
+
+Toda la suite de inventario corre con la cola apagada. Que pase entera es la
+demostración.
+
+### Idempotencia
+
+`Idempotency-Key` es **obligatoria**. El caso que la justifica es el normal en
+una red móvil argentina: la petición llega, el backend aparta la unidad, la
+respuesta se pierde, la app reintenta. Sin clave, el reintento aparta una
+segunda unidad — y el síntoma, stock que se evapora en zonas con mala señal, es
+casi imposible de diagnosticar después.
+
+**Única por `userId + idempotencyKey`, no globalmente.** La clave la elige el
+cliente: con unicidad global, una colisión de UUID entre dos personas le
+devolvería a una la reserva de la otra.
+
+Se guarda además una huella del cuerpo. Misma clave con otro pedido → `409`, en
+vez de devolver en silencio algo distinto de lo que se pidió.
+
+### Una sola reserva activa por persona y variante
+
+Tocar "Comprar" de nuevo **reutiliza** la reserva existente. Actualizar la
+cantidad obligaría a liberar y volver a tomar, y esa secuencia tiene un instante
+en el que el stock está suelto y otro comprador se lo lleva.
+
+### Endpoints
+
+```
+POST   /inventory/reservations              Idempotency-Key obligatoria
+GET    /inventory/reservations/mine
+GET    /inventory/reservations/:id          ajena → 404
+DELETE /inventory/reservations/:id          cancelar
+
+GET    /variants/:variantId/availability    público · etiqueta, no números
+
+GET    /products/:productId/inventory                          vendedor
+PATCH  /products/:id/variants/:variantId/inventory             onHand o adjust
+```
+
+**Ningún endpoint permite escribir `reserved`.** Poder ponerlo en cero
+permitiría "liberar" unidades que otro ya tiene apartadas.
+
+**El vendedor no puede bajar `onHand` por debajo de `reserved`.** Con 10 y 8
+apartadas, poner 5 dejaría a tres personas sin lo que ya creían tener. Si quiere
+dejar de vender, la herramienta es pausar la variante.
+
+### Lo que se le muestra al comprador
+
+`IN_STOCK` · `LOW_STOCK` · `OUT_OF_STOCK`. El número exacto sale **sólo** con
+`LOW_STOCK`: "Últimas 3" ayuda a decidir y no revela volumen; publicar "quedan
+847" le regala a la competencia el ritmo de ventas del vendedor.
+
+---
+
 ## 6 · Los defectos que encontró probar en campo
 
 Ninguno lo hubiera encontrado un test. **Cinco habrían llegado a producción.**
@@ -414,6 +577,9 @@ Ninguno lo hubiera encontrado un test. **Cinco habrían llegado a producción.**
 | 6 | Errores de MP sin traducir | El comprador leía `invalid card_number_validation` |
 | 7 | El límite de peticiones caía a por-IP en **todos** los endpoints con sesión | `RateLimitGuard` corre antes que `AuthGuard`, así que `req.user` todavía no existe. Detrás del CGNAT de una operadora, **3 tiendas nuevas por hora para un bloque entero de abonados** |
 | 8 | El arranque de los tests no registraba `@fastify/multipart` | Los tests corrían contra un servidor distinto del real. Toda la subida de imágenes devolvía 415 en test y nadie lo notaba: **no había ni un test de imágenes** |
+| 9 | Una reserva vencida que el barrido todavía no tocó bloqueaba la siguiente | El índice único parcial la ve ACTIVE y rechaza la nueva. El comprador recibía de vuelta **una reserva muerta con el contador en 00:00** |
+| 10 | BullMQ 6 rechaza `:` en nombres de cola | El proceso no arrancaba. Apareció al ejecutar, no al leer |
+| 11 | `tsx` no emite metadata de decoradores | La inyección de dependencias entregaba `undefined` y el síntoma era un 500 desde adentro de un guard. El proyecto ya lo había resuelto para los tests con swc; el script de estrés lo volvió a pisar |
 
 **El patrón:** el error nunca estuvo en el camino feliz. Estuvo en qué pasa
 cuando algo se corta a la mitad, cuando el aviso llega tarde, o cuando llega dos
@@ -463,7 +629,7 @@ asumir que el camino feliz es el único que termina.
 | Compra completa | — | — | **1,8 s** ✅ |
 | Chat de extremo a extremo | ≤ 300 ms | 800 ms | sin medir |
 
-**Tests:** 298 en backend (unitarios + integración contra PostgreSQL real).
+**Tests:** 362 en backend (unitarios + integración contra PostgreSQL real).
 Typecheck, lint y `flutter analyze` en verde.
 
 ---
@@ -474,8 +640,9 @@ Typecheck, lint y `flutter analyze` en verde.
 - **Compra en dos clics** — `internal_error` de Mercado Pago (§3).
 
 ### Requiere decisión de producto
-- **¿Seguimos con el orden previsto?** Con el catálogo cerrado, lo siguiente
-  sería **Inventory + Reservation**, que es lo que falta para poder vender.
+- **¿Seguimos con el orden previsto?** Con el stock cerrado, lo siguiente sería
+  **Orders**: es lo único que falta para cobrar de verdad, y
+  `consumeReservation()` ya está listo esperándolo.
 - **Time-to-first-frame de 4 s.** ¿Se investiga antes de seguir, o se mitiga con
   una miniatura y se posterga?
 - **Modelo de comisión** — no está definido en ningún lado todavía.
@@ -523,6 +690,30 @@ Typecheck, lint y `flutter analyze` en verde.
     aparte a propósito —rompe todos los enlaces ya compartidos— y merece una
     confirmación explícita que todavía no está dibujada.
 
+**Del inventario:**
+
+16. **Falta medir capacidad en hardware de staging.** La curva local es
+    p95 = 21 ms con 5 reservas en vuelo, 76 ms con 10, 203 ms con 20 y 243 ms
+    con 40. El trabajo real de una reserva son ~18 ms; el resto es cola. Se
+    descartó que fuera el fsync de los commits (500 transacciones sueltas
+    tardan 335 ms, o sea 0,67 ms cada una) y quitar un viaje a la base tampoco
+    movió el p95, así que el límite es de capacidad del entorno —un portátil
+    con Docker Desktop, Node y el corredor de tests en la misma CPU—. **Cuánto
+    aguanta de verdad no se sabe hasta medirlo en Fly.io.**
+17. **La reserva es de UNA variante.** La arquitectura no lo impide para varias
+    —`ordenDeBloqueo()` ya define el orden de bloqueo que hay que respetar para
+    no generar deadlocks— pero el endpoint todavía recibe una sola.
+18. **La reserva NO congela precio.** Es deliberado: una reserva es de stock, no
+    una orden disfrazada. La foto del precio la va a tomar `Order`.
+19. **`EXPIRED → CONSUMED` está prohibido, y hay un caso real sin resolver:** un
+    pago que se acredita en el mismo instante en que la reserva vence. Hoy
+    `consume()` devuelve `changed: false` y no descuenta. Orders va a tener que
+    decidir entre volver a reservar o devolver la plata; no se puede resolver
+    desde inventario porque implica una decisión de dinero.
+20. **El barrido procesa 200 reservas por vuelta.** Con volumen alto y el
+    intervalo actual podría acumular atraso. El número está donde se cambia y el
+    caso está lejos, pero conviene vigilarlo cuando haya tráfico.
+
 ### Riesgos no técnicos, sin respuesta
 - **R3 · Mercado de dos lados vacío.** Sin vendedores no hay compradores. No se
   responde midiendo: se responde lanzando.
@@ -539,16 +730,17 @@ backend/
   src/modules/
     auth/             ✅ implementado
     commerce/         ✅ sellers, stores, products, variantes, imágenes
+    inventory/        ✅ stock y reservas · sobreventa imposible por construcción
     livekit/          tokens y webhooks
     spike/            Sprint 0A · se borra al cerrar el sprint
     payments/         Sprint 0B · mp-signature, order-state y el saneado
                       sobreviven al spike
   src/shared/         errores, guards, observabilidad, Prisma, Redis
   prisma/schema.prisma
-  test/               298 tests
+  test/               362 tests · test/stress/ prueba de 1000 compradores
 mobile/
   lib/core/           design, auth, network, config
-  lib/features/       auth, feed, seller, profile, search, lives, orders, spike
+  lib/features/       auth, feed, seller, inventory, profile, search, lives, orders, spike
 db/                   esquema completo de referencia (se incorpora por módulo)
 docs/sprint-0/        RUNBOOKs y RESULTS con la evidencia medida
 tools/                reloj glass-to-glass, servidor de APK

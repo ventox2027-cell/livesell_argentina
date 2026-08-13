@@ -77,6 +77,30 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<string, number>> = {
   TOO_MANY_IMAGES: 422,
   INVALID_FILE: 415,
   FILE_TOO_LARGE: 413,
+
+  // ─── Dominio de inventario ───
+  /**
+   * 409 y no 400.
+   *
+   * El pedido era válido: pedir una unidad de una variante que existe está
+   * bien escrito. Lo que pasa es que el estado del mundo cambió entre que la
+   * persona vio el producto y tocó comprar. La app tiene que poder distinguir
+   * "escribiste mal" de "te ganaron de mano", porque la respuesta al usuario
+   * es completamente distinta.
+   */
+  OUT_OF_STOCK: 409,
+  INVENTORY_NOT_FOUND: 404,
+  RESERVATION_NOT_FOUND: 404,
+  /** La reserva ya está consumida, vencida o cancelada. */
+  RESERVATION_NOT_ACTIVE: 409,
+  /** Misma clave de idempotencia, cuerpo distinto. Casi siempre un bug del cliente. */
+  IDEMPOTENCY_KEY_REUSED: 409,
+  IDEMPOTENCY_KEY_REQUIRED: 400,
+  /** El vendedor quiso bajar el stock por debajo de lo ya reservado. */
+  STOCK_BELOW_RESERVED: 409,
+  /** El producto, la variante, la tienda o el vendedor no admiten venta. */
+  NOT_PURCHASABLE: 409,
+  QUANTITY_INVALID: 422,
 };
 
 export class NotFoundError extends DomainError {

@@ -170,6 +170,64 @@ export const envSchema = z
     MP_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(60_000).default(10_000),
     PAYMENTS_SPIKE_ENABLED: envBoolean(false),
 
+    // ─── Inventario ─────────────────────────────────────────────────────────
+
+    /**
+     * Cuánto dura una reserva.
+     *
+     * Cinco minutos es un compromiso: alcanza para completar un pago con una
+     * conexión mala, y es poco como para que un carrito abandonado bloquee la
+     * última unidad durante un vivo.
+     *
+     * El mínimo de 30 s existe para que nadie lo baje tanto que las reservas
+     * venzan antes de que el comprador llegue a pagar. El máximo de 1 h, para
+     * que un valor mal tipeado no aparte stock por un día entero.
+     */
+    INVENTORY_RESERVATION_TTL_SECONDS: z.coerce
+      .number()
+      .int()
+      .min(30)
+      .max(3_600)
+      .default(300),
+
+    /**
+     * Tope de unidades por reserva.
+     *
+     * Sin tope, una sola petición puede apartar el catálogo completo de un
+     * vendedor durante el TTL. Es un vector de denegación de servicio
+     * comercial que no cuesta nada cerrar.
+     */
+    INVENTORY_MAX_QUANTITY_PER_RESERVATION: z.coerce.number().int().min(1).max(1_000).default(10),
+
+    /** Umbral por defecto de "quedan pocas" cuando la variante no define el suyo. */
+    INVENTORY_LOW_STOCK_THRESHOLD: z.coerce.number().int().min(0).default(3),
+
+    /**
+     * Cada cuánto barre el reconciliador buscando reservas vencidas.
+     *
+     * Es la RED DE SEGURIDAD, no el mecanismo principal: la precisión la da el
+     * job diferido de BullMQ. Esto existe para que una caída de Redis no deje
+     * stock apartado para siempre.
+     */
+    INVENTORY_RECONCILER_INTERVAL_MS: z.coerce
+      .number()
+      .int()
+      .min(1_000)
+      .max(600_000)
+      .default(30_000),
+
+    /** Apagable para que los tests controlen el reloj en vez de competir con él. */
+    INVENTORY_RECONCILER_ENABLED: envBoolean(true),
+
+    /**
+     * Jobs diferidos para expirar con precisión.
+     *
+     * Apagarlo NO impide vender: la reserva se crea igual y el reconciliador
+     * la vence. Redis es una mejora de precisión, nunca una dependencia
+     * transaccional. Ver `expiration.queue.ts`.
+     */
+    INVENTORY_EXPIRATION_QUEUE_ENABLED: envBoolean(true),
+
     // ─── Observabilidad ─────────────────────────────────────────────────────
     SENTRY_DSN: z.string().url().optional().or(z.literal('')),
     SENTRY_TRACES_SAMPLE_RATE: z.coerce.number().min(0).max(1).default(0.1),

@@ -53,6 +53,24 @@ export const DomainEvent = {
 
   imageAdded: 'image.added',
   imageRemoved: 'image.removed',
+
+  // ─── Inventario ───
+  //
+  // Estos van a alimentar, sin que el inventario se entere: el chat del vivo
+  // ("¡quedan 2!"), el feed, las notificaciones al vendedor y las analíticas.
+  // Por eso se emiten ahora aunque todavía no los escuche nadie: el día que
+  // exista el suscriptor, no hay que tocar el camino de la venta.
+  inventoryCreated: 'inventory.created',
+  inventoryUpdated: 'inventory.updated',
+  /// La disponibilidad cruzó hacia abajo el umbral de "quedan pocas".
+  inventoryLow: 'inventory.low',
+  inventoryOutOfStock: 'inventory.out_of_stock',
+  inventoryBackInStock: 'inventory.back_in_stock',
+
+  reservationCreated: 'reservation.created',
+  reservationExpired: 'reservation.expired',
+  reservationCancelled: 'reservation.cancelled',
+  reservationConsumed: 'reservation.consumed',
 } as const;
 
 export type DomainEventName = (typeof DomainEvent)[keyof typeof DomainEvent];

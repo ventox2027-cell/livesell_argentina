@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/design/tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../auth/state/auth_providers.dart';
+import '../../inventory/presentation/reserve_sheet.dart';
 import '../../seller/presentation/seller_home_screen.dart';
 import '../data/feed_repository.dart';
 import '../domain/feed_models.dart';
@@ -328,6 +329,8 @@ class _TarjetaProducto extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final puedeComprar = ref.watch(puedeComprarProvider);
+    // "Agotado" lo decide el backend, no la app. Acá sólo se dibuja.
+    final agotado = !datos.sePuedeComprar;
 
     return Container(
       padding: const EdgeInsets.all(Gap.sm),
@@ -397,6 +400,20 @@ class _TarjetaProducto extends ConsumerWidget {
                         ),
                       ),
                     ],
+                    // "Últimas 3" cuando de verdad quedan pocas. La escasez es
+                    // real —en un vivo el stock se agota— y avisarla evita la
+                    // peor experiencia posible: comprar algo que ya no está.
+                    if (datos.disponibilidad?.quedanPocas ?? false) ...[
+                      const SizedBox(width: Gap.sm),
+                      Text(
+                        datos.disponibilidad!.etiqueta,
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: AppColor.alerta,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ],
@@ -404,29 +421,51 @@ class _TarjetaProducto extends ConsumerWidget {
           ),
           const SizedBox(width: Gap.sm),
           FilledButton(
-            onPressed: () => _comprar(context, puedeComprar),
+            onPressed: agotado ? null : () => _comprar(context, ref, puedeComprar),
             style: FilledButton.styleFrom(
               minimumSize: const Size(0, 40),
               padding: const EdgeInsets.symmetric(horizontal: Gap.lg),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(Redondeo.sm)),
+              disabledBackgroundColor: AppColor.superficieAlta,
+              disabledForegroundColor: AppColor.textoDebil,
             ),
-            child: const Text('Comprar', style: TextStyle(fontSize: 14)),
+            child: Text(
+              agotado ? 'Agotado' : 'Comprar',
+              style: const TextStyle(fontSize: 14),
+            ),
           ),
         ],
       ),
     );
   }
 
-  void _comprar(BuildContext context, bool puedeComprar) {
-    // Acá es donde el onboarding progresivo se hace visible: si falta el
-    // teléfono, se pide AHORA, con la compra ya decidida y un motivo claro
-    // para darlo.
-    AppSnack.info(
+  Future<void> _comprar(BuildContext context, WidgetRef ref, bool puedeComprar) async {
+    /**
+     * Acá se hace visible el onboarding progresivo: si falta el teléfono se
+     * pide AHORA, con la compra ya decidida y un motivo claro para darlo. No
+     * antes: pedirlo al registrarse es gente que se va sin ver un solo video.
+     */
+    if (!puedeComprar) {
+      AppSnack.info(context, 'Antes de comprar vamos a pedirte un teléfono de contacto.');
+      return;
+    }
+
+    final variantId = datos.variantePorDefectoId;
+    if (variantId == null) {
+      AppSnack.info(context, 'Este producto todavía no tiene variantes para comprar.');
+      return;
+    }
+
+    await ReserveSheet.mostrar(
       context,
-      puedeComprar
-          ? 'La compra desde el feed llega con el módulo de Órdenes.'
-          : 'Antes de comprar vamos a pedirte un teléfono de contacto.',
+      productVariantId: variantId,
+      nombreProducto: datos.nombre,
+      precio: datos.precio,
     );
+
+    // Al cerrar la hoja se recarga el feed: si se apartó una unidad, la
+    // disponibilidad que se muestra cambió.
+    ref.invalidate(feedProvider);
   }
 }
 

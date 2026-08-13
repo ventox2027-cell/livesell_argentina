@@ -36,6 +36,9 @@ export const ID_PREFIX = {
   optionValue: 'opv',
   variant: 'var',
   productImage: 'img',
+  // Inventario
+  inventory: 'inv',
+  reservation: 'rsv',
   auditLog: 'aud',
 } as const;
 

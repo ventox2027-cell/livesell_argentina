@@ -144,6 +144,21 @@ export class OwnershipService {
     return { seller, product };
   }
 
+  /**
+   * Variantes vivas de un producto **ya verificado como propio**.
+   *
+   * No recibe `userId` a propósito: se llama después de `productOf`, que es
+   * quien resolvió la pertenencia. Pedirlo otra vez acá sugeriría que este
+   * método se puede llamar con un `productId` arbitrario, y no se puede.
+   */
+  async variantsOf(productId: string) {
+    return this.prisma.productVariant.findMany({
+      where: { productId, deletedAt: null },
+      orderBy: { position: 'asc' },
+      select: { id: true, title: true, status: true, isDefault: true, sku: true },
+    });
+  }
+
   /** Variante por id, **sólo si es del usuario**. Tres saltos, todos en el WHERE. */
   async variantOf(
     userId: string,

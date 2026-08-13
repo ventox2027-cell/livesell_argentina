@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 
+import { env } from '@/config/env.schema';
 import { AuditService } from '@/shared/audit/audit.service';
 import { DomainError } from '@/shared/errors/domain.error';
 import { DomainEvent, DomainEventBus } from '@/shared/events/domain-events';
@@ -62,6 +63,31 @@ export class VariantCombinationExistsError extends DomainError {
   constructor(title: string) {
     super('VARIANT_COMBINATION_EXISTS', `La combinación "${title}" ya existe`, { title });
   }
+}
+
+/**
+ * Disponibilidad pública de una variante, para el feed.
+ *
+ * Vive acá y no en `InventoryService` para no crear una dependencia de
+ * `CommerceModule` hacia `InventoryModule` — la flecha va al revés, y darla
+ * vuelta crearía un ciclo entre módulos. Son cuatro líneas de aritmética; la
+ * regla completa, con su explicación, está en `inventory/reservations.ts`.
+ */
+function vistaPublicaDeStock(
+  inv: { onHand: number; reserved: number; lowStockThreshold: number | null } | null,
+): { availability: 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK'; remaining: number | null } {
+  // Sin fila de inventario, la respuesta segura es "agotado": es preferible no
+  // vender a ofrecer algo cuya existencia no consta.
+  if (!inv) return { availability: 'OUT_OF_STOCK', remaining: null };
+
+  const disponible = inv.onHand - inv.reserved;
+  const umbral = inv.lowStockThreshold ?? env.INVENTORY_LOW_STOCK_THRESHOLD;
+
+  if (disponible <= 0) return { availability: 'OUT_OF_STOCK', remaining: null };
+  // El número sólo sale cuando quedan pocas: "Últimas 3" ayuda a decidir y no
+  // revela volumen de ventas.
+  if (disponible <= umbral) return { availability: 'LOW_STOCK', remaining: disponible };
+  return { availability: 'IN_STOCK', remaining: null };
 }
 
 /** Campos que salen al cliente. Enumerados, no filtrados. */
@@ -154,8 +180,12 @@ export class ProductsService {
         // Variantes. Sin opciones, `generarCombinaciones` devuelve exactamente
         // una: la DEFAULT.
         const combinaciones = generarCombinaciones(opciones);
+        const variantIds: string[] = [];
+
         for (const [i, combo] of combinaciones.entries()) {
           const variantId = newId('var');
+          variantIds.push(variantId);
+
           await tx.productVariant.create({
             data: {
               id: variantId,
@@ -174,6 +204,25 @@ export class ProductsService {
             });
           }
         }
+
+        /**
+         * Inventario en cero para cada variante, en la MISMA transacción.
+         *
+         * El invariante que sostiene todo el módulo de stock es "toda variante
+         * viva tiene exactamente una fila de inventario". Crearla acá —y no
+         * bajo demanda al primer intento de compra— hace que el camino de la
+         * venta, que es el más caliente del sistema, nunca tenga que escribir
+         * para poder leer.
+         *
+         * Arrancan en 0 y no en un número inventado: un vendedor que ve 0 carga
+         * su stock; uno que ve 10 vende diez cosas que no tiene.
+         */
+        await tx.inventory.createMany({
+          data: variantIds.map((productVariantId) => ({
+            id: newId('inv'),
+            productVariantId,
+          })),
+        });
       });
     } catch (err) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
@@ -399,13 +448,53 @@ export class ProductsService {
             },
           },
         },
+        /**
+         * Las variantes vendibles, con su inventario.
+         *
+         * Van en el feed —y no en una segunda consulta al tocar "Comprar"—
+         * porque el botón tiene que poder apartar stock de UNA. Pedirlas
+         * después agregaría un viaje justo en el momento en que la persona ya
+         * decidió comprar, que es el peor momento para hacerla esperar.
+         *
+         * Se limitan a 10: alcanzan para saber si hay algo que apartar y para
+         * el caso simple de una sola variante. El detalle completo de un
+         * producto con muchas combinaciones se resuelve en su propia pantalla.
+         */
+        variants: {
+          where: { deletedAt: null, status: 'ACTIVE' },
+          orderBy: { position: 'asc' },
+          take: 10,
+          select: {
+            id: true,
+            title: true,
+            priceOverrideCents: true,
+            isDefault: true,
+            inventory: { select: { onHand: true, reserved: true, lowStockThreshold: true } },
+          },
+        },
         _count: { select: { variants: { where: { deletedAt: null, status: 'ACTIVE' } } } },
       },
       orderBy: { id: 'desc' },
       take: query.limit + 1,
     });
 
-    return this.paginar(filas, query.limit);
+    // La disponibilidad sale como ETIQUETA, no como número. Publicar el stock
+    // exacto de cada variante le regala a la competencia el ritmo de ventas de
+    // un vendedor: consultando dos veces por día se saca cuánto vendió.
+    const conDisponibilidad = filas.map((p) => ({
+      ...p,
+      variants: p.variants.map((v) => {
+        const inv = v.inventory;
+        const { inventory: _inventory, ...resto } = v;
+        return {
+          ...resto,
+          priceCents: v.priceOverrideCents ?? p.basePriceCents,
+          ...vistaPublicaDeStock(inv),
+        };
+      }),
+    }));
+
+    return this.paginar(conDisponibilidad, query.limit);
   }
 
   // ─── Variantes ────────────────────────────────────────────────────────────
@@ -442,6 +531,10 @@ export class ProductsService {
             data: dto.optionValueIds.map((optionValueId) => ({ variantId, optionValueId })),
           });
         }
+
+        // Igual que al crear el producto: toda variante nace con su fila de
+        // inventario en cero, en la misma transacción.
+        await tx.inventory.create({ data: { id: newId('inv'), productVariantId: variantId } });
       });
     } catch (err) {
       throw this.traducirConflicto(err, title, dto.sku ?? null);

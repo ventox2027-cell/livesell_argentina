@@ -10,6 +10,11 @@ allowBuilds:
   '@prisma/engines': true
   '@swc/core': true
   esbuild: true
+  # Acelerador nativo opcional de msgpackr, que usa BullMQ para serializar los
+  # jobs. Se deja SIN compilar: funciona igual en JavaScript puro, y los jobs
+  # que mandamos son tres campos. Compilar código nativo en cada máquina y en
+  # CI a cambio de microsegundos que no vamos a notar no vale el riesgo.
+  msgpackr-extract: false
   prisma: true
 
 # Una sola versión de Fastify en todo el árbol.

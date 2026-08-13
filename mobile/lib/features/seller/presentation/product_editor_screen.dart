@@ -6,6 +6,8 @@ import 'package:image_picker/image_picker.dart';
 
 import '../../../core/design/tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
+import '../../inventory/data/inventory_repository.dart';
+import '../../inventory/presentation/stock_screen.dart';
 import '../data/seller_repository.dart';
 import '../domain/seller_models.dart';
 
@@ -332,6 +334,8 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
                     ),
 
                   if (p != null) ...[
+                    const SizedBox(height: Gap.xl),
+                    _AccesoStock(producto: p),
                     const SizedBox(height: Gap.xl),
                     _EstadoPublicacion(
                       producto: p,
@@ -807,6 +811,75 @@ class _ListaVariantes extends StatelessWidget {
             ),
           ),
       ],
+    );
+  }
+}
+
+/// Acceso al stock, con el resumen a la vista.
+///
+/// Se muestra el número acá y no sólo detrás del toque porque "¿cuántas me
+/// quedan?" es la pregunta que un vendedor se hace cada vez que abre un
+/// producto. Que haya que entrar para verla sería una pantalla de más por algo
+/// que entra en una línea.
+class _AccesoStock extends ConsumerWidget {
+  const _AccesoStock({required this.producto});
+  final Producto producto;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final stock = ref.watch(stockDeProductoProvider(producto.id));
+
+    return InkWell(
+      onTap: () async {
+        await Navigator.of(context).push<void>(
+          MaterialPageRoute(
+            builder: (_) => StockScreen(productId: producto.id, nombreProducto: producto.name),
+          ),
+        );
+        ref.invalidate(stockDeProductoProvider(producto.id));
+      },
+      borderRadius: BorderRadius.circular(Redondeo.lg),
+      child: Container(
+        padding: const EdgeInsets.all(Gap.lg),
+        decoration: BoxDecoration(
+          color: AppColor.superficie,
+          borderRadius: BorderRadius.circular(Redondeo.lg),
+          border: Border.all(color: AppColor.borde),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.inventory_2_outlined, size: 20, color: AppColor.textoSuave),
+            const SizedBox(width: Gap.md),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Stock', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 2),
+                  Text(
+                    stock.when(
+                      loading: () => 'Cargando…',
+                      error: (_, __) => 'No se pudo cargar',
+                      data: (s) => s.totalReservado > 0
+                          ? '${s.totalDisponible} disponibles · ${s.totalReservado} apartadas'
+                          : (s.totalOnHand == 0
+                              ? 'Sin stock cargado'
+                              : '${s.totalOnHand} unidades'),
+                    ),
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      color: stock.valueOrNull?.totalDisponible == 0
+                          ? AppColor.alerta
+                          : AppColor.textoSuave,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right_rounded, color: AppColor.textoDebil),
+          ],
+        ),
+      ),
     );
   }
 }

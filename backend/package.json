@@ -28,7 +28,8 @@
     "prisma:studio": "prisma studio",
     "test:db:create": "docker exec livesell-postgres psql -U livesell -d postgres -c \"CREATE DATABASE livesell_test OWNER livesell;\"",
     "test:db:migrate": "tsx scripts/migrate-test-db.ts",
-    "spike:report": "tsx scripts/spike-report.ts"
+    "spike:report": "tsx scripts/spike-report.ts",
+    "stress:inventory": "vitest run --config vitest.stress.config.ts"
   },
   "dependencies": {
     "@fastify/multipart": "^10.1.0",
@@ -38,6 +39,7 @@
     "@nestjs/event-emitter": "^3.1.0",
     "@nestjs/platform-fastify": "11.1.29",
     "@prisma/client": "6.19.3",
+    "bullmq": "^6.1.0",
     "dotenv": "17.4.2",
     "fastify": "5.11.3",
     "ioredis": "5.11.1",

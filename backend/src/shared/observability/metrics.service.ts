@@ -63,6 +63,51 @@ export class MetricsService implements OnModuleInit {
     labelNames: ['provider', 'event', 'result'] as const,
   });
 
+  /**
+   * Reservas de stock, por desenlace.
+   *
+   * Un solo contador con etiqueta `result` en vez de seis contadores: así
+   * `sum by (result)` da la foto completa y la proporción
+   * `out_of_stock / (created + out_of_stock)` sale de una división. Con
+   * contadores separados, cada panel nuevo obliga a acordarse de todos.
+   *
+   * `out_of_stock` es LA métrica de negocio del módulo: si sube durante un
+   * vivo, el vendedor está perdiendo ventas por falta de stock, no por
+   * problemas técnicos. Son dos conversaciones muy distintas.
+   */
+  readonly inventoryReservation = new Counter({
+    name: 'inventory_reservation_total',
+    help: 'Reservas de inventario por desenlace',
+    // created | out_of_stock | idempotent_replay | reused | expired | cancelled | consumed
+    labelNames: ['result'] as const,
+  });
+
+  /**
+   * Cuánto tarda apartar stock.
+   *
+   * Es el camino más caliente del sistema durante un vivo y el que se
+   * serializa sobre una fila. Los cubos bajos están apretados a propósito: la
+   * diferencia entre 20 ms y 150 ms decide cuántos compradores por segundo
+   * pasan por la última unidad.
+   */
+  readonly inventoryReservationLatency = new Histogram({
+    name: 'inventory_reservation_duration_seconds',
+    help: 'Duración de la operación de reserva',
+    buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.2, 0.5, 1, 2],
+  });
+
+  /**
+   * Choques de índice único al reservar que NO se pudieron resolver.
+   *
+   * Distinto de `out_of_stock`: esto no es "no había stock", es "dos
+   * escrituras se pisaron y no encontramos la ganadora". Debería ser siempre
+   * cero. Si sube, hay una carrera que el diseño no contempló.
+   */
+  readonly inventoryConcurrencyConflicts = new Counter({
+    name: 'inventory_concurrency_conflicts_total',
+    help: 'Conflictos de concurrencia no resueltos al reservar',
+  });
+
   onModuleInit(): void {
     collectDefaultMetrics({ register: this.registry, prefix: 'nodejs_' });
     this.registry.registerMetric(this.httpDuration);
@@ -72,6 +117,9 @@ export class MetricsService implements OnModuleInit {
     this.registry.registerMetric(this.spikeObservedLatency);
     this.registry.registerMetric(this.spikeReconnectDuration);
     this.registry.registerMetric(this.webhookReceived);
+    this.registry.registerMetric(this.inventoryReservation);
+    this.registry.registerMetric(this.inventoryReservationLatency);
+    this.registry.registerMetric(this.inventoryConcurrencyConflicts);
   }
 
   async scrape(): Promise<string> {

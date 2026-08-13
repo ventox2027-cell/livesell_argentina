@@ -989,9 +989,10 @@ model ProductVariant {
   updatedAt DateTime  @updatedAt @map("updated_at")
   deletedAt DateTime? @map("deleted_at")
 
-  product Product                @relation(fields: [productId], references: [id], onDelete: Cascade)
-  store   Store                  @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  options ProductVariantOption[]
+  product   Product                @relation(fields: [productId], references: [id], onDelete: Cascade)
+  store     Store                  @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  options   ProductVariantOption[]
+  inventory Inventory?
 
   @@unique([productId, optionsKey])
   @@unique([storeId, sku])
@@ -1081,4 +1082,181 @@ model AuditLog {
   @@index([actorId, createdAt])
   @@index([action, createdAt])
   @@map("audit_logs")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INVENTARIO
+//
+// ─── El principio que ordena todo este bloque ───
+//
+// **PostgreSQL es la única autoridad sobre el stock.** Redis no decide stock.
+// Flutter no decide stock. LiveKit no decide stock.
+//
+// Durante un vivo, cien personas pueden tocar "Comprar" sobre la última unidad
+// en el mismo segundo. La única forma de que eso no termine en sobreventa es
+// que la decisión la tome el motor de la base, en una sola sentencia, y no un
+// `if` de TypeScript que leyó el stock un milisegundo antes.
+//
+// Por eso este bloque tiene tres capas de defensa, de afuera hacia adentro:
+//
+//   1. El UPDATE condicional decide. `WHERE (on_hand - reserved) >= qty`.
+//      Cero filas afectadas significa "no había". No hay lectura previa.
+//   2. Los CHECK de la tabla lo hacen imposible. Aunque el código tenga un
+//      bug, la base rechaza `reserved > on_hand`.
+//   3. Los índices únicos parciales evitan duplicados que el código no ve.
+//
+// Cualquiera de las tres sola sería suficiente en el camino feliz. Las tres
+// juntas son lo que hace que un error de programación futuro se manifieste
+// como una transacción rechazada y no como una unidad vendida dos veces.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Existencias de UNA variante.
+///
+/// ─── Por qué cuelga de la variante y nunca del producto ───
+///
+/// Todo producto tiene al menos una variante: los simples reciben una
+/// `DEFAULT` automática. Gracias a eso el inventario apunta SIEMPRE a
+/// `productVariantId` y no hay dos lógicas de stock conviviendo. Si colgara
+/// del producto cuando no hay opciones y de la variante cuando sí, cada
+/// consulta de disponibilidad tendría que preguntar antes cuál de las dos
+/// aplica — y algún día alguien se olvidaría de preguntar.
+///
+/// ─── Por qué no hay columna `version` ───
+///
+/// El bloqueo optimista con `version` resuelve el mismo problema que ya
+/// resuelve el UPDATE condicional, pero peor: obliga a reintentar en el código
+/// cuando dos peticiones chocan. Con `WHERE (on_hand - reserved) >= qty` el
+/// motor serializa las escrituras sobre la fila y la respuesta es definitiva
+/// en un solo viaje, sin reintentos. Agregar `version` sería maquinaria que no
+/// compra nada.
+model Inventory {
+  id String @id // inv_<ulid>
+
+  productVariantId String @unique @map("product_variant_id")
+
+  /// Unidades que existen físicamente.
+  onHand Int @default(0) @map("on_hand")
+
+  /// Unidades apartadas por compradores que todavía no terminaron.
+  ///
+  /// El vendedor NUNCA escribe este número: es consecuencia de las reservas
+  /// vivas. Un endpoint que lo dejara editar permitiría "liberar" stock que
+  /// alguien ya tiene apartado y vender la misma unidad dos veces.
+  reserved Int @default(0)
+
+  /// Umbral de "quedan pocas". `null` = usa el valor por defecto del sistema.
+  lowStockThreshold Int? @map("low_stock_threshold")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  variant      ProductVariant         @relation(fields: [productVariantId], references: [id], onDelete: Cascade)
+  reservations InventoryReservation[]
+
+  @@map("inventory")
+}
+
+/// Reserva temporal de stock.
+///
+/// ─── Qué es y qué no es ───
+///
+/// Es un apartado de UNIDADES por un rato. **No es una orden disfrazada**: no
+/// congela precio, no guarda datos del comprador, no representa una intención
+/// de compra vinculante. Cuando llegue Orders, la orden tendrá su propia foto
+/// del precio, del nombre y del vendedor, y consumirá esta reserva.
+///
+/// Mezclar las dos cosas ahora significaría migrar datos después.
+///
+/// ─── Por qué no se borran ───
+///
+/// Una reserva vencida o consumida es la única evidencia de por qué el stock
+/// se movió. Cuando un vendedor pregunte "¿por qué figuraba agotado a las
+/// 21:04 si tenía tres?", la respuesta está en estas filas.
+model InventoryReservation {
+  id String @id // rsv_<ulid>
+
+  inventoryId String @map("inventory_id")
+
+  /// Desnormalizado desde el inventario.
+  ///
+  /// Permite indexar por variante sin un join y —más importante— hace que el
+  /// índice único parcial de "una reserva activa por persona y variante" se
+  /// pueda expresar en una sola tabla.
+  productVariantId String @map("product_variant_id")
+
+  userId String @map("user_id")
+
+  quantity Int
+
+  status ReservationStatus @default(ACTIVE)
+
+  /**
+   * Clave de idempotencia, generada por el cliente.
+   *
+   * ─── Por qué es única por USUARIO y no globalmente ───
+   *
+   * La clave la elige la app, así que no hay nada que garantice que dos
+   * personas no manden la misma. Con unicidad global, la petición de la
+   * segunda chocaría con la de la primera y —según cómo se resuelva el
+   * conflicto— podría devolverle la reserva de otro. Es una fuga entre
+   * cuentas provocada por una colisión de UUID.
+   *
+   * Acotada al usuario, esa colisión es inofensiva: cada uno vive en su
+   * propio espacio de claves.
+   */
+  idempotencyKey String @map("idempotency_key")
+
+  /**
+   * Huella del cuerpo de la petición.
+   *
+   * Reusar una clave con un cuerpo distinto casi siempre es un error del
+   * cliente —reutilizó la clave de otro intento— y devolverle en silencio la
+   * reserva anterior le haría creer que reservó tres cuando pidió una. Se
+   * compara y se rechaza explícitamente.
+   */
+  requestHash String @map("request_hash")
+
+  /// Vencimiento, calculado SIEMPRE por el backend. El cliente no opina.
+  expiresAt DateTime @map("expires_at")
+
+  consumedAt  DateTime? @map("consumed_at")
+  cancelledAt DateTime? @map("cancelled_at")
+  expiredAt   DateTime? @map("expired_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  inventory Inventory @relation(fields: [inventoryId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, idempotencyKey])
+  /**
+   * ⚠️ Dos índices de esta tabla NO están acá y se crean a mano en la
+   * migración, porque Prisma no sabe expresar índices parciales:
+   *
+   *   · `reserva_activa_unica_por_usuario_y_variante` — UNIQUE sobre
+   *     (user_id, product_variant_id) WHERE status = 'ACTIVE'. Es lo que
+   *     impide apartar la misma unidad dos veces con un doble toque.
+   *   · `reservas_activas_por_vencimiento` — el barrido del reconciliador.
+   *
+   * Si algún día un `prisma migrate dev` propone borrarlos, **no lo dejes**:
+   * volvelos a agregar a mano. El test "una sola reserva ACTIVA por usuario y
+   * variante" se pone en rojo si desaparecen.
+   */
+  /// "Mis reservas activas", que la app consulta al volver del segundo plano.
+  @@index([userId, status])
+  @@index([productVariantId, status])
+  @@index([inventoryId, status])
+  @@map("inventory_reservations")
+}
+
+/// Estados de una reserva. Las transiciones válidas están en `reservations.ts`.
+enum ReservationStatus {
+  /// Stock apartado. Es el único estado que ocupa unidades en `reserved`.
+  ACTIVE
+  /// Se convirtió en venta: descontó de `onHand` y liberó `reserved`.
+  CONSUMED
+  /// Se venció sola. Liberó `reserved` sin tocar `onHand`.
+  EXPIRED
+  /// La soltó el comprador. Liberó `reserved` sin tocar `onHand`.
+  CANCELLED
 }

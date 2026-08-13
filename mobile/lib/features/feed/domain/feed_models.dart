@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../inventory/domain/inventory_models.dart';
 import '../../seller/domain/seller_models.dart';
 
 /// Una publicación del feed.
@@ -21,6 +22,8 @@ class PublicacionFeed {
     this.avatarUrl,
     this.verificado = false,
     this.variantes = 1,
+    this.variantePorDefectoId,
+    this.disponibilidad,
   });
 
   factory PublicacionFeed.fromJson(Map<String, dynamic> j) {
@@ -28,10 +31,18 @@ class PublicacionFeed {
     final seller = store?['seller'] as Map<String, dynamic>?;
     final imagenes = j['images'] as List<dynamic>? ?? const [];
 
+    final variantes = j['variants'] as List<dynamic>? ?? const [];
+
     return PublicacionFeed(
       id: j['id'] as String,
       nombre: j['name'] as String? ?? '',
       precioCentavos: (j['basePriceCents'] as num?)?.toInt() ?? 0,
+      // Variante por defecto para comprar de un toque. Si el producto tiene
+      // opciones, el feed manda la primera y la elección fina queda para el
+      // detalle: en un vivo, frenar a alguien con un selector antes de que
+      // haya decidido comprar es perderlo.
+      variantePorDefectoId:
+          variantes.isEmpty ? null : (variantes.first as Map<String, dynamic>)['id'] as String?,
       // Si el backend dejara de mandar la tienda, el feed no puede mostrar una
       // publicación sin dueño: mejor un texto neutro que un hueco.
       vendedor: seller?['displayName'] as String? ?? store?['name'] as String? ?? 'Vendedor',
@@ -43,6 +54,12 @@ class PublicacionFeed {
       avatarUrl: seller?['avatarUrl'] as String?,
       verificado: seller?['verificationStatus'] == 'VERIFIED',
       variantes: ((j['_count'] as Map<String, dynamic>?)?['variants'] as num?)?.toInt() ?? 1,
+      // La disponibilidad viene resuelta por el backend, como etiqueta.
+      // La app NO la calcula: si lo hiciera, mostraría "disponible" sobre
+      // datos de hace treinta segundos justo cuando queda una unidad.
+      disponibilidad: variantes.isEmpty
+          ? null
+          : Disponibilidad.fromJson(variantes.first as Map<String, dynamic>),
     );
   }
 
@@ -58,6 +75,17 @@ class PublicacionFeed {
   final String? avatarUrl;
   final bool verificado;
   final int variantes;
+
+  /// Qué variante se aparta al tocar "Comprar" desde el feed.
+  ///
+  /// `null` si el backend no mandó variantes, y entonces no se puede reservar
+  /// desde acá: hay que entrar al producto.
+  final String? variantePorDefectoId;
+
+  /// Disponibilidad de esa variante, resuelta por el backend.
+  final Disponibilidad? disponibilidad;
+
+  bool get sePuedeComprar => variantePorDefectoId != null && (disponibilidad?.hay ?? false);
 
   String get precio => formatearPesos(precioCentavos);
   String? get precioTachado =>
