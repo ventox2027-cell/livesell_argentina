@@ -1,6 +1,7 @@
 import { Controller, Get, Header, HttpCode, Res, VERSION_NEUTRAL } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
 
+import { Public } from '@/modules/auth/auth.guard';
 import { env } from '@/config/env.schema';
 import { PrismaService } from '@/shared/prisma/prisma.service';
 import { RedisService } from '@/shared/redis/redis.service';
@@ -18,6 +19,8 @@ const startedAt = Date.now();
 
 // VERSION_NEUTRAL: /health y no /v1/health. La URL que consulta el
 // balanceador de Fly.io no puede cambiar nunca.
+// Sin autenticación: lo consulta el balanceador de Fly.io, que no tiene sesión.
+@Public()
 @Controller({ version: VERSION_NEUTRAL })
 export class HealthController {
   constructor(

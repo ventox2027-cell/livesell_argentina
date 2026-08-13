@@ -39,6 +39,16 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<string, number>> = {
   // estado que no lo admite. La app puede reintentar tras releer la orden.
   ORDER_NOT_PAYABLE: 409,
   PAYMENTS_DISABLED: 404,
+
+  // Dominio de autenticación
+  INVALID_TOKEN: 401,
+  // 401 y no 403: la sesión se puede recuperar reiniciándola, y el cliente
+  // necesita distinguir "volvé a entrar" de "no tenés permiso".
+  SESSION_REVOKED: 401,
+  IDENTITY_REJECTED: 401,
+  ACCOUNT_SUSPENDED: 403,
+  EMAIL_TAKEN: 409,
+  PHONE_INVALID: 400,
 };
 
 export class NotFoundError extends DomainError {

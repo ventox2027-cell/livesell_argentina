@@ -35,6 +35,11 @@ const TEST_DEFAULTS: Record<string, string> = {
   LIVEKIT_WS_URL: 'wss://test.livekit.cloud',
   LIVEKIT_HTTP_URL: 'https://test.livekit.cloud',
 
+  // Auth. El secreto es ficticio pero cumple el largo mínimo: la validación
+  // de configuración existe justamente para que una clave corta no pase.
+  JWT_SECRET: 'clave-de-firma-solo-para-tests-no-usar-en-ningun-otro-lado-0123456789',
+  AUTH_DEV_LOGIN_ENABLED: 'true',
+
   SPIKE_ENABLED: 'true',
   SPIKE_API_KEY: 'test-spike-key-suficientemente-larga',
 

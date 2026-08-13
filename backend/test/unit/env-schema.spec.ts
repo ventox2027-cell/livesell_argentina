@@ -10,6 +10,7 @@ const VALID = {
   LIVEKIT_API_SECRET: 'a-secret-of-at-least-16-chars',
   LIVEKIT_WS_URL: 'wss://x.livekit.cloud',
   LIVEKIT_HTTP_URL: 'https://x.livekit.cloud',
+  JWT_SECRET: 'una-clave-de-firma-de-al-menos-32-caracteres',
 };
 
 describe('envSchema', () => {
@@ -29,6 +30,31 @@ describe('envSchema', () => {
 
   it('rechaza un secreto de LiveKit demasiado corto', () => {
     const r = envSchema.safeParse({ ...VALID, LIVEKIT_API_SECRET: 'corto' });
+    expect(r.success).toBe(false);
+  });
+
+  it('⛔ rechaza una clave de firma corta', () => {
+    // Una clave HMAC corta se ataca por fuerza bruta con hardware corriente, y
+    // quien la obtenga puede firmarse un token de administrador.
+    expect(envSchema.safeParse({ ...VALID, JWT_SECRET: 'corta' }).success).toBe(false);
+  });
+
+  it('⛔ rechaza una clave de firma con el valor de ejemplo en production', () => {
+    const r = envSchema.safeParse({
+      ...VALID,
+      NODE_ENV: 'production',
+      JWT_SECRET: 'cambiame-por-una-clave-de-verdad-larga',
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it('⛔ rechaza el login de desarrollo en production', () => {
+    // Emite sesiones válidas sin verificar nada contra ningún proveedor.
+    const r = envSchema.safeParse({
+      ...VALID,
+      NODE_ENV: 'production',
+      AUTH_DEV_LOGIN_ENABLED: 'true',
+    });
     expect(r.success).toBe(false);
   });
 

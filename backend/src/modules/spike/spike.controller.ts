@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 
+import { Public } from '@/modules/auth/auth.guard';
 import { ZodValidationPipe } from '@/shared/http/zod-validation.pipe';
 
 import {
@@ -21,6 +22,8 @@ import {
 import { SpikeKeyGuard } from './spike-key.guard';
 import { SpikeService } from './spike.service';
 
+// Se protege con SpikeKeyGuard (clave compartida), no con sesión de usuario.
+@Public()
 @Controller({ path: 'spike', version: '1' })
 @UseGuards(SpikeKeyGuard)
 export class SpikeController {

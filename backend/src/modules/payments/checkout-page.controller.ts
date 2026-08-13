@@ -1,6 +1,7 @@
 import { Controller, Get, Query, Res, VERSION_NEUTRAL } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
 
+import { Public } from '@/modules/auth/auth.guard';
 import { env } from '@/config/env.schema';
 
 import { renderCheckoutPage } from './checkout-page';
@@ -24,6 +25,8 @@ import { renderCheckoutPage } from './checkout-page';
  * La URL la arma la app y la carga un navegador embebido. Dejarla fuera del
  * versionado evita que un futuro /api/v2/ rompa el checkout.
  */
+// La abre un WebView, que no puede sostener el encabezado de sesión.
+@Public()
 @Controller({ path: 'checkout', version: VERSION_NEUTRAL })
 export class CheckoutPageController {
   @Get()

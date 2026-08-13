@@ -105,6 +105,43 @@ export const envSchema = z
     LIVEKIT_BROADCASTER_TOKEN_TTL_S: z.coerce.number().int().min(60).default(21_600),
     LIVEKIT_VIEWER_TOKEN_TTL_S: z.coerce.number().int().min(60).default(7_200),
 
+    // ─── Auth ───────────────────────────────────────────────────────────────
+    /**
+     * Clave de firma de los access tokens (HS256).
+     *
+     * 32 caracteres como piso: por debajo, una clave HMAC se puede atacar por
+     * fuerza bruta con hardware corriente, y quien la obtenga puede firmarse
+     * un token de administrador.
+     *
+     * Generar con: openssl rand -base64 48
+     */
+    JWT_SECRET: z.string().min(32),
+    /**
+     * 15 minutos. Corto a propósito: el access token NO se puede revocar, así
+     * que su ventana de daño es exactamente su duración. Lo que se revoca es
+     * el refresh token, y por eso ése sí vive en la base.
+     */
+    JWT_ACCESS_TTL_S: z.coerce.number().int().min(60).max(3_600).default(900),
+    /** 30 días. Es cuánto puede pasar sin abrir la app antes de reloguear. */
+    JWT_REFRESH_TTL_S: z.coerce.number().int().min(3_600).default(2_592_000),
+    JWT_ISSUER: z.string().default('livesell'),
+    JWT_AUDIENCE: z.string().default('livesell-app'),
+
+    /// Client IDs de Google/Apple. Se usan para validar el `aud` del token de
+    /// identidad: sin esa comprobación, un token emitido para OTRA aplicación
+    /// serviría para entrar a la nuestra.
+    GOOGLE_CLIENT_ID_ANDROID: optionalOrEmpty(z.string().min(10)),
+    GOOGLE_CLIENT_ID_IOS: optionalOrEmpty(z.string().min(10)),
+    GOOGLE_CLIENT_ID_WEB: optionalOrEmpty(z.string().min(10)),
+    APPLE_BUNDLE_ID: optionalOrEmpty(z.string().min(3)),
+
+    /**
+     * Habilita un login de desarrollo que emite tokens sin proveedor externo.
+     * Imprescindible para probar la app antes de tener credenciales de Google,
+     * y catastrófico en producción: `env.schema` lo prohíbe explícitamente.
+     */
+    AUTH_DEV_LOGIN_ENABLED: envBoolean(false),
+
     // ─── Spike (Sprint 0) ───────────────────────────────────────────────────
     SPIKE_ENABLED: envBoolean(false),
     SPIKE_API_KEY: optionalOrEmpty(z.string().min(16)),
@@ -136,6 +173,26 @@ export const envSchema = z
     message: 'SPIKE_ENABLED=true requiere SPIKE_API_KEY (generar con: openssl rand -hex 32)',
     path: ['SPIKE_API_KEY'],
   })
+  /**
+   * El login de desarrollo emite sesiones válidas sin verificar nada contra
+   * ningún proveedor. En producción es una puerta abierta a cualquier cuenta,
+   * incluida la de un administrador.
+   */
+  .refine((e) => !(e.NODE_ENV === 'production' && e.AUTH_DEV_LOGIN_ENABLED), {
+    message: 'AUTH_DEV_LOGIN_ENABLED debe ser false en production',
+    path: ['AUTH_DEV_LOGIN_ENABLED'],
+  })
+  /**
+   * Una clave de firma que quedó con el valor de ejemplo es peor que no tener
+   * ninguna: da la sensación de estar configurado.
+   */
+  .refine(
+    (e) => e.NODE_ENV !== 'production' || !/cambiame|changeme|ejemplo|example/i.test(e.JWT_SECRET),
+    {
+      message: 'JWT_SECRET parece un valor de ejemplo. Generar con: openssl rand -base64 48',
+      path: ['JWT_SECRET'],
+    },
+  )
   // Salvaguarda explícita: el spike jamás debe quedar encendido en producción.
   .refine((e) => !(e.NODE_ENV === 'production' && e.SPIKE_ENABLED), {
     message: 'SPIKE_ENABLED debe ser false en production',

@@ -129,9 +129,20 @@ export function buildManifest(params: {
   return parts.join('');
 }
 
-/** Comparación en tiempo constante: `===` filtra la clave carácter a carácter. */
+const HEX = /^[0-9a-f]*$/i;
+
+/**
+ * Comparación en tiempo constante: `===` filtra la clave carácter a carácter.
+ *
+ * La validación de formato importa: `Buffer.from('zz', 'hex')` no falla,
+ * devuelve un buffer vacío. Acá la comprobación de longitud ya nos protegía
+ * —el hash esperado siempre es hexadecimal válido de 64 caracteres— pero
+ * depender de eso es frágil: alcanza con que alguien cambie el algoritmo para
+ * que la protección desaparezca sin que nadie lo note.
+ */
 function safeEqualHex(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
+  if (!HEX.test(a) || !HEX.test(b)) return false;
   try {
     return timingSafeEqual(Buffer.from(a, 'hex'), Buffer.from(b, 'hex'));
   } catch {

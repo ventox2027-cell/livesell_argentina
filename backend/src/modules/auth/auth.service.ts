@@ -1,0 +1,418 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { Prisma, type User } from '@prisma/client';
+
+import { env } from '@/config/env.schema';
+import { DomainError } from '@/shared/errors/domain.error';
+import { PrismaService } from '@/shared/prisma/prisma.service';
+import { newId } from '@/shared/utils/id';
+
+import type { CompleteProfileDto, DeviceDto } from './dto/auth.dto';
+import { IdentityService, type VerifiedIdentity } from './identity.service';
+import { SessionsService, type IssuedSession, type SessionContext } from './sessions.service';
+import { normalizeEmail, normalizePhoneAr } from './tokens';
+
+/**
+ * Registro e inicio de sesión.
+ *
+ * ─── El onboarding que pidió el producto ───
+ *
+ * Un toque en "Continuar con Google" y adentro. Nada de formularios antes de
+ * ver el primer video. Lo que falta se pide **cuando hace falta**: el teléfono
+ * antes de comprar, la dirección en la primera compra.
+ *
+ * Esa decisión tiene una consecuencia técnica que atraviesa el módulo: el
+ * usuario existe con datos incompletos, y cada paso posterior tiene que
+ * comprobar lo suyo en vez de asumir que ya está todo.
+ */
+
+export class AccountSuspendedError extends DomainError {
+  constructor(status: string) {
+    super('ACCOUNT_SUSPENDED', 'Tu cuenta está suspendida', { status });
+  }
+}
+
+export class InvalidPhoneError extends DomainError {
+  constructor(raw: string) {
+    super('PHONE_INVALID', 'Ese número de teléfono no parece válido', { recibido: raw });
+  }
+}
+
+export interface LoginResult extends IssuedSession {
+  user: PublicUser;
+  /** `true` la primera vez. La app lo usa para mostrar la bienvenida. */
+  isNewUser: boolean;
+  /** Lo que falta para poder comprar. La app lo usa para saber qué pedir. */
+  missing: string[];
+}
+
+export interface PublicUser {
+  id: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  emailVerified: boolean;
+  phone: string | null;
+  phoneVerified: boolean;
+  whatsappOptIn: boolean;
+  avatarUrl: string | null;
+  role: string;
+  createdAt: string;
+}
+
+@Injectable()
+export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly identity: IdentityService,
+    private readonly sessions: SessionsService,
+  ) {}
+
+  async loginWithGoogle(idToken: string, device: DeviceDto, ctx: SessionContext) {
+    const verificada = await this.identity.verifyGoogle(idToken);
+    return this.loginWithIdentity(verificada, device, ctx);
+  }
+
+  async loginWithApple(
+    idToken: string,
+    nombre: { firstName?: string; lastName?: string },
+    device: DeviceDto,
+    ctx: SessionContext,
+  ) {
+    const verificada = await this.identity.verifyApple(idToken, nombre);
+    return this.loginWithIdentity(verificada, device, ctx);
+  }
+
+  /**
+   * Login de desarrollo: emite una sesión sin verificar nada.
+   *
+   * Existe para poder probar la app antes de tener credenciales de Google, y
+   * para que los tests no dependan de un servicio externo. `env.schema` impide
+   * que se encienda en producción, y acá se vuelve a comprobar: una salvaguarda
+   * que depende de un solo lugar es una salvaguarda que un día se saltea.
+   */
+  async devLogin(
+    params: { email: string; firstName: string; lastName: string; role: string },
+    device: DeviceDto,
+    ctx: SessionContext,
+  ): Promise<LoginResult> {
+    if (!env.AUTH_DEV_LOGIN_ENABLED) {
+      throw new DomainError('NOT_FOUND', 'No disponible');
+    }
+    return this.loginWithIdentity(
+      {
+        provider: 'google',
+        subject: `dev:${normalizeEmail(params.email)}`,
+        email: params.email,
+        emailVerified: true,
+        firstName: params.firstName,
+        lastName: params.lastName,
+        avatarUrl: null,
+      },
+      device,
+      ctx,
+      params.role,
+    );
+  }
+
+  /**
+   * Resuelve la identidad verificada a una cuenta y abre la sesión.
+   *
+   * ─── Las tres formas de llegar ───
+   *
+   *   1. La identidad ya existe            → es un login normal.
+   *   2. No existe, pero el email sí       → se VINCULA a la cuenta existente.
+   *   3. No existe ninguna de las dos      → cuenta nueva.
+   *
+   * El caso 2 es el que evita el problema más molesto de los logins sociales:
+   * alguien que entró con Google, un día toca "Continuar con Apple" y aparece
+   * en una cuenta vacía, sin sus compras. Con la vinculación entra a la suya.
+   */
+  private async loginWithIdentity(
+    verificada: VerifiedIdentity,
+    device: DeviceDto,
+    ctx: SessionContext,
+    rolForzado?: string,
+  ): Promise<LoginResult> {
+    const email = verificada.email ? normalizeEmail(verificada.email) : null;
+
+    const existente = await this.prisma.userIdentity.findUnique({
+      where: { provider_subject: { provider: verificada.provider, subject: verificada.subject } },
+      include: { user: true },
+    });
+
+    let user: User;
+    let isNewUser = false;
+
+    if (existente) {
+      // ── Caso 1 ──
+      user = existente.user;
+      await this.prisma.userIdentity.update({
+        where: { id: existente.id },
+        data: { lastUsedAt: new Date() },
+      });
+    } else if (email && (await this.prisma.user.findUnique({ where: { email } }))) {
+      // ── Caso 2: vinculación ──
+      //
+      // Sólo si el proveedor confirma que verificó el email. Sin esa
+      // comprobación, un proveedor que permita declarar cualquier email sería
+      // una forma directa de apropiarse de una cuenta ajena.
+      if (!verificada.emailVerified) {
+        throw new DomainError('IDENTITY_REJECTED', 'No pudimos verificar tu identidad', {
+          reason: 'email sin verificar en el proveedor',
+        });
+      }
+      user = await this.prisma.user.findUniqueOrThrow({ where: { email } });
+      await this.prisma.userIdentity.create({
+        data: {
+          id: newId('idn'),
+          userId: user.id,
+          provider: verificada.provider,
+          subject: verificada.subject,
+          email,
+        },
+      });
+      this.logger.log({ msg: 'identidad vinculada a cuenta existente', userId: user.id });
+    } else {
+      // ── Caso 3: cuenta nueva ──
+      const resultado = await this.crearCuenta(verificada, email, rolForzado);
+      user = resultado;
+      isNewUser = true;
+    }
+
+    if (user.status !== 'active' || user.deletedAt !== null) {
+      throw new AccountSuspendedError(user.status);
+    }
+
+    const dispositivo = await this.registrarDispositivo(user.id, device);
+
+    const sesion = await this.sessions.createSession(
+      { id: user.id, role: user.role },
+      { ...ctx, deviceId: dispositivo.id },
+    );
+
+    return {
+      ...sesion,
+      user: this.toPublic(user),
+      isNewUser,
+      missing: this.faltantes(user),
+    };
+  }
+
+  private async crearCuenta(
+    verificada: VerifiedIdentity,
+    email: string | null,
+    rolForzado?: string,
+  ): Promise<User> {
+    if (!email) {
+      /**
+       * Sin email no hay cuenta.
+       *
+       * Pasa con Apple cuando la persona elige "Ocultar mi correo" y el
+       * proveedor no lo entrega. Es un caso real, y preferimos frenar con un
+       * mensaje claro a crear una cuenta sin forma de contactar a nadie
+       * —imposible avisar que el pedido salió, imposible recuperar el acceso—.
+       */
+      throw new DomainError('IDENTITY_REJECTED', 'Necesitamos tu email para crear la cuenta', {
+        reason: 'el proveedor no entregó email',
+      });
+    }
+
+    try {
+      return await this.prisma.user.create({
+        data: {
+          id: newId('usr'),
+          firstName: verificada.firstName ?? 'Sin nombre',
+          lastName: verificada.lastName ?? '',
+          email,
+          emailVerified: verificada.emailVerified,
+          avatarUrl: verificada.avatarUrl,
+          role: (rolForzado ?? 'buyer') as User['role'],
+          identities: {
+            create: {
+              id: newId('idn'),
+              provider: verificada.provider,
+              subject: verificada.subject,
+              email,
+            },
+          },
+        },
+      });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        /**
+         * Carrera: dos logins simultáneos del mismo usuario nuevo.
+         *
+         * Pasa de verdad — la app reintenta, o la persona toca dos veces. El
+         * índice UNIQUE resuelve la carrera y acá simplemente se lee la fila
+         * que ganó.
+         */
+        return this.prisma.user.findUniqueOrThrow({ where: { email } });
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Registra o actualiza el dispositivo.
+   *
+   * `installId` es único, así que reabrir la app en el mismo teléfono actualiza
+   * la fila en vez de acumular una nueva por sesión.
+   */
+  private async registrarDispositivo(userId: string, device: DeviceDto) {
+    /**
+     * Si el token de push venía asociado a OTRA cuenta, se desasocia primero.
+     *
+     * Es el caso de un teléfono prestado o revendido: sin esto, el dueño
+     * anterior seguiría recibiendo las notificaciones del nuevo, incluidas las
+     * de sus compras.
+     */
+    if (device.pushToken) {
+      await this.prisma.device.updateMany({
+        where: { pushToken: device.pushToken, installId: { not: device.installId } },
+        data: { pushToken: null },
+      });
+    }
+
+    return this.prisma.device.upsert({
+      where: { installId: device.installId },
+      create: {
+        id: newId('dev'),
+        userId,
+        installId: device.installId,
+        platform: device.platform,
+        appVersion: device.appVersion,
+        osVersion: device.osVersion,
+        model: device.model ?? null,
+        pushToken: device.pushToken ?? null,
+        timezone: device.timezone,
+      },
+      update: {
+        // El userId se actualiza: el mismo teléfono puede cambiar de dueño.
+        userId,
+        appVersion: device.appVersion,
+        osVersion: device.osVersion,
+        pushToken: device.pushToken ?? undefined,
+        lastSeenAt: new Date(),
+        // Un dispositivo que vuelve a aparecer arranca de cero en fallos de
+        // envío: los anteriores eran de una instalación que ya no existe.
+        failureCount: 0,
+      },
+    });
+  }
+
+  async completeProfile(userId: string, dto: CompleteProfileDto): Promise<PublicUser> {
+    const data: Prisma.UserUpdateInput = {};
+
+    if (dto.firstName !== undefined) data.firstName = dto.firstName.trim();
+    if (dto.lastName !== undefined) data.lastName = dto.lastName.trim();
+    if (dto.whatsappOptIn !== undefined) data.whatsappOptIn = dto.whatsappOptIn;
+
+    if (dto.phone !== undefined) {
+      const e164 = normalizePhoneAr(dto.phone);
+      if (!e164) throw new InvalidPhoneError(dto.phone);
+      data.phoneE164 = e164;
+      /**
+       * Cambiar el teléfono INVALIDA la verificación anterior.
+       *
+       * Sin esto, alguien con un número verificado lo cambiaría por otro y se
+       * quedaría con el estado de verificado sobre un número que nadie
+       * comprobó. El teléfono verificado es requisito para comprar.
+       */
+      data.phoneVerified = false;
+    }
+
+    const user = await this.prisma.user.update({ where: { id: userId }, data });
+    return this.toPublic(user);
+  }
+
+  async me(userId: string): Promise<PublicUser & { missing: string[] }> {
+    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    return { ...this.toPublic(user), missing: this.faltantes(user) };
+  }
+
+  async updatePushToken(
+    userId: string,
+    params: { installId: string; pushToken: string | null; pushEnabled: boolean },
+  ): Promise<{ ok: true }> {
+    if (params.pushToken) {
+      await this.prisma.device.updateMany({
+        where: { pushToken: params.pushToken, installId: { not: params.installId } },
+        data: { pushToken: null },
+      });
+    }
+    await this.prisma.device.updateMany({
+      where: { installId: params.installId, userId },
+      data: { pushToken: params.pushToken, pushEnabled: params.pushEnabled, failureCount: 0 },
+    });
+    return { ok: true };
+  }
+
+  /**
+   * Cierra la cuenta.
+   *
+   * Borrado lógico y anonimización de lo que identifica a la persona, no
+   * borrado físico: las órdenes tienen que sobrevivir para el historial del
+   * vendedor y para la contabilidad.
+   *
+   * El email se libera con un sufijo para que la dirección pueda volver a
+   * usarse —alguien que se va y vuelve— sin chocar con el índice UNIQUE.
+   */
+  async closeAccount(userId: string): Promise<{ ok: true }> {
+    await this.prisma.$transaction(async (tx) => {
+      const user = await tx.user.findUniqueOrThrow({ where: { id: userId } });
+      await tx.user.update({
+        where: { id: userId },
+        data: {
+          status: 'deleted',
+          deletedAt: new Date(),
+          email: `borrada+${user.id}@cuenta.invalid`,
+          phoneE164: null,
+          phoneVerified: false,
+          avatarUrl: null,
+          firstName: 'Cuenta',
+          lastName: 'eliminada',
+        },
+      });
+      // Las identidades se borran: si no, volver a entrar con Google
+      // reactivaría una cuenta que la persona pidió cerrar.
+      await tx.userIdentity.deleteMany({ where: { userId } });
+      // Y los tokens de push, para que no siga recibiendo notificaciones.
+      await tx.device.updateMany({ where: { userId }, data: { pushToken: null, pushEnabled: false } });
+    });
+
+    this.logger.log({ msg: 'cuenta cerrada', userId });
+    return { ok: true };
+  }
+
+  /**
+   * Qué le falta a la cuenta para poder comprar.
+   *
+   * La app lo usa para pedir lo justo en el momento justo, en lugar de un
+   * formulario largo al principio. Es el otro lado del onboarding rápido.
+   */
+  private faltantes(user: User): string[] {
+    const falta: string[] = [];
+    if (!user.phoneE164) falta.push('phone');
+    if (!user.phoneVerified) falta.push('phoneVerification');
+    if (user.firstName === 'Sin nombre' || !user.lastName) falta.push('name');
+    return falta;
+  }
+
+  private toPublic(user: User): PublicUser {
+    return {
+      id: user.id,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      email: user.email,
+      emailVerified: user.emailVerified,
+      phone: user.phoneE164,
+      phoneVerified: user.phoneVerified,
+      whatsappOptIn: user.whatsappOptIn,
+      avatarUrl: user.avatarUrl,
+      role: user.role,
+      createdAt: user.createdAt.toISOString(),
+    };
+  }
+}

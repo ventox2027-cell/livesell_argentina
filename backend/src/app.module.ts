@@ -4,6 +4,7 @@ import { LoggerModule } from 'nestjs-pino';
 
 import { env } from '@/config/env.schema';
 import { HealthModule } from '@/modules/health/health.module';
+import { AuthModule } from '@/modules/auth/auth.module';
 import { LiveKitModule } from '@/modules/livekit/livekit.module';
 import { PaymentsModule } from '@/modules/payments/payments.module';
 import { SpikeModule } from '@/modules/spike/spike.module';
@@ -36,6 +37,9 @@ function optionalModules(): DynamicModule['imports'] {
     RedisModule,
     LiveKitModule,
     HealthModule,
+    // Va antes que los módulos opcionales: registra los guards globales, y
+    // todo lo que se monte después queda cerrado por defecto.
+    AuthModule,
     ...(optionalModules() ?? []),
   ],
   providers: [

@@ -1,6 +1,7 @@
 import { Controller, Headers, HttpCode, Logger, Post, Req, VERSION_NEUTRAL } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
 
+import { Public } from '@/modules/auth/auth.guard';
 import { newId } from '@/shared/utils/id';
 import { MetricsService } from '@/shared/observability/metrics.service';
 import { PrismaService } from '@/shared/prisma/prisma.service';
@@ -22,6 +23,8 @@ import { LiveKitService } from './livekit.service';
  */
 // VERSION_NEUTRAL: /webhooks/livekit. La URL se carga a mano en el panel de
 // LiveKit; si mañana saliera /api/v2/, nadie va a ir a actualizarla.
+// Quien llama es LiveKit. Su credencial es la firma del encabezado.
+@Public()
 @Controller({ path: 'webhooks', version: VERSION_NEUTRAL })
 export class LiveKitWebhookController {
   private readonly logger = new Logger(LiveKitWebhookController.name);

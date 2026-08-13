@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 
+import { Public } from '@/modules/auth/auth.guard';
 import { env } from '@/config/env.schema';
 import { SpikeKeyGuard } from '@/modules/spike/spike-key.guard';
 import { ZodValidationPipe } from '@/shared/http/zod-validation.pipe';
@@ -26,6 +27,8 @@ import { PaymentsService } from './payments.service';
  * El endpoint de webhooks NO está acá: vive en `MpWebhookController`, sin
  * guard, porque quien lo llama es Mercado Pago y su credencial es la firma.
  */
+// Se protege con SpikeKeyGuard (clave compartida), no con sesión de usuario.
+@Public()
 @Controller({ path: 'payments', version: '1' })
 @UseGuards(SpikeKeyGuard)
 export class PaymentsController {

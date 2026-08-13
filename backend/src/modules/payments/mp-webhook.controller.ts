@@ -1,6 +1,7 @@
 import { Controller, HttpCode, Logger, Post, Req, VERSION_NEUTRAL } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
 
+import { Public } from '@/modules/auth/auth.guard';
 import { MetricsService } from '@/shared/observability/metrics.service';
 
 import { asString } from './mp-signature';
@@ -25,6 +26,8 @@ import { PaymentsService } from './payments.service';
  */
 // VERSION_NEUTRAL: la URL se carga a mano en el panel de Mercado Pago. Si
 // mañana saliera /api/v2/, nadie va a ir a actualizarla.
+// Quien llama es Mercado Pago. Su credencial es la firma HMAC.
+@Public()
 @Controller({ path: 'webhooks', version: VERSION_NEUTRAL })
 export class MpWebhookController {
   private readonly logger = new Logger(MpWebhookController.name);

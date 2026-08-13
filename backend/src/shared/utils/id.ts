@@ -20,6 +20,13 @@ export const ID_PREFIX = {
   mpWebhook: 'mpw',
   customer: 'cus',
   customerCard: 'crd',
+  // Auth
+  user: 'usr',
+  identity: 'idn',
+  device: 'dev',
+  refreshToken: 'rtk',
+  session: 'ses',
+  authEvent: 'aev',
 } as const;
 
 export type IdPrefix = (typeof ID_PREFIX)[keyof typeof ID_PREFIX];
