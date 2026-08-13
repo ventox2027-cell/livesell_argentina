@@ -420,12 +420,35 @@ export class PaymentsService {
       return { status: 'PROCESSED' as const, orderStatus: applied.order.status };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+
+      /**
+       * Mercado Pago dice que ese pago NO EXISTE.
+       *
+       * Reintentar no puede cambiar la respuesta, así que se archiva y se
+       * responde 200. Pasa en tres situaciones reales:
+       *
+       *   · El simulador del panel, que manda ids de ejemplo.
+       *   · Notificaciones de otra aplicación apuntando a este mismo webhook.
+       *   · Alguien probando el endpoint a mano.
+       *
+       * Devolver 500 haría que Mercado Pago reintentara indefinidamente algo
+       * que nunca va a resolverse, y esos errores taparían los que sí importan.
+       */
+      if (err instanceof MpApiError && err.status === 404) {
+        await this.prisma.mpWebhookEvent.update({
+          where: { id: record.id },
+          data: { processedAt: new Date(), error: `el pago ${dataId} no existe en Mercado Pago` },
+        });
+        this.logger.warn({ msg: 'notificación sobre un pago inexistente', dataId });
+        return { status: 'UNKNOWN_PAYMENT' as const };
+      }
+
       await this.prisma.mpWebhookEvent.update({
         where: { id: record.id },
         data: { error: message },
       });
-      // Se relanza: Mercado Pago reintenta, y el registro queda sin
-      // `processedAt` para que el conciliador lo levante.
+      // Se relanza: el fallo es nuestro y transitorio. Mercado Pago reintenta,
+      // y el registro queda sin `processedAt` para que el conciliador lo levante.
       throw err;
     }
   }

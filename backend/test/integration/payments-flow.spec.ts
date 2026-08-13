@@ -78,9 +78,16 @@ class MpFake {
     return this.pago(id, 'approved', input.externalReference, input.transactionAmount);
   }
 
+  /// Ids que la "API" va a reportar como inexistentes (404).
+  noExiste = new Set<string>();
+
   // Sin `async`: devolver el valor directo alcanza porque el servicio los
   // consume con `await`, y evita prometer asincronía que no existe.
-  getPayment(id: string | number) {
+  async getPayment(id: string | number) {
+    if (this.noExiste.has(String(id))) {
+      const { MpApiError } = await import('@/modules/payments/mp.client');
+      throw new MpApiError(404, { message: 'Payment not found' }, 'Payment not found');
+    }
     const estado = this.estados.get(String(id)) ?? 'approved';
     return this.pago(Number(id), estado, this.referencias.get(String(id)) ?? 'ord_desconocida', 15);
   }
@@ -190,6 +197,7 @@ afterAll(async () => {
 beforeEach(() => {
   mp.estados.clear();
   mp.porReferencia.clear();
+  mp.noExiste.clear();
   mp.proximoTimeout = false;
   mp.llamadasCreate = 0;
 });
@@ -515,6 +523,21 @@ describe('Autenticación', () => {
   it('el webhook NO la exige: su credencial es la firma', async () => {
     const r = await enviarWebhook(webhookFirmado({ mpPaymentId: '555444333' }));
     expect(r.status).toBe(200);
+  });
+
+  it('archiva una notificación sobre un pago inexistente sin pedir reintento', async () => {
+    // Es lo que manda el simulador del panel de Mercado Pago: un id de
+    // ejemplo. Si respondiéramos 500, Mercado Pago reintentaría para siempre
+    // algo que nunca va a existir.
+    mp.noExiste.add('404404404');
+    const r = await enviarWebhook(webhookFirmado({ mpPaymentId: '404404404' }));
+    expect(r.status).toBe(200);
+    expect(r.body.status).toBe('UNKNOWN_PAYMENT');
+
+    const registro = await prisma.mpWebhookEvent.findFirstOrThrow({
+      where: { resourceId: '404404404' },
+    });
+    expect(registro.processedAt).not.toBeNull();
   });
 
   it('archiva una notificación huérfana en vez de reventar', async () => {

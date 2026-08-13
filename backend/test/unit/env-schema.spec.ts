@@ -131,4 +131,43 @@ describe('envSchema', () => {
     const r = envSchema.safeParse({ ...VALID, MP_ACCESS_TOKEN: 'TEST-corto' });
     expect(r.success).toBe(false);
   });
+
+  // ─── Booleanos ────────────────────────────────────────────────────────────
+
+  describe('interruptores booleanos', () => {
+    it('⛔ "false" apaga de verdad', () => {
+      // El bug que motivó `envBoolean`: `z.coerce.boolean()` hace
+      // Boolean("false"), que es true. El interruptor maestro que impide
+      // exponer endpoints sin autenticación no apagaba nada.
+      const r = envSchema.parse({ ...VALID, SPIKE_ENABLED: 'false' });
+      expect(r.SPIKE_ENABLED).toBe(false);
+    });
+
+    it('⛔ y "false" tampoco enciende el spike de pagos', () => {
+      const r = envSchema.parse({ ...VALID, PAYMENTS_SPIKE_ENABLED: 'false' });
+      expect(r.PAYMENTS_SPIKE_ENABLED).toBe(false);
+    });
+
+    it('acepta las grafías habituales', () => {
+      for (const v of ['true', 'TRUE', 'True', '1', 'yes', 'on']) {
+        expect(envSchema.parse({ ...VALID, METRICS_ENABLED: v }).METRICS_ENABLED, v).toBe(true);
+      }
+      for (const v of ['false', 'FALSE', '0', 'no', 'off', '']) {
+        expect(envSchema.parse({ ...VALID, METRICS_ENABLED: v }).METRICS_ENABLED, v).toBe(false);
+      }
+    });
+
+    it('respeta el valor por defecto cuando la variable no está', () => {
+      const r = envSchema.parse(VALID);
+      expect(r.METRICS_ENABLED).toBe(true);
+      expect(r.SPIKE_ENABLED).toBe(false);
+    });
+
+    it('⛔ rechaza un valor que no es booleano en vez de adivinar', () => {
+      // "si" parece razonable y no lo es. Mejor que el proceso avise a que
+      // interprete algo distinto de lo que quiso decir quien lo escribió.
+      const r = envSchema.safeParse({ ...VALID, SPIKE_ENABLED: 'si' });
+      expect(r.success).toBe(false);
+    });
+  });
 });

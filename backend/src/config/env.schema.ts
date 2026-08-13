@@ -35,6 +35,42 @@ function optionalOrEmpty<T extends z.ZodTypeAny>(schema: T) {
 }
 
 /**
+ * Booleano de variable de entorno, en serio.
+ *
+ * ⛔ NO usar `z.coerce.boolean()`. Hace `Boolean(valor)`, y en JavaScript
+ * `Boolean("false")` es **`true`**: cualquier texto no vacío da verdadero.
+ *
+ * El daño concreto que causó: `SPIKE_ENABLED=false` dejaba el módulo de spike
+ * ENCENDIDO. El interruptor maestro que existe para que endpoints sin
+ * autenticación de usuario no queden expuestos no apagaba nada, y la única
+ * forma de desactivarlos era borrar la variable del archivo. Se descubrió por
+ * casualidad; en producción se habría descubierto de la peor manera.
+ *
+ * Acá los valores son explícitos y cualquier otra cosa es un error de
+ * configuración, no un valor que el código adivina. `FALSE`, `False` y `false`
+ * valen lo mismo; `si`, `sí` y `enabled` no valen nada y el proceso lo dice.
+ */
+const VERDADEROS = new Set(['true', '1', 'yes', 'y', 'on']);
+const FALSOS = new Set(['false', '0', 'no', 'n', 'off', '']);
+
+function envBoolean(defaultValue: boolean) {
+  return z
+    .union([z.boolean(), z.string()])
+    .default(defaultValue)
+    .transform((v, ctx) => {
+      if (typeof v === 'boolean') return v;
+      const normalizado = v.trim().toLowerCase();
+      if (VERDADEROS.has(normalizado)) return true;
+      if (FALSOS.has(normalizado)) return false;
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `valor booleano inválido: "${v}". Usá true o false.`,
+      });
+      return z.NEVER;
+    });
+}
+
+/**
  * Contrato de configuración del proceso.
  *
  * Se valida UNA sola vez, al arrancar. Si falta o está mal una variable, el
@@ -65,12 +101,12 @@ export const envSchema = z
     LIVEKIT_API_SECRET: z.string().min(16),
     LIVEKIT_WS_URL: z.string().url().startsWith('ws'),
     LIVEKIT_HTTP_URL: z.string().url().startsWith('http'),
-    LIVEKIT_WEBHOOK_ENABLED: z.coerce.boolean().default(true),
+    LIVEKIT_WEBHOOK_ENABLED: envBoolean(true),
     LIVEKIT_BROADCASTER_TOKEN_TTL_S: z.coerce.number().int().min(60).default(21_600),
     LIVEKIT_VIEWER_TOKEN_TTL_S: z.coerce.number().int().min(60).default(7_200),
 
     // ─── Spike (Sprint 0) ───────────────────────────────────────────────────
-    SPIKE_ENABLED: z.coerce.boolean().default(false),
+    SPIKE_ENABLED: envBoolean(false),
     SPIKE_API_KEY: optionalOrEmpty(z.string().min(16)),
 
     // ─── Mercado Pago (Sprint 0B) ───────────────────────────────────────────
@@ -86,12 +122,12 @@ export const envSchema = z
     MP_NOTIFICATION_URL: optionalOrEmpty(z.string().url()),
     MP_API_BASE_URL: z.string().url().default('https://api.mercadopago.com'),
     MP_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(60_000).default(10_000),
-    PAYMENTS_SPIKE_ENABLED: z.coerce.boolean().default(false),
+    PAYMENTS_SPIKE_ENABLED: envBoolean(false),
 
     // ─── Observabilidad ─────────────────────────────────────────────────────
     SENTRY_DSN: z.string().url().optional().or(z.literal('')),
     SENTRY_TRACES_SAMPLE_RATE: z.coerce.number().min(0).max(1).default(0.1),
-    METRICS_ENABLED: z.coerce.boolean().default(true),
+    METRICS_ENABLED: envBoolean(true),
   })
   // El módulo de spike no tiene autenticación de usuarios porque Auth todavía
   // no existe. Se protege con una clave compartida, así que habilitarlo sin
