@@ -41,7 +41,7 @@ Tres principios que atraviesan todo:
 · Redis 7 · Zod · Vitest. Móvil: Flutter 3 · Riverpod · Dio · LiveKit.
 
 **Repositorio:** `github.com/ventox2027-cell/livesell_argentina` (privado).
-Último commit: `456e5fa`.
+Último commit: `ba6bcdf`.
 
 ---
 
@@ -60,8 +60,8 @@ Tres principios que atraviesan todo:
 | Search / Notifications | ⛔ |
 | Admin Lite | ⛔ **requisito previo al lanzamiento** |
 
-**370 tests** en backend, **17 en la app** contra PostgreSQL real. Lint, typecheck y
-`flutter analyze` en verde.
+**370 tests** de backend contra PostgreSQL real y **17 de contrato** en la app.
+Lint, typecheck y `flutter analyze` en verde.
 
 ---
 
