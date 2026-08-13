@@ -351,6 +351,63 @@ export class ProductsService {
     return this.paginar(filas, query.limit);
   }
 
+  /**
+   * Descubrimiento: lo que alimenta el feed.
+   *
+   * ─── Por qué existe separado de la vidriera ───
+   *
+   * `listPublicByStore` responde "qué vende esta tienda". Esto responde "qué
+   * hay para ver", que es una pregunta distinta: cruza tiendas y necesita traer
+   * al vendedor con cada producto, porque en el feed la marca la pone quien
+   * vende, no el catálogo.
+   *
+   * ─── Los tres filtros de estado no son redundantes ───
+   *
+   * Producto ACTIVE, tienda ACTIVE y vendedor ACTIVE. Un vendedor suspendido
+   * puede tener productos que quedaron activos: sin el tercer filtro seguirían
+   * apareciendo en el feed después de la suspensión, que es exactamente lo que
+   * la suspensión tiene que impedir.
+   *
+   * ─── Orden ───
+   *
+   * Por id descendente, o sea lo más nuevo primero. No es un algoritmo de
+   * recomendación y no pretende serlo: con el catálogo que hay hoy, cualquier
+   * ranking sería ruido sobre una muestra de diez productos. Cuando haya señal
+   * —vistas, compras, sesiones en vivo— se reemplaza acá y nada más cambia.
+   */
+  async listDiscover(query: PageQueryDto) {
+    const filas = await this.prisma.product.findMany({
+      where: {
+        status: 'ACTIVE',
+        deletedAt: null,
+        store: { status: 'ACTIVE', seller: { status: 'ACTIVE' } },
+        ...(query.cursor ? { id: { lt: query.cursor } } : {}),
+      },
+      select: {
+        ...PRODUCT_SELECT,
+        images: { orderBy: { position: 'asc' }, take: 1, select: { url: true } },
+        // Un solo join en vez de una consulta por producto. Con 20 productos
+        // por página, el N+1 serían 41 viajes a la base para armar un scroll.
+        store: {
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+            logoUrl: true,
+            seller: {
+              select: { id: true, displayName: true, slug: true, avatarUrl: true, verificationStatus: true },
+            },
+          },
+        },
+        _count: { select: { variants: { where: { deletedAt: null, status: 'ACTIVE' } } } },
+      },
+      orderBy: { id: 'desc' },
+      take: query.limit + 1,
+    });
+
+    return this.paginar(filas, query.limit);
+  }
+
   // ─── Variantes ────────────────────────────────────────────────────────────
 
   async createVariant(userId: string, productId: string, dto: CreateVariantDto) {

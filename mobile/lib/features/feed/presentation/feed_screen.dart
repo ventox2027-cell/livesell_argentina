@@ -1,21 +1,24 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/design/tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../auth/state/auth_providers.dart';
+import '../../seller/presentation/seller_home_screen.dart';
+import '../data/feed_repository.dart';
+import '../domain/feed_models.dart';
 
 /// Feed vertical.
 ///
 /// ─── Qué es esto hoy ───
 ///
-/// La estructura completa de la pantalla con contenido de ejemplo. El video
-/// real llega con el módulo Live Sessions; lo que está armado acá es todo lo
-/// que lo rodea, que es donde vive la decisión de compra: quién vende, qué
-/// vende, cuánto sale y el botón.
+/// Productos **reales**, traídos de `/discover/products`. Lo único que sigue
+/// siendo un marcador es el video: llega con el módulo Live Sessions y ocupa
+/// exactamente el lugar del degradado, sin que el resto de la pantalla cambie.
 ///
-/// Se construye antes que el video a propósito. La parte difícil de un feed de
-/// venta no es reproducir: es que en los dos segundos que alguien mira una
+/// Se construyó en este orden a propósito. La parte difícil de un feed de venta
+/// no es reproducir video: es que en los dos segundos que alguien mira una
 /// pantalla entienda qué le están ofreciendo y cuánto cuesta.
 class FeedScreen extends ConsumerStatefulWidget {
   const FeedScreen({super.key});
@@ -36,33 +39,58 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
-      children: [
-        PageView.builder(
-          controller: _pageController,
-          scrollDirection: Axis.vertical,
-          itemCount: _ejemplos.length,
-          onPageChanged: (i) => setState(() => _indice = i),
-          itemBuilder: (_, i) => _Publicacion(datos: _ejemplos[i]),
-        ),
-        // La barra superior va encima del video, no arriba de él: robarle alto
-        // al video en una pantalla de 6" se nota.
-        const _BarraSuperior(),
-        Positioned(
-          right: Gap.md,
-          bottom: 120,
-          child: _AccionesLaterales(publicacion: _ejemplos[_indice]),
-        ),
-      ],
+    final feed = ref.watch(feedProvider);
+
+    return feed.when(
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (e, _) => _ErrorDeFeed(
+        mensaje: e.toString(),
+        onReintentar: () => ref.read(feedProvider.notifier).recargar(),
+      ),
+      data: (publicaciones) {
+        if (publicaciones.isEmpty) return const _FeedVacio();
+
+        // El índice puede quedar fuera de rango si el feed se recarga con menos
+        // publicaciones de las que había.
+        final indice = _indice.clamp(0, publicaciones.length - 1);
+
+        return Stack(
+          children: [
+            PageView.builder(
+              controller: _pageController,
+              scrollDirection: Axis.vertical,
+              itemCount: publicaciones.length,
+              onPageChanged: (i) {
+                setState(() => _indice = i);
+                // Se pide la página siguiente tres publicaciones antes del
+                // final. Esperar a la última deja un hueco visible mientras
+                // llega la respuesta.
+                if (i >= publicaciones.length - 3) {
+                  ref.read(feedProvider.notifier).cargarMas();
+                }
+              },
+              itemBuilder: (_, i) => _Publicacion(datos: publicaciones[i]),
+            ),
+            // La barra superior va ENCIMA del video, no arriba de él: robarle
+            // alto al video en una pantalla de 6" se nota.
+            const _BarraSuperior(),
+            Positioned(
+              right: Gap.md,
+              bottom: 120,
+              child: _AccionesLaterales(publicacion: publicaciones[indice]),
+            ),
+          ],
+        );
+      },
     );
   }
 }
 
-class _BarraSuperior extends StatelessWidget {
+class _BarraSuperior extends ConsumerWidget {
   const _BarraSuperior();
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return Positioned(
       top: 0,
       left: 0,
@@ -80,8 +108,9 @@ class _BarraSuperior extends StatelessWidget {
                 const _Pestana('Para vos', activa: true),
                 const Spacer(),
                 IconButton(
-                  onPressed: () {},
-                  icon: const Icon(Icons.notifications_none_rounded),
+                  onPressed: () => ref.read(feedProvider.notifier).recargar(),
+                  icon: const Icon(Icons.refresh_rounded),
+                  tooltip: 'Actualizar',
                   color: AppColor.texto,
                 ),
               ],
@@ -127,35 +156,28 @@ class _Pestana extends StatelessWidget {
 
 class _Publicacion extends StatelessWidget {
   const _Publicacion({required this.datos});
-  final _Ejemplo datos;
+  final PublicacionFeed datos;
 
   @override
   Widget build(BuildContext context) {
     return Stack(
       fit: StackFit.expand,
       children: [
-        // Marcador de posición del video. Cuando llegue Live Sessions, acá va
-        // el reproductor y nada más de esta pantalla cambia.
-        DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: datos.colores,
-            ),
-          ),
-          child: Center(
-            child: Icon(
-              datos.icono,
-              size: 96,
-              color: Colors.white.withValues(alpha: 0.12),
-            ),
-          ),
-        ),
-        const DecoratedBox(decoration: BoxDecoration(gradient: AppColor.velo)),
+        // Marcador de posición del video. Si el producto tiene foto, se usa la
+        // foto: es contenido real del vendedor y da una idea mucho más fiel de
+        // cómo se va a ver el feed que un degradado.
+        if (datos.portada != null)
+          CachedNetworkImage(
+            imageUrl: datos.portada!,
+            fit: BoxFit.cover,
+            fadeInDuration: Duraciones.rapida,
+            placeholder: (_, __) => _Fondo(colores: datos.coloresDeFondo),
+            errorWidget: (_, __, ___) => _Fondo(colores: datos.coloresDeFondo),
+          )
+        else
+          _Fondo(colores: datos.coloresDeFondo),
 
-        if (datos.enVivo)
-          const Positioned(top: 100, left: Gap.lg, child: _ChipEnVivo(espectadores: 1247)),
+        const DecoratedBox(decoration: BoxDecoration(gradient: AppColor.velo)),
 
         Positioned(
           left: Gap.lg,
@@ -168,64 +190,37 @@ class _Publicacion extends StatelessWidget {
   }
 }
 
-class _ChipEnVivo extends StatelessWidget {
-  const _ChipEnVivo({required this.espectadores});
-  final int espectadores;
+class _Fondo extends StatelessWidget {
+  const _Fondo({required this.colores});
+  final List<Color> colores;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            color: AppColor.vivo,
-            borderRadius: BorderRadius.circular(Redondeo.sm),
-          ),
-          child: const Text(
-            'EN VIVO',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 11,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 0.5,
-            ),
-          ),
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: colores,
         ),
-        const SizedBox(width: Gap.sm),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.45),
-            borderRadius: BorderRadius.circular(Redondeo.sm),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.visibility_rounded, size: 13, color: Colors.white),
-              const SizedBox(width: 4),
-              Text(
-                _miles(espectadores),
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          ),
+      ),
+      child: Center(
+        child: Icon(
+          Icons.storefront_rounded,
+          size: 96,
+          color: Colors.white.withValues(alpha: 0.10),
         ),
-      ],
+      ),
     );
   }
 }
 
-class _InfoPublicacion extends ConsumerWidget {
+class _InfoPublicacion extends StatelessWidget {
   const _InfoPublicacion({required this.datos});
-  final _Ejemplo datos;
+  final PublicacionFeed datos;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
@@ -235,27 +230,50 @@ class _InfoPublicacion extends ConsumerWidget {
             CircleAvatar(
               radius: 16,
               backgroundColor: AppColor.superficieAlta,
+              backgroundImage: datos.avatarUrl == null
+                  ? null
+                  : CachedNetworkImageProvider(datos.avatarUrl!),
+              child: datos.avatarUrl != null
+                  ? null
+                  : Text(
+                      datos.vendedor.characters.first.toUpperCase(),
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+                    ),
+            ),
+            const SizedBox(width: Gap.sm),
+            Flexible(
               child: Text(
-                datos.vendedor[0],
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+                datos.vendedor,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                  shadows: [Shadow(color: Colors.black54, blurRadius: 8)],
+                ),
               ),
             ),
+            if (datos.verificado) ...[
+              const SizedBox(width: 4),
+              const Icon(Icons.verified_rounded, size: 15, color: AppColor.acento),
+            ],
             const SizedBox(width: Gap.sm),
-            Text(
-              datos.vendedor,
-              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(width: Gap.sm),
-            _BotonSeguir(),
+            const _BotonSeguir(),
           ],
         ),
-        const SizedBox(height: Gap.md),
-        Text(
-          datos.descripcion,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontSize: 14, height: 1.35),
-        ),
+        if (datos.descripcion != null && datos.descripcion!.isNotEmpty) ...[
+          const SizedBox(height: Gap.md),
+          Text(
+            datos.descripcion!,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 14,
+              height: 1.35,
+              shadows: [Shadow(color: Colors.black54, blurRadius: 8)],
+            ),
+          ),
+        ],
         const SizedBox(height: Gap.md),
         _TarjetaProducto(datos: datos),
       ],
@@ -264,6 +282,8 @@ class _InfoPublicacion extends ConsumerWidget {
 }
 
 class _BotonSeguir extends StatefulWidget {
+  const _BotonSeguir();
+
   @override
   State<_BotonSeguir> createState() => _BotonSeguirState();
 }
@@ -303,7 +323,7 @@ class _BotonSeguirState extends State<_BotonSeguir> {
 /// para ver el precio, la mitad sigue de largo.
 class _TarjetaProducto extends ConsumerWidget {
   const _TarjetaProducto({required this.datos});
-  final _Ejemplo datos;
+  final PublicacionFeed datos;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -318,14 +338,19 @@ class _TarjetaProducto extends ConsumerWidget {
       ),
       child: Row(
         children: [
-          Container(
-            width: 46,
-            height: 46,
-            decoration: BoxDecoration(
-              color: AppColor.superficieAlta,
-              borderRadius: BorderRadius.circular(Redondeo.sm),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(Redondeo.sm),
+            child: SizedBox(
+              width: 46,
+              height: 46,
+              child: datos.portada != null
+                  ? CachedNetworkImage(
+                      imageUrl: datos.portada!,
+                      fit: BoxFit.cover,
+                      errorWidget: (_, __, ___) => const _SinFoto(),
+                    )
+                  : const _SinFoto(),
             ),
-            child: Icon(datos.icono, size: 22, color: AppColor.textoSuave),
           ),
           const SizedBox(width: Gap.md),
           Expanded(
@@ -334,7 +359,7 @@ class _TarjetaProducto extends ConsumerWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  datos.producto,
+                  datos.nombre,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
@@ -342,25 +367,33 @@ class _TarjetaProducto extends ConsumerWidget {
                 const SizedBox(height: 2),
                 Row(
                   children: [
-                    Text(
-                      datos.precio,
-                      style: const TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: -0.5,
+                    Flexible(
+                      child: Text(
+                        datos.precio,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.5,
+                        ),
                       ),
                     ),
-                    if (datos.stock <= 5) ...[
-                      const SizedBox(width: Gap.sm),
-                      // La escasez es real, no un truco: en un vivo el stock se
-                      // agota de verdad y avisar evita la peor experiencia
-                      // posible, que es comprar algo que ya no está.
-                      Text(
-                        'Quedan ${datos.stock}',
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: AppColor.alerta,
-                          fontWeight: FontWeight.w600,
+                    if (datos.descuento != null) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: AppColor.exito,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          '-${datos.descuento}%',
+                          style: const TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                            color: Colors.white,
+                          ),
                         ),
                       ),
                     ],
@@ -397,9 +430,21 @@ class _TarjetaProducto extends ConsumerWidget {
   }
 }
 
+class _SinFoto extends StatelessWidget {
+  const _SinFoto();
+
+  @override
+  Widget build(BuildContext context) {
+    return const ColoredBox(
+      color: AppColor.superficieAlta,
+      child: Icon(Icons.image_outlined, size: 20, color: AppColor.textoSuave),
+    );
+  }
+}
+
 class _AccionesLaterales extends StatefulWidget {
   const _AccionesLaterales({required this.publicacion});
-  final _Ejemplo publicacion;
+  final PublicacionFeed publicacion;
 
   @override
   State<_AccionesLaterales> createState() => _AccionesLateralesState();
@@ -409,6 +454,14 @@ class _AccionesLateralesState extends State<_AccionesLaterales> {
   bool _meGusta = false;
 
   @override
+  void didUpdateWidget(_AccionesLaterales anterior) {
+    super.didUpdateWidget(anterior);
+    // Al cambiar de publicación el "me gusta" se reinicia. Sin esto, el corazón
+    // quedaría marcado en la siguiente sin que nadie lo haya tocado.
+    if (anterior.publicacion.id != widget.publicacion.id) _meGusta = false;
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -416,19 +469,33 @@ class _AccionesLateralesState extends State<_AccionesLaterales> {
         _Accion(
           icono: _meGusta ? Icons.favorite_rounded : Icons.favorite_border_rounded,
           color: _meGusta ? AppColor.acento : Colors.white,
-          etiqueta: _miles(widget.publicacion.likes + (_meGusta ? 1 : 0)),
+          etiqueta: 'Me gusta',
           onTap: () => setState(() => _meGusta = !_meGusta),
         ),
         const SizedBox(height: Gap.lg),
         _Accion(
           icono: Icons.mode_comment_outlined,
-          etiqueta: _miles(widget.publicacion.comentarios),
-          onTap: () {},
+          etiqueta: 'Comentar',
+          onTap: () => AppSnack.info(context, 'Los comentarios llegan con el chat del vivo.'),
         ),
         const SizedBox(height: Gap.lg),
-        _Accion(icono: Icons.share_outlined, etiqueta: 'Enviar', onTap: () {}),
+        _Accion(
+          icono: Icons.share_outlined,
+          etiqueta: 'Enviar',
+          onTap: () => AppSnack.info(
+            context,
+            'vendox.com/${widget.publicacion.tiendaSlug}',
+          ),
+        ),
         const SizedBox(height: Gap.lg),
-        _Accion(icono: Icons.storefront_outlined, etiqueta: 'Tienda', onTap: () {}),
+        _Accion(
+          icono: Icons.storefront_outlined,
+          etiqueta: 'Tienda',
+          onTap: () => AppSnack.info(
+            context,
+            'La tienda de ${widget.publicacion.tiendaNombre} llega con la vidriera pública.',
+          ),
+        ),
       ],
     );
   }
@@ -474,79 +541,89 @@ class _Accion extends StatelessWidget {
   }
 }
 
-String _miles(int n) {
-  if (n < 1000) return '$n';
-  final v = (n / 1000).toStringAsFixed(n % 1000 >= 100 ? 1 : 0);
-  return '${v.replaceAll('.', ',')} mil';
+/// Todavía no hay nada publicado.
+///
+/// No se rellena con productos de ejemplo. Un catálogo falso hace que el
+/// vendedor crea que la app ya tiene contenido y no publique el suyo — que es
+/// justamente lo único que puede llenar este feed hoy.
+class _FeedVacio extends ConsumerWidget {
+  const _FeedVacio();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(Gap.xl),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 72,
+              height: 72,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(colors: [AppColor.acento, AppColor.acentoOscuro]),
+                borderRadius: BorderRadius.circular(Redondeo.lg),
+              ),
+              child: const Icon(Icons.storefront_rounded, size: 34, color: Colors.white),
+            ),
+            const SizedBox(height: Gap.xl),
+            Text('Todavía no hay nada acá', style: Theme.of(context).textTheme.headlineSmall),
+            const SizedBox(height: Gap.sm),
+            const Text(
+              'Sé el primero en publicar. Creás tu tienda en un paso y tu '
+              'producto aparece en este feed.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppColor.textoSuave, fontSize: 15, height: 1.5),
+            ),
+            const SizedBox(height: Gap.xl),
+            FilledButton(
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(builder: (_) => const SellerHomeScreen()),
+              ),
+              child: const Text('Empezar a vender'),
+            ),
+            const SizedBox(height: Gap.sm),
+            TextButton(
+              onPressed: () => ref.read(feedProvider.notifier).recargar(),
+              child: const Text('Actualizar'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
-// ─── Contenido de ejemplo ───────────────────────────────────────────────────
-//
-// Se marca claramente como ejemplo. Un feed vacío no permite evaluar el diseño,
-// y una pantalla en blanco esconde exactamente los problemas de legibilidad y
-// jerarquía que hay que resolver ahora.
+class _ErrorDeFeed extends StatelessWidget {
+  const _ErrorDeFeed({required this.mensaje, required this.onReintentar});
+  final String mensaje;
+  final VoidCallback onReintentar;
 
-class _Ejemplo {
-  const _Ejemplo({
-    required this.vendedor,
-    required this.descripcion,
-    required this.producto,
-    required this.precio,
-    required this.stock,
-    required this.likes,
-    required this.comentarios,
-    required this.enVivo,
-    required this.icono,
-    required this.colores,
-  });
-
-  final String vendedor;
-  final String descripcion;
-  final String producto;
-  final String precio;
-  final int stock;
-  final int likes;
-  final int comentarios;
-  final bool enVivo;
-  final IconData icono;
-  final List<Color> colores;
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(Gap.xl),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.cloud_off_rounded, size: 40, color: AppColor.textoDebil),
+            const SizedBox(height: Gap.lg),
+            const Text(
+              'No pudimos cargar el feed',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: Gap.sm),
+            Text(
+              mensaje,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: AppColor.textoSuave, fontSize: 13.5),
+            ),
+            const SizedBox(height: Gap.xl),
+            OutlinedButton(onPressed: onReintentar, child: const Text('Reintentar')),
+          ],
+        ),
+      ),
+    );
+  }
 }
-
-const _ejemplos = <_Ejemplo>[
-  _Ejemplo(
-    vendedor: 'Tejidos del Sur',
-    descripcion: 'Últimos sweaters de lana patagónica 🧶 Envío a todo el país',
-    producto: 'Sweater lana merino · Talle M',
-    precio: '\$ 42.900',
-    stock: 3,
-    likes: 1284,
-    comentarios: 96,
-    enVivo: true,
-    icono: Icons.checkroom_rounded,
-    colores: [Color(0xFF3A1C2E), Color(0xFF0D0508)],
-  ),
-  _Ejemplo(
-    vendedor: 'Cuero Argentino',
-    descripcion: 'Mochilas hechas a mano en San Telmo. Mirá el interior 👜',
-    producto: 'Mochila cuero vacuno',
-    precio: '\$ 89.500',
-    stock: 12,
-    likes: 3410,
-    comentarios: 218,
-    enVivo: false,
-    icono: Icons.backpack_rounded,
-    colores: [Color(0xFF2B2013), Color(0xFF0A0705)],
-  ),
-  _Ejemplo(
-    vendedor: 'Verde Vivero',
-    descripcion: 'Suculentas y macetas de cerámica esmaltada 🌵',
-    producto: 'Kit 3 suculentas + maceta',
-    precio: '\$ 18.700',
-    stock: 2,
-    likes: 842,
-    comentarios: 51,
-    enVivo: true,
-    icono: Icons.local_florist_rounded,
-    colores: [Color(0xFF13291C), Color(0xFF040A07)],
-  ),
-];

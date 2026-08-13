@@ -1,0 +1,270 @@
+import 'dart:io';
+
+import 'package:dio/dio.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:http_parser/http_parser.dart';
+
+import '../../../core/network/api_client.dart';
+import '../../auth/state/auth_providers.dart';
+import '../domain/seller_models.dart';
+
+/// Cliente del bloque comercial.
+///
+/// ─── Nunca manda ids de pertenencia ───
+///
+/// No hay `sellerId` ni `storeId` de dueño en ningún cuerpo. El backend los
+/// deriva del token. Si esta clase los enviara, el backend los ignoraría — y
+/// alguien podría creer que sirven para algo.
+class SellerRepository {
+  SellerRepository(this._api);
+  final ApiClient _api;
+
+  // ─── Vendedor ─────────────────────────────────────────────────────────────
+
+  /// Perfil propio. `null` si el usuario todavía no es vendedor.
+  Future<PerfilVendedor?> miPerfil() async {
+    final res = await _api.get<Map<String, dynamic>>('/sellers/me');
+    if (res.statusCode == 404) return null;
+    if (res.statusCode != 200 || res.data == null) throw _error(res);
+    return PerfilVendedor.fromJson(res.data!);
+  }
+
+  Future<PerfilVendedor> crearVendedor({
+    required String displayName,
+    String? storeName,
+    String? bio,
+  }) async {
+    final res = await _api.post<Map<String, dynamic>>('/sellers', data: {
+      'displayName': displayName,
+      if (storeName != null && storeName.isNotEmpty) 'storeName': storeName,
+      if (bio != null && bio.isNotEmpty) 'bio': bio,
+    });
+    if (res.statusCode != 201 && res.statusCode != 200) throw _error(res);
+    // Devuelve { seller, store }: se rearma con la forma del perfil.
+    return PerfilVendedor.fromJson({...res.data!, 'stats': {'productos': 0}});
+  }
+
+  Future<Seller> actualizarVendedor({String? displayName, String? bio}) async {
+    final res = await _api.patch<Map<String, dynamic>>('/sellers/me', data: {
+      if (displayName != null) 'displayName': displayName,
+      if (bio != null) 'bio': bio,
+    });
+    if (res.statusCode != 200) throw _error(res);
+    return Seller.fromJson(res.data!);
+  }
+
+  Future<Store> actualizarTienda(
+    String storeId, {
+    String? name,
+    String? description,
+    String? status,
+  }) async {
+    final res = await _api.patch<Map<String, dynamic>>('/stores/$storeId', data: {
+      if (name != null) 'name': name,
+      if (description != null) 'description': description,
+      if (status != null) 'status': status,
+    });
+    if (res.statusCode != 200) throw _error(res);
+    return Store.fromJson(res.data!);
+  }
+
+  // ─── Productos ────────────────────────────────────────────────────────────
+
+  Future<Pagina<Producto>> misProductos({String? cursor, int limit = 20}) async {
+    final res = await _api.get<Map<String, dynamic>>('/products/mine', query: {
+      'limit': limit,
+      if (cursor != null) 'cursor': cursor,
+    });
+    if (res.statusCode != 200 || res.data == null) throw _error(res);
+
+    return Pagina(
+      items: (res.data!['items'] as List<dynamic>)
+          .map((e) => Producto.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      nextCursor: res.data!['nextCursor'] as String?,
+    );
+  }
+
+  Future<Producto> producto(String id) async {
+    final res = await _api.get<Map<String, dynamic>>('/products/$id');
+    if (res.statusCode != 200 || res.data == null) throw _error(res);
+    return Producto.fromJson(res.data!);
+  }
+
+  /// Crea un producto.
+  ///
+  /// `opciones` es `{ "Color": ["Negro","Blanco"] }`. Si viene vacío, el
+  /// backend genera una variante DEFAULT: la app no tiene que saber nada de eso.
+  Future<Producto> crearProducto({
+    required String name,
+    required int basePriceCents,
+    String? description,
+    int? compareAtPriceCents,
+    Map<String, List<String>> opciones = const {},
+    String status = 'DRAFT',
+  }) async {
+    final res = await _api.post<Map<String, dynamic>>('/products', data: {
+      'name': name,
+      'basePriceCents': basePriceCents,
+      if (description != null && description.isNotEmpty) 'description': description,
+      if (compareAtPriceCents != null) 'compareAtPriceCents': compareAtPriceCents,
+      'status': status,
+      'options': opciones.entries
+          .where((e) => e.value.isNotEmpty)
+          .map((e) => {'name': e.key, 'values': e.value})
+          .toList(),
+    });
+    if (res.statusCode != 201 && res.statusCode != 200) throw _error(res);
+    return Producto.fromJson(res.data!);
+  }
+
+  Future<Producto> actualizarProducto(
+    String id, {
+    String? name,
+    String? description,
+    int? basePriceCents,
+    int? compareAtPriceCents,
+    String? status,
+  }) async {
+    final res = await _api.patch<Map<String, dynamic>>('/products/$id', data: {
+      if (name != null) 'name': name,
+      if (description != null) 'description': description,
+      if (basePriceCents != null) 'basePriceCents': basePriceCents,
+      if (compareAtPriceCents != null) 'compareAtPriceCents': compareAtPriceCents,
+      if (status != null) 'status': status,
+    });
+    if (res.statusCode != 200) throw _error(res);
+    return Producto.fromJson(res.data!);
+  }
+
+  Future<void> borrarProducto(String id) async {
+    final res = await _api.delete<Map<String, dynamic>>('/products/$id');
+    if (res.statusCode != 200) throw _error(res);
+  }
+
+  // ─── Variantes ────────────────────────────────────────────────────────────
+
+  Future<Producto> actualizarVariante(
+    String productId,
+    String variantId, {
+    String? sku,
+    int? priceOverrideCents,
+    String? status,
+  }) async {
+    final res = await _api.patch<Map<String, dynamic>>(
+      '/products/$productId/variants/$variantId',
+      data: {
+        if (sku != null) 'sku': sku,
+        if (priceOverrideCents != null) 'priceOverrideCents': priceOverrideCents,
+        if (status != null) 'status': status,
+      },
+    );
+    if (res.statusCode != 200) throw _error(res);
+    return Producto.fromJson(res.data!);
+  }
+
+  // ─── Imágenes ─────────────────────────────────────────────────────────────
+
+  /// Sube una foto.
+  ///
+  /// Se manda como multipart. El nombre del archivo viaja pero **el backend no
+  /// lo usa como ruta**: genera el suyo y detecta el tipo por los bytes.
+  Future<ImagenProducto> subirImagen(String productId, File archivo) async {
+    final form = FormData.fromMap({
+      'file': await MultipartFile.fromFile(
+        archivo.path,
+        filename: archivo.path.split(Platform.pathSeparator).last,
+        contentType: MediaType('image', 'jpeg'),
+      ),
+    });
+
+    final res = await _api.raw.post<Map<String, dynamic>>(
+      '/products/$productId/images',
+      data: form,
+      // Subir una foto por una red móvil argentina puede tardar. Un timeout
+      // corto acá se traduce en "no pude publicar mi producto".
+      options: Options(sendTimeout: const Duration(seconds: 90), receiveTimeout: const Duration(seconds: 90)),
+    );
+    if (res.statusCode != 201 && res.statusCode != 200) throw _error(res);
+    return ImagenProducto.fromJson(res.data!);
+  }
+
+  Future<void> borrarImagen(String productId, String imageId) async {
+    final res = await _api.delete<Map<String, dynamic>>(
+      '/products/$productId/images/$imageId',
+    );
+    if (res.statusCode != 200) throw _error(res);
+  }
+
+  Future<List<ImagenProducto>> reordenarImagenes(String productId, List<String> ids) async {
+    final res = await _api.patch<List<dynamic>>(
+      '/products/$productId/images/reorder',
+      data: {'imageIds': ids},
+    );
+    if (res.statusCode != 200) throw _error(res);
+    return (res.data ?? [])
+        .map((e) => ImagenProducto.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  // ─── Vidriera pública ─────────────────────────────────────────────────────
+
+  Future<Pagina<Producto>> productosDeTienda(String storeSlug, {String? cursor}) async {
+    final res = await _api.get<Map<String, dynamic>>(
+      '/stores/by-slug/$storeSlug/products',
+      query: {if (cursor != null) 'cursor': cursor},
+      sinAuth: true,
+    );
+    if (res.statusCode != 200 || res.data == null) throw _error(res);
+    return Pagina(
+      items: (res.data!['items'] as List<dynamic>)
+          .map((e) => Producto.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      nextCursor: res.data!['nextCursor'] as String?,
+    );
+  }
+
+  /// Mensaje del backend, siempre.
+  ///
+  /// Es el único lugar donde los errores están traducidos. Duplicar esos
+  /// textos acá garantizaría que un día digan cosas distintas.
+  ComercioException _error(Response<dynamic> res) {
+    final d = res.data;
+    if (d is Map && d['error'] is Map) {
+      final msg = (d['error'] as Map)['message'];
+      final detalles = (d['error'] as Map)['details'];
+      if (detalles is List && detalles.isNotEmpty) {
+        final primero = detalles.first;
+        if (primero is Map && primero['message'] is String) {
+          return ComercioException(primero['message'] as String);
+        }
+      }
+      if (msg is String && msg.isNotEmpty) return ComercioException(msg);
+    }
+    return ComercioException('No se pudo completar la operación.');
+  }
+}
+
+class ComercioException implements Exception {
+  ComercioException(this.mensaje);
+  final String mensaje;
+  @override
+  String toString() => mensaje;
+}
+
+final sellerRepositoryProvider = Provider<SellerRepository>(
+  (ref) => SellerRepository(ref.watch(apiClientProvider)),
+);
+
+/// Perfil de vendedor del usuario actual. `null` si todavía no lo es.
+final miPerfilVendedorProvider = FutureProvider<PerfilVendedor?>((ref) async {
+  // Se recalcula al cambiar la sesión: si alguien cierra sesión y entra con
+  // otra cuenta, no puede seguir viendo la tienda de la anterior.
+  ref.watch(sesionProvider);
+  return ref.watch(sellerRepositoryProvider).miPerfil();
+});
+
+final misProductosProvider = FutureProvider<Pagina<Producto>>((ref) async {
+  ref.watch(miPerfilVendedorProvider);
+  return ref.watch(sellerRepositoryProvider).misProductos();
+});

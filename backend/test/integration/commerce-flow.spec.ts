@@ -1,3 +1,4 @@
+import multipart from '@fastify/multipart';
 import { VersioningType, type INestApplication } from '@nestjs/common';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
@@ -55,6 +56,22 @@ beforeAll(async () => {
   app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
   app.setGlobalPrefix('api', { exclude: ['health', 'ready', 'metrics', 'webhooks/(.*)'] });
   app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
+
+  /**
+   * Multipart, con los MISMOS límites que `main.ts`.
+   *
+   * Sin esto Fastify no tiene parser para `multipart/form-data` y devuelve 415
+   * antes de llegar al controlador — el test estaría probando un servidor que
+   * no es el que corre en producción, que es peor que no tener test.
+   *
+   * Los límites se repiten a propósito en vez de importarse: si un día alguien
+   * los baja en `main.ts` y acá siguen altos, el test de "archivo demasiado
+   * grande" pasaría contra un servidor que ya lo rechaza antes.
+   */
+  await (app as NestFastifyApplication).register(multipart, {
+    limits: { fileSize: 10 * 1024 * 1024, files: 1, fields: 10, fieldSize: 4 * 1024 },
+  });
+
   await app.init();
   await (app as NestFastifyApplication).getHttpAdapter().getInstance().ready();
 
@@ -129,6 +146,67 @@ async function nuevoVendedor(displayName?: string) {
   });
   expect(r.status, JSON.stringify(r.body)).toBe(201);
   return { token, userId, seller: r.body.seller, store: r.body.store };
+}
+
+/**
+ * Sube un archivo como lo haría el teléfono.
+ *
+ * Se arma el multipart a mano en vez de usar una librería: lo que se quiere
+ * ejercitar es el camino real —Fastify parsea el cuerpo, el servicio mira los
+ * bytes— y una librería que "arregle" el content-type o el nombre del archivo
+ * escondería justo los casos que hay que probar.
+ */
+async function subirArchivo(
+  token: string,
+  productId: string,
+  bytes: Buffer,
+  opts: { filename?: string; mimetype?: string } = {},
+) {
+  const boundary = '----vendoxtest0123456789';
+  const cabecera =
+    `--${boundary}\r\n` +
+    `Content-Disposition: form-data; name="file"; filename="${opts.filename ?? 'foto.jpg'}"\r\n` +
+    `Content-Type: ${opts.mimetype ?? 'image/jpeg'}\r\n\r\n`;
+
+  const payload = Buffer.concat([
+    Buffer.from(cabecera, 'utf8'),
+    bytes,
+    Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8'),
+  ]);
+
+  const res = await (app as NestFastifyApplication)
+    .getHttpAdapter()
+    .getInstance()
+    .inject({
+      method: 'POST',
+      url: `/api/v1/products/${productId}/images`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        'content-type': `multipart/form-data; boundary=${boundary}`,
+      },
+      payload,
+    });
+
+  return { status: res.statusCode, body: res.body ? JSON.parse(res.body) : null };
+}
+
+/** JPEG mínimo válido: SOI + APP0 + relleno + EOI. */
+function jpegDePrueba(): Buffer {
+  return Buffer.concat([
+    Buffer.from([
+      0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00,
+      0x01, 0x00, 0x01, 0x00, 0x00,
+    ]),
+    Buffer.alloc(128),
+    Buffer.from([0xff, 0xd9]),
+  ]);
+}
+
+function pngDePrueba(): Buffer {
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    Buffer.alloc(64),
+  ]);
 }
 
 async function crearProducto(token: string, extra: Record<string, unknown> = {}) {
@@ -610,6 +688,263 @@ describe('Borrado lógico y visibilidad pública', () => {
 
     const r = await call('GET', `/api/v1/stores/by-slug/${store.slug}/products`);
     expect(r.status).toBe(404);
+  });
+});
+
+describe('Límite de peticiones en endpoints con sesión', () => {
+  it('⛔ el contador es POR USUARIO, no por IP', async () => {
+    /**
+     * Todos los usuarios de este test salen de la misma IP —127.0.0.1—, igual
+     * que salen de la misma IP todos los abonados detrás del CGNAT de una
+     * operadora móvil argentina.
+     *
+     * `POST /sellers` permite 3 por hora. Si el contador fuera por IP, el
+     * cuarto vendedor de este archivo no podría abrir su tienda. Y en
+     * producción, la cuarta persona de un bloque entero de abonados tampoco.
+     *
+     * Este test existe porque eso pasaba: `RateLimitGuard` corre antes que
+     * `AuthGuard`, así que `req.user` todavía no está y la clave caía a la IP
+     * sin que nada lo delatara.
+     */
+    const estados: number[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      const { token } = await nuevoUsuario();
+      const r = await call('POST', '/api/v1/sellers', {
+        token,
+        body: { displayName: `Tienda cgnat ${i}-${n}` },
+      });
+      estados.push(r.status);
+    }
+
+    expect(estados.every((s) => s === 201)).toBe(true);
+  });
+
+  it('sigue limitando al mismo usuario que insiste', async () => {
+    // La protección tiene que seguir existiendo: por usuario, pero existir.
+    const { token } = await nuevoUsuario();
+
+    const estados: number[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      const r = await call('POST', '/api/v1/sellers', {
+        token,
+        body: { displayName: `Insistente ${i}-${n}` },
+      });
+      estados.push(r.status);
+    }
+
+    // El primero crea; los siguientes chocan contra "ya tenés un vendedor"
+    // (409) hasta que el límite de 3 por hora los corta con 429.
+    expect(estados[0]).toBe(201);
+    expect(estados).toContain(429);
+  });
+});
+
+describe('Imágenes de producto', () => {
+  // Es el único endpoint que recibe bytes arbitrarios de internet. Todo lo que
+  // se prueba acá es lo que impide que ese archivo se convierta en un problema.
+
+  it('sube una imagen y la primera queda de portada', async () => {
+    const { token } = await nuevoVendedor();
+    const p = await crearProducto(token);
+
+    const r = await subirArchivo(token, p.id, jpegDePrueba());
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(r.body.position).toBe(0);
+    expect(r.body.url).toContain('/media/');
+  });
+
+  it('acepta PNG además de JPEG', async () => {
+    const { token } = await nuevoVendedor();
+    const p = await crearProducto(token);
+
+    const r = await subirArchivo(token, p.id, pngDePrueba(), { mimetype: 'image/png' });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+  });
+
+  it('⛔ rechaza un ejecutable disfrazado de JPEG', async () => {
+    // El content-type lo elige quien sube. Si se confiara en él, bastaría con
+    // mentir en una cabecera para dejar un .exe servido desde nuestro dominio.
+    const { token } = await nuevoVendedor();
+    const p = await crearProducto(token);
+
+    const exe = Buffer.concat([Buffer.from([0x4d, 0x5a, 0x90, 0x00]), Buffer.alloc(64)]);
+    const r = await subirArchivo(token, p.id, exe, {
+      filename: 'inocente.jpg',
+      mimetype: 'image/jpeg',
+    });
+
+    // 415 y no 400: el problema no es que la petición esté mal armada, es que
+    // el tipo de archivo no se acepta. Es la respuesta que corresponde.
+    expect(r.status).toBe(415);
+    expect(r.body.error.code).toBe('INVALID_FILE');
+  });
+
+  it('⛔ el nombre del archivo del cliente no se usa como ruta', async () => {
+    // `../../` en el filename escribiría fuera del directorio de storage.
+    const { token } = await nuevoVendedor();
+    const p = await crearProducto(token);
+
+    const r = await subirArchivo(token, p.id, jpegDePrueba(), {
+      filename: '../../../../etc/passwd.jpg',
+    });
+
+    expect(r.status).toBe(201);
+    expect(r.body.url).not.toContain('..');
+    expect(r.body.url).not.toContain('passwd');
+  });
+
+  it('⛔ no se puede subir una foto al producto de otro vendedor', async () => {
+    const a = await nuevoVendedor();
+    const b = await nuevoVendedor();
+    const suyo = await crearProducto(a.token);
+
+    const r = await subirArchivo(b.token, suyo.id, jpegDePrueba());
+    expect(r.status).toBe(404);
+  });
+
+  it('borrar una foto compacta las posiciones', async () => {
+    // Si quedara un hueco, la segunda foto tendría position 2 y el reordenado
+    // siguiente no tendría forma de saber cuál es la portada.
+    const { token } = await nuevoVendedor();
+    const p = await crearProducto(token);
+
+    const primera = await subirArchivo(token, p.id, jpegDePrueba());
+    await subirArchivo(token, p.id, jpegDePrueba());
+    await subirArchivo(token, p.id, jpegDePrueba());
+
+    await call('DELETE', `/api/v1/products/${p.id}/images/${primera.body.id}`, { token });
+
+    const imagenes = await prisma.productImage.findMany({
+      where: { productId: p.id },
+      orderBy: { position: 'asc' },
+      select: { position: true },
+    });
+    expect(imagenes.map((i) => i.position)).toEqual([0, 1]);
+  });
+
+  it('reordenar cambia la portada', async () => {
+    const { token } = await nuevoVendedor();
+    const p = await crearProducto(token);
+
+    const a = await subirArchivo(token, p.id, jpegDePrueba());
+    const b = await subirArchivo(token, p.id, jpegDePrueba());
+
+    const r = await call('PATCH', `/api/v1/products/${p.id}/images/reorder`, {
+      token,
+      body: { imageIds: [b.body.id, a.body.id] },
+    });
+    expect(r.status).toBe(200);
+
+    const portada = await prisma.productImage.findFirst({
+      where: { productId: p.id, position: 0 },
+      select: { id: true },
+    });
+    expect(portada!.id).toBe(b.body.id);
+  });
+
+  it('la foto llega al feed como portada', async () => {
+    const { token } = await nuevoVendedor();
+    const p = await crearProducto(token, { status: 'ACTIVE' });
+    const img = await subirArchivo(token, p.id, jpegDePrueba());
+
+    const r = await call('GET', '/api/v1/discover/products?limit=50');
+    const item = r.body.items.find((i: { id: string }) => i.id === p.id);
+    expect(item.images[0].url).toBe(img.body.url);
+  });
+});
+
+describe('Feed de descubrimiento', () => {
+  // Este endpoint es el único que cruza tiendas, y es el que ve alguien que
+  // todavía no se registró. Cualquier fuga acá es pública por definición.
+
+  it('es público: no hace falta sesión', async () => {
+    const { token } = await nuevoVendedor();
+    const p = await crearProducto(token, { status: 'ACTIVE' });
+
+    const r = await call('GET', '/api/v1/discover/products?limit=50');
+    expect(r.status).toBe(200);
+    expect(r.body.items.map((i: { id: string }) => i.id)).toContain(p.id);
+  });
+
+  it('cruza tiendas: trae productos de vendedores distintos', async () => {
+    const a = await nuevoVendedor();
+    const b = await nuevoVendedor();
+    const pa = await crearProducto(a.token, { status: 'ACTIVE' });
+    const pb = await crearProducto(b.token, { status: 'ACTIVE' });
+
+    const r = await call('GET', '/api/v1/discover/products?limit=50');
+    const ids = r.body.items.map((i: { id: string }) => i.id);
+    expect(ids).toContain(pa.id);
+    expect(ids).toContain(pb.id);
+  });
+
+  it('cada producto viene con su tienda y su vendedor', async () => {
+    // En el feed la marca la pone quien vende. Sin estos datos, la publicación
+    // no se puede ni dibujar.
+    const { token, seller, store } = await nuevoVendedor('Marca Del Feed');
+    const p = await crearProducto(token, { status: 'ACTIVE' });
+
+    const r = await call('GET', '/api/v1/discover/products?limit=50');
+    const item = r.body.items.find((i: { id: string }) => i.id === p.id);
+    expect(item).toBeDefined();
+    expect(item.store.slug).toBe(store.slug);
+    expect(item.store.seller.displayName).toBe(seller.displayName);
+  });
+
+  it('⛔ no expone datos internos del vendedor', async () => {
+    const { token } = await nuevoVendedor();
+    const p = await crearProducto(token, { status: 'ACTIVE' });
+
+    const r = await call('GET', '/api/v1/discover/products?limit=50');
+    const item = r.body.items.find((i: { id: string }) => i.id === p.id);
+    expect(item.store.seller.userId).toBeUndefined();
+    expect(item.store.seller.email).toBeUndefined();
+  });
+
+  it('⛔ un borrador nunca llega al feed', async () => {
+    const { token } = await nuevoVendedor();
+    const borrador = await crearProducto(token, { status: 'DRAFT' });
+
+    const r = await call('GET', '/api/v1/discover/products?limit=50');
+    expect(r.body.items.map((i: { id: string }) => i.id)).not.toContain(borrador.id);
+  });
+
+  it('⛔ suspender al vendedor le saca los productos del feed', async () => {
+    // El filtro por estado del vendedor no es redundante con el del producto:
+    // los productos siguen ACTIVE después de la suspensión.
+    const { token, seller } = await nuevoVendedor();
+    const p = await crearProducto(token, { status: 'ACTIVE' });
+
+    const antes = await call('GET', '/api/v1/discover/products?limit=50');
+    expect(antes.body.items.map((i: { id: string }) => i.id)).toContain(p.id);
+
+    await prisma.seller.update({ where: { id: seller.id }, data: { status: 'SUSPENDED' } });
+
+    const despues = await call('GET', '/api/v1/discover/products?limit=50');
+    expect(despues.body.items.map((i: { id: string }) => i.id)).not.toContain(p.id);
+  });
+
+  it('⛔ pausar la tienda le saca los productos del feed', async () => {
+    const { token, store } = await nuevoVendedor();
+    const p = await crearProducto(token, { status: 'ACTIVE' });
+
+    await call('PATCH', `/api/v1/stores/${store.id}`, { token, body: { status: 'PAUSED' } });
+
+    const r = await call('GET', '/api/v1/discover/products?limit=50');
+    expect(r.body.items.map((i: { id: string }) => i.id)).not.toContain(p.id);
+  });
+
+  it('pagina por cursor', async () => {
+    const { token } = await nuevoVendedor();
+    for (let i = 0; i < 3; i += 1) await crearProducto(token, { status: 'ACTIVE' });
+
+    const p1 = await call('GET', '/api/v1/discover/products?limit=2');
+    expect(p1.body.items).toHaveLength(2);
+    expect(p1.body.nextCursor).toBeTruthy();
+
+    const p2 = await call('GET', `/api/v1/discover/products?limit=2&cursor=${p1.body.nextCursor}`);
+    const ids = [...p1.body.items, ...p2.body.items].map((i: { id: string }) => i.id);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 });
 

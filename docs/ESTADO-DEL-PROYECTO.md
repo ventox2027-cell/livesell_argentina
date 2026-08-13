@@ -31,11 +31,12 @@ Tres principios que atraviesan todas las decisiones:
 | **Sprint 0B** · Mercado Pago | ✅ GO | Compra real acreditada, cero datos de tarjeta |
 | **Auth** | ✅ funcionando | Login con Google real verificado end-to-end |
 | App móvil (base) | ✅ instalable | Diseño, navegación, feed, perfil |
-| Sellers / Stores / Products | ⛔ no empezado | **Siguiente** |
-| Inventory / Reservation | ⛔ no empezado | |
+| **Sellers / Stores / Products / Variantes / Imágenes** | ✅ funcionando | Backend + Flutter. Catálogo real de punta a punta |
+| Feed (descubrimiento) | 🟡 parcial | Consume productos reales. Falta el video: llega con Live Sessions |
+| Inventory / Reservation | ⛔ no empezado | **Siguiente** |
 | Live Sessions / Realtime | ⛔ no empezado | |
 | Orders / Payments (producción) | ⛔ no empezado | El spike ya validó el camino |
-| Feed / Search / Notifications | ⛔ no empezado | |
+| Search / Notifications | ⛔ no empezado | |
 | Admin Lite | ⛔ no empezado | **Requisito previo al lanzamiento** |
 
 ---
@@ -315,14 +316,87 @@ desloguearía a la persona justo cuando menos ganas tiene de volver a entrar.
 
 | | Estado |
 |---|---|
-| Bienvenida | ✅ Google real + modo prueba + configurar servidor |
-| Feed vertical | ✅ estructura completa, **contenido de ejemplo** |
+| Bienvenida | ✅ Google real + modo prueba + configurar servidor · logo VendoX |
+| Feed vertical | ✅ **productos reales** del catálogo. Falta el video |
+| Panel del vendedor | ✅ crear tienda, listar productos, ajustes |
+| Editor de producto | ✅ nombre, precio, fotos, variantes, publicar |
 | Buscar / En vivo / Pedidos | 📋 pantallas que explican qué va a haber |
 | Perfil | ✅ funcional contra el backend |
 
 El feed se construyó **antes** que el video a propósito: la parte difícil de un
 feed de venta no es reproducir, es que en dos segundos se entienda qué se
 ofrece y cuánto sale.
+
+**El feed vacío no se rellena con ejemplos.** Un catálogo falso hace que el
+vendedor crea que la app ya tiene contenido y no publique el suyo — que hoy es
+lo único que puede llenarlo. En su lugar hay un estado vacío que invita a crear
+la tienda.
+
+---
+
+## 5b · Bloque comercial
+
+```
+Seller ──1:N── Store ──1:N── Product ──1:N── ProductVariant
+                                 │                  │
+                                 ├── ProductOption ─┤ (vía ProductVariantOption)
+                                 │      └── ProductOptionValue
+                                 └── ProductImage
+```
+
+### Las cuatro reglas que ordenan el módulo
+
+**1 · Todo producto tiene al menos una variante.** Uno "sin variantes" recibe una
+`DEFAULT` automática que el vendedor nunca ve. Sin esa regla habría dos
+arquitecturas de inventario conviviendo, y cada consulta de stock tendría que
+preguntar antes cuál aplica. Con la variante por defecto, Inventory apunta
+siempre a `productVariantId` y la pregunta no existe.
+
+**2 · La pertenencia va en el WHERE, nunca en un `if`.** No hay
+`findUnique(id)` seguido de comprobar el dueño: se busca
+`findFirst({ where: { id, store: { sellerId } } })`. Un IDOR deja de ser un
+chequeo que alguien puede olvidar y pasa a ser imposible de escribir mal.
+
+**3 · Un recurso ajeno responde 404, no 403.** Un 403 confirma que el id existe
+y permite enumerar catálogos ajenos probando ids.
+
+**4 · Las combinaciones de variantes las controla la base.** `optionsKey` es la
+lista de ids de valores ordenada y unida por `|`, con
+`@@unique([productId, optionsKey])`. Dos peticiones simultáneas no pueden crear
+la misma combinación aunque el código las deje pasar.
+
+### Endpoints
+
+```
+POST   /sellers                                  crea perfil + tienda (transacción)
+GET    /sellers/me
+PATCH  /sellers/me
+GET    /sellers/by-slug/:slug                    público
+
+GET    /stores/me
+PATCH  /stores/:id
+PATCH  /stores/:id/slug                          aparte: rompe enlaces compartidos
+GET    /stores/by-slug/:slug                     público
+GET    /stores/by-slug/:slug/products            público · vidriera
+
+GET    /discover/products                        público · el feed
+
+GET    /products/mine
+POST   /products
+GET    /products/:id
+PATCH  /products/:id
+DELETE /products/:id                             borrado lógico
+
+POST   /products/:id/variants
+PATCH  /products/:id/variants/:variantId
+DELETE /products/:id/variants/:variantId         nunca la última
+
+POST   /products/:id/images                      multipart · tipo por magic bytes
+DELETE /products/:id/images/:imageId
+PATCH  /products/:id/images/reorder
+```
+
+Ningún endpoint acepta `sellerId` ni `storeId` del cliente. Salen del token.
 
 ---
 
@@ -338,6 +412,8 @@ Ninguno lo hubiera encontrado un test. **Cinco habrían llegado a producción.**
 | 4 | El corte de video se medía con eventos de track | Error de **12×**, siempre hacia abajo |
 | 5 | `this` no era el CardForm | El formulario de pago se colgaba en silencio |
 | 6 | Errores de MP sin traducir | El comprador leía `invalid card_number_validation` |
+| 7 | El límite de peticiones caía a por-IP en **todos** los endpoints con sesión | `RateLimitGuard` corre antes que `AuthGuard`, así que `req.user` todavía no existe. Detrás del CGNAT de una operadora, **3 tiendas nuevas por hora para un bloque entero de abonados** |
+| 8 | El arranque de los tests no registraba `@fastify/multipart` | Los tests corrían contra un servidor distinto del real. Toda la subida de imágenes devolvía 415 en test y nadie lo notaba: **no había ni un test de imágenes** |
 
 **El patrón:** el error nunca estuvo en el camino feliz. Estuvo en qué pasa
 cuando algo se corta a la mitad, cuando el aviso llega tarde, o cuando llega dos
@@ -387,7 +463,7 @@ asumir que el camino feliz es el único que termina.
 | Compra completa | — | — | **1,8 s** ✅ |
 | Chat de extremo a extremo | ≤ 300 ms | 800 ms | sin medir |
 
-**Tests:** 219 en backend (unitarios + integración contra PostgreSQL real).
+**Tests:** 298 en backend (unitarios + integración contra PostgreSQL real).
 Typecheck, lint y `flutter analyze` en verde.
 
 ---
@@ -398,8 +474,8 @@ Typecheck, lint y `flutter analyze` en verde.
 - **Compra en dos clics** — `internal_error` de Mercado Pago (§3).
 
 ### Requiere decisión de producto
-- **¿Seguimos con el orden previsto?** Lo siguiente sería
-  **Sellers → Stores → Products**, que le da contenido real al feed.
+- **¿Seguimos con el orden previsto?** Con el catálogo cerrado, lo siguiente
+  sería **Inventory + Reservation**, que es lo que falta para poder vender.
 - **Time-to-first-frame de 4 s.** ¿Se investiga antes de seguir, o se mitiga con
   una miniatura y se posterga?
 - **Modelo de comisión** — no está definido en ningún lado todavía.
@@ -423,6 +499,30 @@ Typecheck, lint y `flutter analyze` en verde.
 9. **R5–R8 de resiliencia sin ejecutar** (viewer cambiando de red, ascensor,
    segundo plano, 30 min continuos).
 
+**Del bloque comercial:**
+
+10. **`R2StorageProvider` es un esqueleto.** Hoy las imágenes las sirve el propio
+    proceso de la API desde `storage/`, y sólo en desarrollo. Aceptable en local,
+    no en producción: cada foto ocupa una conexión del servidor de aplicación en
+    vez de salir por un CDN. La interfaz ya está separada, así que el cambio es
+    una clase y una variable de entorno.
+11. **Las imágenes se guardan tal cual llegan.** No se generan miniaturas ni se
+    recomprime del lado del servidor. El teléfono reduce a 1600 px antes de
+    subir, así que el problema no es urgente, pero el feed descarga la imagen
+    completa para mostrarla en 46 px.
+12. **La moderación de vendedores es reactiva y no tiene herramientas.** Un
+    vendedor nace `ACTIVE`; suspenderlo hoy es un `UPDATE` a mano. Es una
+    dependencia directa de Admin Lite.
+13. **El feed ordena por fecha, nada más.** No es un algoritmo y no pretende
+    serlo: con diez productos, cualquier ranking sería ruido. Cuando haya señal
+    —vistas, compras, sesiones en vivo— se reemplaza en `listDiscover`.
+14. **"Seguir" y "me gusta" son estado local de la pantalla.** No se persisten:
+    los botones están para que el diseño se pueda evaluar completo, pero no hay
+    tabla detrás todavía.
+15. **Cambiar el slug de la tienda tiene endpoint pero no interfaz.** Se dejó
+    aparte a propósito —rompe todos los enlaces ya compartidos— y merece una
+    confirmación explícita que todavía no está dibujada.
+
 ### Riesgos no técnicos, sin respuesta
 - **R3 · Mercado de dos lados vacío.** Sin vendedores no hay compradores. No se
   responde midiendo: se responde lanzando.
@@ -438,16 +538,17 @@ backend/
   src/config/         validación de entorno con Zod (mata el proceso si falla)
   src/modules/
     auth/             ✅ implementado
+    commerce/         ✅ sellers, stores, products, variantes, imágenes
     livekit/          tokens y webhooks
     spike/            Sprint 0A · se borra al cerrar el sprint
     payments/         Sprint 0B · mp-signature, order-state y el saneado
                       sobreviven al spike
   src/shared/         errores, guards, observabilidad, Prisma, Redis
   prisma/schema.prisma
-  test/               219 tests
+  test/               298 tests
 mobile/
   lib/core/           design, auth, network, config
-  lib/features/       auth, feed, profile, search, lives, orders, spike
+  lib/features/       auth, feed, seller, profile, search, lives, orders, spike
 db/                   esquema completo de referencia (se incorpora por módulo)
 docs/sprint-0/        RUNBOOKs y RESULTS con la evidencia medida
 tools/                reloj glass-to-glass, servidor de APK

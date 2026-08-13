@@ -143,6 +143,21 @@ export class CommerceController {
     return this.products.listPublicByStore(slug, query);
   }
 
+  // ─── Descubrimiento ───────────────────────────────────────────────────────
+
+  /**
+   * El feed. Público a propósito.
+   *
+   * Alguien que todavía no se registró tiene que poder ver qué se vende acá.
+   * Pedir sesión para mirar la vidriera es la forma más rápida de no tener
+   * usuarios: la cuenta se pide cuando quiere comprar, no antes.
+   */
+  @Public()
+  @Get('discover/products')
+  discover(@Query(new ZodValidationPipe(PageQuerySchema)) query: PageQueryDto) {
+    return this.products.listDiscover(query);
+  }
+
   // ─── Productos ────────────────────────────────────────────────────────────
 
   @Get('products/mine')

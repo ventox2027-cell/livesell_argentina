@@ -2,6 +2,10 @@ import { CanActivate, ExecutionContext, Injectable, SetMetadata, Logger } from '
 import { Reflector } from '@nestjs/core';
 import type { FastifyRequest } from 'fastify';
 
+// Este guard se registra en `AuthModule`, que también provee `JwtService`, así
+// que la dependencia se resuelve dentro del mismo módulo. No hay ciclo:
+// `jwt.service.ts` no conoce nada de `shared/http`.
+import { JwtService } from '@/modules/auth/jwt.service';
 import { DomainError } from '@/shared/errors/domain.error';
 import { RedisService } from '@/shared/redis/redis.service';
 
@@ -56,6 +60,7 @@ export class RateLimitGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly redis: RedisService,
+    private readonly jwt: JwtService,
   ) {}
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
@@ -68,7 +73,7 @@ export class RateLimitGuard implements CanActivate {
     if (!opciones) return true;
 
     const req = ctx.switchToHttp().getRequest<FastifyRequest & { user?: { id: string } }>();
-    const clave = this.clave(req, opciones);
+    const clave = await this.clave(req, opciones);
 
     const ahora = Date.now();
     const desde = ahora - opciones.windowSec * 1000;
@@ -120,10 +125,47 @@ export class RateLimitGuard implements CanActivate {
    * IP castigaría a todos los que comparten una salida a internet —una oficina,
    * una universidad, el CGNAT de una operadora móvil, que en Argentina es
    * moneda corriente— y en móvil eso es la mayoría de la gente.
+   *
+   * ─── Por qué el usuario se resuelve acá y no se lee de `req.user` ───
+   *
+   * Este guard corre ANTES que `AuthGuard`, a propósito: así un intento de
+   * fuerza bruta se rechaza sin gastar una verificación de firma ni una
+   * consulta a la base. El efecto colateral es que `req.user` todavía no
+   * existe, y leerlo de ahí hacía que TODOS los endpoints autenticados cayeran
+   * al límite por IP sin que se notara.
+   *
+   * Eso convertía la protección en un problema: `POST /sellers` permite 3 por
+   * hora, y detrás del CGNAT de una operadora eso es 3 tiendas nuevas por hora
+   * para un bloque entero de abonados. La cuarta persona del día veía
+   * "Demasiados intentos" sin haber intentado nada.
+   *
+   * Así que el token se verifica acá, pero sólo la firma: es un HMAC, cuesta
+   * microsegundos. Lo caro de `AuthGuard` —leer el rol de la base en cada
+   * petición— no se repite. Un token inválido o ausente cae a IP, que es
+   * justamente lo que se quiere para quien está probando credenciales.
    */
-  private clave(req: FastifyRequest & { user?: { id: string } }, o: RateLimitOptions): string {
+  private async clave(
+    req: FastifyRequest & { user?: { id: string } },
+    o: RateLimitOptions,
+  ): Promise<string> {
     const ambito = o.bucket ?? req.routeOptions?.url ?? req.url;
-    const sujeto = req.user?.id ? `u:${req.user.id}` : `ip:${req.ip}`;
+    const userId = req.user?.id ?? (await this.usuarioDelToken(req));
+    const sujeto = userId ? `u:${userId}` : `ip:${req.ip}`;
     return `rl:${ambito}:${sujeto}`;
+  }
+
+  /** `sub` del access token, o `null` si no hay uno válido. Nunca lanza. */
+  private async usuarioDelToken(req: FastifyRequest): Promise<string | null> {
+    const cabecera = req.headers.authorization;
+    if (!cabecera?.startsWith('Bearer ')) return null;
+
+    try {
+      const payload = await this.jwt.verifyAccessToken(cabecera.slice(7));
+      return payload.sub;
+    } catch {
+      // Token vencido, falsificado o basura. Se limita por IP: si alguien está
+      // probando tokens, no puede elegir su propia clave de contador.
+      return null;
+    }
   }
 }

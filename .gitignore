@@ -35,6 +35,12 @@ coverage/
 spike-results/*.json
 !spike-results/.gitkeep
 
+# ─── Imágenes subidas en desarrollo ───
+# `LocalStorageProvider` escribe acá las fotos de producto. Son datos de prueba
+# de cada máquina, no del proyecto — y en producción esto ni siquiera existe:
+# los archivos van a Cloudflare R2.
+backend/storage/
+
 # ─── Entorno local ───
 .DS_Store
 Thumbs.db

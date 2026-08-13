@@ -40,11 +40,36 @@ dependencies:
   google_fonts: ^8.2.1
   cached_network_image: ^3.4.1
   google_sign_in: ^7.2.0
+  http_parser: ^4.1.2
+  image_picker: ^1.2.3
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^5.0.0
+  flutter_launcher_icons: ^0.14.3
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/logo/
+
+# Ícono de la app.
+#
+# El logo viene con el fondo negro incorporado, que es lo correcto para el
+# ícono clásico. Para el adaptativo de Android hace falta separarlo: el sistema
+# recorta la capa de adelante contra una máscara —círculo, cuadrado redondeado,
+# gota, según el lanzador— y si el fondo viniera pegado a la imagen se vería el
+# borde del cuadrado recortado dentro del círculo.
+#
+# Por eso el fondo va como color plano y el logo se achica un 18 %: sin ese
+# margen, las puntas de la V y la X quedan fuera de la máscara circular.
+flutter_launcher_icons:
+  image_path: "assets/logo/vendox.png"
+  android: "ic_launcher"
+  adaptive_icon_background: "#000000"
+  adaptive_icon_foreground: "assets/logo/vendox.png"
+  adaptive_icon_foreground_inset: 18
+  ios: true
+  remove_alpha_ios: true
+  min_sdk_android: 24

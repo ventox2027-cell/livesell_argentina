@@ -1,0 +1,95 @@
+import 'package:flutter/material.dart';
+
+import '../../seller/domain/seller_models.dart';
+
+/// Una publicación del feed.
+///
+/// Es una vista aplanada de producto + tienda + vendedor. El feed no necesita
+/// el árbol completo —opciones, variantes, todas las fotos— y traerlo entero
+/// haría el scroll más pesado sin mostrar nada más.
+class PublicacionFeed {
+  const PublicacionFeed({
+    required this.id,
+    required this.nombre,
+    required this.precioCentavos,
+    required this.vendedor,
+    required this.tiendaSlug,
+    required this.tiendaNombre,
+    this.descripcion,
+    this.precioTachadoCentavos,
+    this.portada,
+    this.avatarUrl,
+    this.verificado = false,
+    this.variantes = 1,
+  });
+
+  factory PublicacionFeed.fromJson(Map<String, dynamic> j) {
+    final store = j['store'] as Map<String, dynamic>?;
+    final seller = store?['seller'] as Map<String, dynamic>?;
+    final imagenes = j['images'] as List<dynamic>? ?? const [];
+
+    return PublicacionFeed(
+      id: j['id'] as String,
+      nombre: j['name'] as String? ?? '',
+      precioCentavos: (j['basePriceCents'] as num?)?.toInt() ?? 0,
+      // Si el backend dejara de mandar la tienda, el feed no puede mostrar una
+      // publicación sin dueño: mejor un texto neutro que un hueco.
+      vendedor: seller?['displayName'] as String? ?? store?['name'] as String? ?? 'Vendedor',
+      tiendaSlug: store?['slug'] as String? ?? '',
+      tiendaNombre: store?['name'] as String? ?? '',
+      descripcion: j['description'] as String?,
+      precioTachadoCentavos: (j['compareAtPriceCents'] as num?)?.toInt(),
+      portada: imagenes.isEmpty ? null : (imagenes.first as Map<String, dynamic>)['url'] as String?,
+      avatarUrl: seller?['avatarUrl'] as String?,
+      verificado: seller?['verificationStatus'] == 'VERIFIED',
+      variantes: ((j['_count'] as Map<String, dynamic>?)?['variants'] as num?)?.toInt() ?? 1,
+    );
+  }
+
+  final String id;
+  final String nombre;
+  final int precioCentavos;
+  final String vendedor;
+  final String tiendaSlug;
+  final String tiendaNombre;
+  final String? descripcion;
+  final int? precioTachadoCentavos;
+  final String? portada;
+  final String? avatarUrl;
+  final bool verificado;
+  final int variantes;
+
+  String get precio => formatearPesos(precioCentavos);
+  String? get precioTachado =>
+      precioTachadoCentavos == null ? null : formatearPesos(precioTachadoCentavos!);
+
+  /// Porcentaje de descuento, si hay precio tachado y el ahorro se nota.
+  ///
+  /// Por debajo de 5 % no se muestra: un "-2 % OFF" resta credibilidad en vez
+  /// de sumarla.
+  int? get descuento {
+    final tachado = precioTachadoCentavos;
+    if (tachado == null || tachado <= precioCentavos) return null;
+    final pct = ((tachado - precioCentavos) * 100 / tachado).round();
+    return pct >= 5 ? pct : null;
+  }
+
+  /// Fondo mientras no hay video ni foto.
+  ///
+  /// Se deriva del id, así que el mismo producto tiene siempre el mismo color:
+  /// un color al azar en cada rebuild haría parpadear el feed al desplazarse.
+  List<Color> get coloresDeFondo {
+    const paletas = [
+      [Color(0xFF3A1C2E), Color(0xFF0D0508)],
+      [Color(0xFF2B2013), Color(0xFF0A0705)],
+      [Color(0xFF13291C), Color(0xFF040A07)],
+      [Color(0xFF1B2440), Color(0xFF05070D)],
+      [Color(0xFF2E1A3A), Color(0xFF08040A)],
+    ];
+    var suma = 0;
+    for (final unidad in id.codeUnits) {
+      suma += unidad;
+    }
+    return paletas[suma % paletas.length];
+  }
+}

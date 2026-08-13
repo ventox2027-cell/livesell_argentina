@@ -323,19 +323,34 @@ class _Marca extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        Container(
-          width: 40,
-          height: 40,
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(colors: [AppColor.acento, AppColor.acentoOscuro]),
-            borderRadius: BorderRadius.circular(Redondeo.md),
+        // El logo trae su propio fondo negro, que sobre esta pantalla oscura
+        // desaparece y deja sólo el neón. Por eso no lleva contenedor de color
+        // detrás: se lo comería.
+        ClipRRect(
+          borderRadius: BorderRadius.circular(Redondeo.md),
+          child: Image.asset(
+            'assets/logo/vendox.png',
+            width: 44,
+            height: 44,
+            // Los assets no fallan en tiempo de ejecución salvo que alguien los
+            // saque del pubspec. Si pasa, la bienvenida no puede romperse.
+            errorBuilder: (_, __, ___) => Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [AppColor.acento, AppColor.acentoOscuro],
+                ),
+                borderRadius: BorderRadius.circular(Redondeo.md),
+              ),
+              child: const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 26),
+            ),
           ),
-          child: const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 26),
         ),
         const SizedBox(width: Gap.md),
         const Text(
-          'Live Shopping',
-          style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, letterSpacing: -0.3),
+          'VendoX',
+          style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, letterSpacing: -0.4),
         ),
       ],
     );

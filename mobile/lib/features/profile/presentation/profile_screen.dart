@@ -6,6 +6,7 @@ import '../../../core/design/tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../auth/domain/session.dart';
 import '../../auth/state/auth_providers.dart';
+import '../../seller/presentation/seller_home_screen.dart';
 import '../../spike/presentation/home_screen.dart';
 import 'complete_profile_sheet.dart';
 
@@ -64,8 +65,10 @@ class ProfileScreen extends ConsumerWidget {
           _Fila(
             icono: Icons.storefront_outlined,
             texto: u.esVendedor ? 'Mi tienda' : 'Quiero vender',
-            detalle: u.esVendedor ? null : 'Empezá a transmitir',
-            onTap: () => AppSnack.info(context, 'Llega con el módulo Sellers.'),
+            detalle: u.esVendedor ? 'Productos y ajustes' : 'Creala en un paso',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const SellerHomeScreen()),
+            ),
           ),
 
           const SizedBox(height: Gap.xl),
