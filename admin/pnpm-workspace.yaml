@@ -1,0 +1,10 @@
+# Igual que en el backend: desde pnpm 10 los overrides y la lista de scripts de
+# instalación permitidos viven acá y no en package.json.
+#
+# `esbuild` y `unrs-resolver` traen binarios nativos que Next y su linter
+# necesitan. Sin habilitarlos, pnpm los bloquea y el build falla con un error
+# que no menciona pnpm por ningún lado.
+onlyBuiltDependencies:
+  - esbuild
+  - unrs-resolver
+  - sharp

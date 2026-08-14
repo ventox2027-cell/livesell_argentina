@@ -134,3 +134,40 @@ jobs:
       # defectos que las dos mitades, probadas por separado, no vieron.
       - name: Tests
         run: flutter test
+
+  admin:
+    name: Panel de administración
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: admin
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Sin `version:`: sale del campo `packageManager`. Ver la nota de arriba.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: admin/pnpm-lock.yaml
+
+      - name: Instalar
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      # El build es la verificación real de un frontend: typecheck y lint pasan
+      # con un componente que revienta al renderizar. `next build` prerrenderiza
+      # las páginas estáticas, así que un error en tiempo de render lo agarra.
+      - name: Build
+        run: pnpm build
+        env:
+          NEXT_PUBLIC_API_BASE_URL: http://localhost:3100
