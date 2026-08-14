@@ -46,6 +46,7 @@ export const ID_PREFIX = {
   refund: 'ref',
   address: 'adr',
   sellerPaymentAccount: 'spa',
+  sellerVerification: 'ver',
   auditLog: 'aud',
 } as const;
 

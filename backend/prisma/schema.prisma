@@ -807,6 +807,20 @@ model Seller {
   status             SellerStatus       @default(ACTIVE)
   verificationStatus VerificationStatus @default(UNVERIFIED) @map("verification_status")
 
+  // ─── Riesgo ───
+  //
+  // Denormalizado acá y no en una tabla aparte: el panel filtra y ordena por
+  // esto en cada listado, y una unión por vendedor se pagaría en todas las
+  // pantallas para un dato que cambia pocas veces por día.
+  //
+  // Se recalcula cuando cambia algo que lo afecta, no en cada lectura: evaluar
+  // las reglas consulta órdenes, devoluciones y sanciones, y hacerlo por fila
+  // en cada listado sería una consulta pesada multiplicada por veinte.
+  riskLevel      SellerRiskLevel @default(MEDIUM) @map("risk_level")
+  /// Por qué. Un nivel sin motivos no le sirve a quien tiene que decidir algo.
+  riskReasons    String[]        @default([]) @map("risk_reasons")
+  riskComputedAt DateTime?       @map("risk_computed_at")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -814,8 +828,10 @@ model Seller {
   stores          Store[]
   orders          Order[]
   paymentAccounts SellerPaymentAccount[]
+  verification    SellerVerification?
 
   @@index([status, createdAt])
+  @@index([riskLevel, status])
   @@map("sellers")
 }
 
@@ -1716,4 +1732,122 @@ enum SellerPaymentAccountStatus {
   CONNECTED
   EXPIRED
   REVOKED
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// VERIFICACIÓN DE VENDEDORES Y RIESGO
+//
+// ─── Las dos preguntas que NO son la misma ───
+//
+//   1. ¿Sabemos quién es esta persona?     → verificación de identidad
+//   2. ¿Es un buen vendedor?               → reputación y riesgo
+//
+// Mezclarlas es el error clásico. Alguien con DNI verificado puede estafar; y
+// alguien sin verificar puede llevar dos años vendiendo bien. Un solo campo
+// "confiable" mezclaría las dos cosas y no serviría para ninguna.
+//
+// Por eso son dos conceptos separados, con dos insignias distintas de cara al
+// comprador: **IDENTIDAD VERIFICADA** es un hecho comprobable; **VENDEDOR
+// CONFIABLE** es un historial. No deben mostrarse como lo mismo.
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum SellerVerificationState {
+  /// Todavía no mandó nada.
+  NOT_STARTED
+  /// Envió sus datos. Espera revisión.
+  PENDING
+  /// Alguien la está revisando.
+  IN_REVIEW
+  VERIFIED
+  REJECTED
+}
+
+/// Cuánto riesgo representa un vendedor. Tres niveles y con motivos: un puntaje
+/// de 0 a 100 sin explicación no le sirve a quien tiene que decidir algo.
+enum SellerRiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+model SellerVerification {
+  id       String @id // ver_<ulid>
+  sellerId String @unique @map("seller_id")
+
+  state SellerVerificationState @default(NOT_STARTED)
+
+  /// Nombre tal como figura en el documento. Puede diferir del nombre de la
+  /// cuenta, que viene de Google o Apple.
+  legalFirstName String? @map("legal_first_name")
+  legalLastName  String? @map("legal_last_name")
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // EL DOCUMENTO NO SE GUARDA COMPLETO. NUNCA.
+  //
+  // Se guarda un HMAC y los últimos cuatro dígitos, y nada más.
+  //
+  // ─── Por qué alcanza ───
+  //
+  //   · El hash permite detectar el mismo DNI en dos cuentas distintas, que es
+  //     una de las señales de fraude más fuertes que existen. Y lo hace sin que
+  //     el número esté en ningún lado.
+  //   · Los últimos cuatro alcanzan para que soporte confirme con la persona
+  //     que hablan del mismo documento.
+  //
+  // ─── Por qué no se guarda entero ───
+  //
+  // Porque un número de documento completo, en una base sin cifrado a nivel de
+  // columna, es exactamente el dato que convierte una filtración en un
+  // problema de identidad para gente real. Y hoy no lo necesitamos: no hay
+  // integración con RENAPER todavía, así que el número sólo existe durante la
+  // petición que lo envía.
+  //
+  // Cuando exista el proveedor real, se verifica EN ESE MOMENTO y se guarda el
+  // resultado, no el insumo. Si hiciera falta re-verificar, la persona lo
+  // vuelve a escribir.
+  // ───────────────────────────────────────────────────────────────────────────
+  docType       String? @map("doc_type")
+  docNumberHash String? @map("doc_number_hash")
+  docNumberLast4 String? @map("doc_number_last4")
+
+  /// CUIT/CUIL, con el mismo tratamiento.
+  taxIdHash  String? @map("tax_id_hash")
+  taxIdLast4 String? @map("tax_id_last4")
+
+  province String?
+  city     String?
+
+  // ─── Resultado de los proveedores externos ───
+  //
+  // Todavía NO hay integración con RENAPER ni ARCA. Estas columnas existen
+  // para que el adaptador se enchufe sin migración, y hoy las llena el
+  // proveedor manual: una persona del equipo revisando.
+  //
+  // No se inventa que la integración existe. `identityProvider = 'manual'` dice
+  // la verdad.
+  identityProvider  String?   @map("identity_provider")
+  identityCheckedAt DateTime? @map("identity_checked_at")
+  identityResult    String?   @map("identity_result")
+
+  taxProvider  String?   @map("tax_provider")
+  taxCheckedAt DateTime? @map("tax_checked_at")
+  taxResult    String?   @map("tax_result")
+
+  submittedAt     DateTime? @map("submitted_at")
+  reviewedAt      DateTime? @map("reviewed_at")
+  /// Qué admin la revisó. Para poder preguntarle.
+  reviewedBy      String?   @map("reviewed_by")
+  rejectionReason String?   @map("rejection_reason")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  seller Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  /// Para encontrar el mismo documento en dos cuentas. La señal de fraude más
+  /// directa que tenemos.
+  @@index([docNumberHash])
+  @@index([taxIdHash])
+  @@index([state, submittedAt])
+  @@map("seller_verifications")
 }

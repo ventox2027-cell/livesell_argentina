@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { OrdersModule } from '@/modules/orders/orders.module';
+import { SellersModule } from '@/modules/sellers/sellers.module';
 import { AuditService } from '@/shared/audit/audit.service';
 
 import { AdminSearchService } from './admin-search.service';
@@ -19,7 +20,7 @@ import { AdminService } from './admin.service';
  * dejan a nadie sabiendo cuál tiene razón.
  */
 @Module({
-  imports: [OrdersModule],
+  imports: [OrdersModule, SellersModule],
   controllers: [AdminController],
   providers: [AdminService, AdminSearchService, AdminTimelineService, AdminMetrics, AuditService],
 })

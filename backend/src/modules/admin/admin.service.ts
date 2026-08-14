@@ -298,7 +298,7 @@ export class AdminService {
   async verVendedorCompleto(id: string) {
     const s = await this.prisma.seller.findUnique({
       where: { id },
-      include: { user: true, stores: true },
+      include: { user: true, stores: true, verification: true },
     });
     if (!s) throw new NoEncontradoError('el vendedor');
 
@@ -331,6 +331,47 @@ export class AdminService {
     return {
       ...verVendedor(s),
       usuario: verUsuario(s.user),
+      /**
+       * El riesgo y sus motivos, que **sólo ve el admin**.
+       *
+       * Al vendedor no se le muestran: decirle "sos riesgo alto por estas cinco
+       * razones" es entregarle el mapa exacto de qué evitar, y quien está
+       * intentando defraudar es quien más provecho le saca. Lo que sí ve son sus
+       * límites, que son concretos y accionables.
+       */
+      riesgo: {
+        nivel: s.riskLevel,
+        motivos: s.riskReasons,
+        calculadoEl: s.riskComputedAt,
+      },
+      /**
+       * La verificación, enmascarada.
+       *
+       * El número de documento no está en la base: se guarda un HMAC y los
+       * últimos cuatro. Ni siquiera un admin puede verlo entero, porque no
+       * existe.
+       */
+      verificacion: s.verification
+        ? {
+            estado: s.verification.state,
+            nombreLegal:
+              `${s.verification.legalFirstName ?? ''} ${s.verification.legalLastName ?? ''}`.trim() ||
+              null,
+            documento: s.verification.docNumberLast4
+              ? `${s.verification.docType ?? 'DNI'} ····${s.verification.docNumberLast4}`
+              : null,
+            cuit: s.verification.taxIdLast4 ? `····${s.verification.taxIdLast4}` : null,
+            provincia: s.verification.province,
+            localidad: s.verification.city,
+            proveedorIdentidad: s.verification.identityProvider,
+            resultadoIdentidad: s.verification.identityResult,
+            resultadoFiscal: s.verification.taxResult,
+            enviadaEl: s.verification.submittedAt,
+            revisadaEl: s.verification.reviewedAt,
+            revisadaPor: s.verification.reviewedBy,
+            motivoRechazo: s.verification.rejectionReason,
+          }
+        : null,
       tiendas: s.stores.map((t) => ({
         id: t.id,
         nombre: t.name,

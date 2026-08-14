@@ -8,6 +8,9 @@ import { ZodValidationPipe } from '@/shared/http/zod-validation.pipe';
 
 import { AdminSearchService } from './admin-search.service';
 import { AdminTimelineService } from './admin-timeline.service';
+import { RiskService } from '@/modules/sellers/risk.service';
+ import { VerificationService } from '@/modules/sellers/verification.service';
+
 import { AdminService, type ActorAdmin } from './admin.service';
 import {
   AccionAdminSchema,
@@ -66,6 +69,8 @@ export class AdminController {
     private readonly admin: AdminService,
     private readonly search: AdminSearchService,
     private readonly timeline: AdminTimelineService,
+    private readonly verificacion: VerificationService,
+    private readonly riesgo: RiskService,
   ) {}
 
   // ─── Inicio y búsqueda ─────────────────────────────────────────────────────
@@ -172,6 +177,42 @@ export class AdminController {
     @Body(new ZodValidationPipe(AccionAdminSchema)) dto: AccionAdminDto,
   ) {
     return this.admin.cambiarEstadoVendedor(this.actor(req, actor), id, 'BLOCKED', dto.reason);
+  }
+
+  /**
+   * Toma una verificación para revisarla.
+   *
+   * Sin motivo: no es una acción sobre el vendedor, es marcar que uno la está
+   * mirando para que otro admin no la revise en paralelo. Exigir un motivo para
+   * eso enseñaría a escribir "reviso" y devaluaría el campo donde sí importa.
+   */
+  @Post('sellers/:id/verification/take')
+  tomarVerificacion(@CurrentUser() actor: AuthenticatedUser, @Param('id') id: string) {
+    return this.verificacion.tomarParaRevisar(actor.id, id);
+  }
+
+  @Post('sellers/:id/verification/approve')
+  aprobarVerificacion(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(AccionAdminSchema)) dto: AccionAdminDto,
+  ) {
+    return this.verificacion.resolver(actor.id, id, 'VERIFIED', dto.reason);
+  }
+
+  @Post('sellers/:id/verification/reject')
+  rechazarVerificacion(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(AccionAdminSchema)) dto: AccionAdminDto,
+  ) {
+    return this.verificacion.resolver(actor.id, id, 'REJECTED', dto.reason);
+  }
+
+  /** Recalcula el riesgo a mano. Útil cuando se corrigió algo fuera del flujo. */
+  @Post('sellers/:id/risk/recompute')
+  recalcularRiesgo(@Param('id') id: string) {
+    return this.riesgo.recalcular(id);
   }
 
   // ─── Productos ─────────────────────────────────────────────────────────────

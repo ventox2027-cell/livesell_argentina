@@ -401,6 +401,29 @@ export const envSchema = z
      */
     METRICS_TOKEN: optionalOrEmpty(z.string().min(16)),
 
+    // ─── Límites de vendedores por nivel de riesgo ──────────────────────────
+    //
+    // Configurables a propósito. Un `if (ordenes > 10)` dentro del servicio de
+    // órdenes sería imposible de ajustar sin desplegar, e imposible de
+    // encontrar el día que alguien pregunte por qué a un vendedor le rebotó
+    // una venta.
+    //
+    // ⚠️ Los límites NO son un bloqueo: un vendedor en riesgo alto vende, con
+    // techo. Frenar automáticamente por señales indirectas dejaría sin
+    // facturar a gente honesta que cambió de teléfono. Lo que frena de verdad
+    // es una suspensión, que la decide una persona.
+    //
+    // Los valores son criterio, no medición: todavía no hay historial del cual
+    // sacarlos. Se revisan cuando lo haya.
+
+    /** Riesgo medio: el caso corriente de un vendedor nuevo. */
+    SELLER_LIMIT_MEDIUM_ORDERS_PER_DAY: z.coerce.number().int().min(1).default(50),
+    SELLER_LIMIT_MEDIUM_GMV_PER_DAY: z.coerce.number().int().min(1).default(5_000_000), // $50.000
+
+    /** Riesgo alto: sigue vendiendo, con un techo que da tiempo a revisarlo. */
+    SELLER_LIMIT_HIGH_ORDERS_PER_DAY: z.coerce.number().int().min(1).default(10),
+    SELLER_LIMIT_HIGH_GMV_PER_DAY: z.coerce.number().int().min(1).default(1_000_000), // $10.000
+
     // ─── Almacenamiento de imágenes ─────────────────────────────────────────
 
     /**
