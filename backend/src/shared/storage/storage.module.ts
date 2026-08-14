@@ -31,7 +31,22 @@ import { LocalStorageProvider, StorageProvider } from '@/shared/storage/storage.
 // Observability necesite algo de acá.
 @Global()
 @Module({
-  controllers: [MediaController],
+  /**
+   * ⚠️ El controlador SÓLO se registra con `r2`.
+   *
+   * Con `local`, `main.ts` monta `@fastify/static` en `/media/` para servir los
+   * archivos del disco. Si además se registrara esto, habría dos manejadores
+   * para `GET /media/*` y Fastify **se niega a arrancar**:
+   *
+   *     FastifyError: Method 'GET' already declared for route '/media/*'
+   *
+   * No es un aviso ni una ruta que quede tapada: el proceso muere al iniciar.
+   * Y no se ve probando con `r2` —donde `fastifyStatic` no se registra y no hay
+   * conflicto—, sólo en local, que es justamente donde se desarrolla.
+   *
+   * Los dos caminos tienen que probarse. Ver `test/unit/storage-module.spec.ts`.
+   */
+  controllers: env.STORAGE_DRIVER === 'r2' ? [MediaController] : [],
   providers: [
     StorageMetrics,
     LocalStorageProvider,
