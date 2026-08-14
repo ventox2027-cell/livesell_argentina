@@ -422,3 +422,77 @@ Mi orden sugerido, si querés que siga sin parar:
 3. **Tercera cola** al final, que es la de desplegar.
 
 Si preferís otro orden, decímelo y arranco por ahí.
+
+---
+
+# Apéndice — Segunda cola, avance
+
+**Hasta:** `44c1c39`
+
+Terminada la primera cola, arranqué la segunda. Esto es lo que hay hasta ahora.
+
+## A. Búsqueda y ranking del feed — `b6055c9`
+
+**El ranking protege a los vendedores nuevos.** Un feed ordenado por
+popularidad se convierte en una máquina de hacer ricos a los ricos: a las dos
+semanas hay cinco vendedores en pantalla y el resto no existe. Para VendoX eso
+es la muerte del producto — la gente que vende acá vende tejidos y cosas hechas
+a mano.
+
+El orden es **frescura con un empujón por interés**. Hay un test que verifica
+que mil "me gusta" NO alcanzan para adelantar a algo de una semana antes, y
+otro que verifica que el interés SÍ reordena dentro del mismo día.
+
+El único empujón grande es un vivo en curso, y desaparece solo cuando termina.
+
+**La búsqueda usa full-text en castellano**, no `ILIKE`. "Zapatos" encuentra
+"zapato". Probado contra PostgreSQL de verdad: el stemmer no se puede probar
+con un mock.
+
+En la app se busca mientras se escribe pero **no en cada tecla**: diez letras,
+una petición.
+
+⚠️ Prisma no entiende las columnas generadas y va a proponer siempre un
+`ALTER COLUMN ... DROP DEFAULT` que falla. Está documentado en el schema.
+
+## B. Reportes y moderación — `44c1c39`
+
+Botón de reportar en el vivo, cola de revisión para el equipo, y ocultamiento
+preventivo por umbral.
+
+**El umbral depende del motivo.** Un reporte de contenido prohibido oculta al
+instante; el spam necesita cinco. "Parece una estafa" necesita tres, porque es
+de las cosas que más se reportan mal y bajarle la publicación a alguien
+acusándolo de estafa es de lo peor que le podés hacer a un vendedor honesto.
+
+**Un reporte no sanciona a nadie.** Ocultar es reversible y con aviso; suspender
+lo decide siempre una persona.
+
+**A quien reporta se le contesta siempre lo mismo.** Decirle "con el tuyo lo
+bajamos" convertiría el umbral en un juego.
+
+**Al vendedor se le dice qué pasó, nunca quién lo reportó.** Un vendedor que lo
+sabe puede represaliar, y entonces nadie reporta dos veces.
+
+El bug que este bloque impide: un producto se muestra en cinco lugares y cada
+uno tenía su filtro copiado. Ahora hay una sola definición y un test que
+comprueba que ocultar oculta en los cinco.
+
+## C. Estado
+
+```
+backend:  1008 tests · lint limpio · typecheck limpio
+mobile:   173 tests · analyze limpio
+```
+
+## D. Lo que sigue de la segunda cola
+
+Admin Lite V2 · analítica del vendedor · categorías · endurecer checkout ·
+snapshots de precio · seguridad de sesión · cambios críticos del vendedor ·
+18+ · favoritos · deep links · UX de error · offline · accesibilidad ·
+performance · observabilidad · separación de workers · retención · exportación ·
+borrar cuenta · draft de productos · página de tienda · onboarding · home del
+vendedor · timelines · WhatsApp/email · flags · E2E · caos · staging · CI ·
+runbooks · índices · carga · BETA_READINESS.md
+
+Y la tercera cola entera, que es la de desplegar.
