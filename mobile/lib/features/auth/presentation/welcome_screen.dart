@@ -151,9 +151,36 @@ class _WelcomeScreenState extends ConsumerState<WelcomeScreen> {
   }
 
   Future<void> _google() async {
-    final config = ref.read(authConfigProvider).valueOrNull;
-    final serverClientId = config?.googleServerClientId;
+    var config = ref.read(authConfigProvider).valueOrNull;
 
+    /**
+     * Si no se pudo leer la configuración, se vuelve a pedir ANTES de opinar.
+     *
+     * El caso real: la app arrancó con el teléfono todavía sin WiFi, o con el
+     * backend cayéndose. `authConfigProvider` cacheó una configuración vacía
+     * para toda la sesión, y el botón contestaba "Google no está configurado en
+     * este servidor" con el servidor andando perfectamente. La única salida era
+     * cerrar la app, y nada lo sugería.
+     */
+    if (config == null || !config.alcanzable) {
+      ref.invalidate(authConfigProvider);
+      config = await ref.read(authConfigProvider.future);
+    }
+
+    if (!mounted) return;
+    final leida = config ?? const AuthConfig.sinConexion();
+
+    // Dos problemas distintos, dos mensajes distintos. Antes eran el mismo, y
+    // el que se mostraba era el que mandaba a revisar el lugar equivocado.
+    if (!leida.alcanzable) {
+      AppSnack.error(
+        context,
+        'No pudimos conectarnos al servidor. Revisá la WiFi o cambiá la dirección abajo.',
+      );
+      return;
+    }
+
+    final serverClientId = leida.googleServerClientId;
     if (serverClientId == null || serverClientId.isEmpty) {
       AppSnack.info(
         context,
