@@ -28,14 +28,25 @@ async function bootstrap(): Promise<void> {
   await registrarMultipart(app);
 
   /**
-   * Imágenes de producto en desarrollo.
+   * Imágenes de producto desde disco. Sólo con `STORAGE_DRIVER=local`.
    *
-   * Servir archivos desde el proceso de la API es aceptable en local y NO en
+   * ─── Por qué la condición es el driver y no el entorno ───
+   *
+   * Antes miraba `NODE_ENV`. Eso era una suposición: que en desarrollo el
+   * almacenamiento siempre es disco. Desde que existe `STORAGE_DRIVER`, un
+   * desarrollador puede apuntar su entorno local a R2 para reproducir un
+   * problema — y en ese caso registrar esto acá capturaría `/media/*` antes que
+   * `MediaController`, que es quien tiene que responder. Las imágenes darían
+   * 404 sin ninguna pista de por qué.
+   *
+   * La regla correcta: sirve el disco quien esté usando el disco.
+   *
+   * Servir archivos desde el proceso de la API es aceptable en local y no en
    * producción: cada imagen ocupa una conexión del servidor de aplicación en
-   * vez de salir por un CDN. En producción las sirve Cloudflare R2 y esta ruta
-   * no existe.
+   * vez de salir por un CDN. Con `r2` esta ruta la atiende `MediaController`,
+   * que redirige en vez de transferir.
    */
-  if (isLocalEnv(env.NODE_ENV)) {
+  if (env.STORAGE_DRIVER === 'local') {
     await app.register(fastifyStatic, {
       root: `${process.cwd()}/storage`,
       prefix: '/media/',
@@ -62,6 +73,10 @@ async function bootstrap(): Promise<void> {
       { path: 'metrics', method: RequestMethod.GET },
       { path: 'webhooks/livekit', method: RequestMethod.POST },
       { path: 'webhooks/mercadopago', method: RequestMethod.POST },
+      // Las URLs de las imágenes se PERSISTEN en la base, incluidas las de los
+      // snapshots históricos de pedidos. Si algún día saliera /api/v2/, esas
+      // filas seguirían apuntando acá. Fuera del prefijo y del versionado.
+      { path: 'media/*', method: RequestMethod.GET },
       // La carga un WebView desde una URL que arma la app. Fuera del prefijo
       // para que no dependa de la versión de la API.
       { path: 'checkout', method: RequestMethod.GET },

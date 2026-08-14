@@ -33,7 +33,9 @@ export async function crearAppDePrueba(
   moduleRef: TestingModule,
 ): Promise<NestFastifyApplication> {
   const app = moduleRef.createNestApplication<NestFastifyApplication>(crearAdaptador());
-  app.setGlobalPrefix('api', { exclude: ['health', 'ready', 'metrics', 'webhooks/(.*)'] });
+  app.setGlobalPrefix('api', {
+    exclude: ['health', 'ready', 'metrics', 'webhooks/(.*)', 'media/(.*)'],
+  });
   app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
 
   await registrarMultipart(app);

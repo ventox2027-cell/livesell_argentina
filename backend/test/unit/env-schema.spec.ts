@@ -33,6 +33,13 @@ const VALID_STAGING = {
   // Los dos que la plataforma decide y nosotros sólo leemos.
   DEPLOYMENT_PROVIDER: 'ibm_code_engine',
   PORT: '8080',
+  // El disco del contenedor no se comparte entre instancias y se borra al
+  // apagarse, así que fuera de local el almacenamiento tiene que ser remoto.
+  STORAGE_DRIVER: 'r2',
+  R2_ACCESS_KEY_ID: 'clave-de-prueba',
+  R2_SECRET_ACCESS_KEY: 'secreto-de-prueba-largo',
+  R2_ENDPOINT: 'https://cuenta.r2.cloudflarestorage.com',
+  R2_BUCKET: 'vendox-products',
 };
 
 describe('envSchema', () => {
@@ -258,6 +265,49 @@ describe('envSchema', () => {
   it('⛔ rechaza /metrics sin token fuera de local', () => {
     const r = envSchema.safeParse({ ...VALID_STAGING, METRICS_TOKEN: '' });
     expect(r.success).toBe(false);
+  });
+
+  // ─── Almacenamiento de imágenes ───────────────────────────────────────────
+
+  it('⛔ rechaza STORAGE_DRIVER=r2 sin credenciales', () => {
+    /**
+     * Sin esta regla el proceso arranca, la app funciona entera, y el fallo
+     * aparece recién cuando un vendedor sube su primera foto — con un error de
+     * red de Cloudflare que no dice "falta una variable".
+     */
+    const { R2_ACCESS_KEY_ID: _, ...sinClave } = VALID_STAGING;
+    const r = envSchema.safeParse(sinClave);
+    expect(r.success).toBe(false);
+    expect(r.error?.issues.some((i) => i.path.includes('STORAGE_DRIVER'))).toBe(true);
+  });
+
+  it('⛔ rechaza el disco local fuera de local', () => {
+    // Con más de una instancia, la foto que sube un vendedor se ve o no según
+    // a qué máquina caiga la petición. Y al escalar a cero, el disco se borra.
+    const r = envSchema.safeParse({ ...VALID_STAGING, STORAGE_DRIVER: 'local' });
+    expect(r.success).toBe(false);
+  });
+
+  it('acepta r2 sin dominio público: se sirve por redirección firmada', () => {
+    // El estado de hoy. El bucket sigue privado y no hace falta inventar un
+    // dominio para que las imágenes se vean.
+    const r = envSchema.safeParse(VALID_STAGING);
+    expect(r.success).toBe(true);
+    expect(r.success && r.data.R2_PUBLIC_BASE_URL).toBeUndefined();
+  });
+
+  it('acepta r2 con dominio público, para cuando exista', () => {
+    const r = envSchema.safeParse({
+      ...VALID_STAGING,
+      R2_PUBLIC_BASE_URL: 'https://img.vendox.ar',
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('en desarrollo, el disco local es el default y no pide credenciales', () => {
+    const r = envSchema.parse(VALID);
+    expect(r.STORAGE_DRIVER).toBe('local');
+    expect(r.R2_ACCESS_KEY_ID).toBeUndefined();
   });
 
   it('deja todo esto pasar en desarrollo', () => {

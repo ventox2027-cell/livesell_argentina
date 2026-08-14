@@ -100,6 +100,26 @@ export interface ArchivoGuardado {
   sizeBytes: number;
 }
 
+/**
+ * El proveedor de almacenamiento no está disponible.
+ *
+ * Se distingue de `ArchivoInvalidoError` a propósito: uno es culpa de lo que
+ * mandaron y el otro es culpa nuestra. El primero es un 4xx y no hay que
+ * reintentarlo; el segundo es un 5xx y sí.
+ *
+ * El mensaje no menciona Cloudflare, R2 ni S3. Quién guarda nuestros archivos
+ * no es información que el cliente necesite, y saber qué proveedor hay detrás
+ * es el primer paso para buscarle vulnerabilidades conocidas.
+ */
+export class StorageUnavailableError extends DomainError {
+  constructor() {
+    super(
+      'STORAGE_UNAVAILABLE',
+      'No pudimos guardar la imagen en este momento. Probá de nuevo en un minuto.',
+    );
+  }
+}
+
 export abstract class StorageProvider {
   abstract guardar(params: {
     buffer: Buffer;
@@ -109,6 +129,23 @@ export abstract class StorageProvider {
   }): Promise<ArchivoGuardado>;
 
   abstract borrar(storageKey: string): Promise<void>;
+
+  /**
+   * La URL que se guarda en la base de datos.
+   *
+   * ⚠️ **Tiene que ser estable para siempre.** No es un detalle de
+   * implementación: `ProductImage.url` y `OrderItem.imageUrlSnapshot` se
+   * persisten, y el segundo es un snapshot histórico — lo que el comprador vio
+   * cuando compró.
+   *
+   * Guardar ahí una URL firmada sería sembrar imágenes rotas a plazo fijo: el
+   * historial de pedidos de todo el mundo se vaciaría solo al vencer las
+   * firmas, y nada lo avisaría hasta que alguien abriera una compra vieja.
+   *
+   * Por eso la firma, cuando hace falta, se genera al momento de servir la
+   * imagen y nunca se persiste. Ver `r2.provider.ts`.
+   */
+  abstract urlPublica(storageKey: string): string;
 
   /**
    * Nombre del archivo en el almacenamiento.
@@ -163,10 +200,14 @@ export class LocalStorageProvider extends StorageProvider {
 
     return {
       storageKey,
-      url: `${env.PUBLIC_BASE_URL}/media/${storageKey}`,
+      url: this.urlPublica(storageKey),
       mimeType: params.mimeType,
       sizeBytes: params.buffer.length,
     };
+  }
+
+  urlPublica(storageKey: string): string {
+    return `${env.PUBLIC_BASE_URL.replace(/\/$/, '')}/media/${storageKey}`;
   }
 
   async borrar(storageKey: string): Promise<void> {
@@ -189,30 +230,6 @@ export class LocalStorageProvider extends StorageProvider {
   rutaDe(storageKey: string): string | null {
     const destino = join(this.raiz, storageKey);
     return resolve(destino).startsWith(this.raiz) ? destino : null;
-  }
-}
-
-/**
- * Cloudflare R2.
- *
- * Implementa la misma interfaz. Se conecta cuando existan las credenciales;
- * hasta entonces `StorageModule` provee la versión local y ningún otro archivo
- * del proyecto se entera de la diferencia.
- *
- * La subida a R2 se hace con la API S3 (`@aws-sdk/client-s3`), que R2 soporta.
- * Se deja escrito el contrato para que agregarla sea rellenar dos métodos.
- */
-@Injectable()
-export class R2StorageProvider extends StorageProvider {
-  guardar(): Promise<ArchivoGuardado> {
-    throw new DomainError(
-      'NOT_FOUND',
-      'El almacenamiento en R2 todavía no está configurado',
-    );
-  }
-
-  borrar(): Promise<void> {
-    return Promise.resolve();
   }
 }
 

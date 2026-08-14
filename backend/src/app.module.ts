@@ -19,6 +19,7 @@ import { MetricsInterceptor } from '@/shared/observability/metrics.interceptor';
 import { ObservabilityModule } from '@/shared/observability/observability.module';
 import { PrismaModule } from '@/shared/prisma/prisma.module';
 import { RedisModule } from '@/shared/redis/redis.module';
+import { StorageModule } from '@/shared/storage/storage.module';
 
 /**
  * Los módulos de spike solo existen si están explícitamente habilitados.
@@ -47,6 +48,9 @@ function optionalModules(): DynamicModule['imports'] {
     // Va antes que los módulos opcionales: registra los guards globales, y
     // todo lo que se monte después queda cerrado por defecto.
     AuthModule,
+    // Global: lo necesitan Commerce (subir y borrar) y el endpoint que sirve
+    // las imágenes. Elige disco o R2 en un solo lugar.
+    StorageModule,
     CommerceModule,
     InventoryModule,
     OrdersModule,

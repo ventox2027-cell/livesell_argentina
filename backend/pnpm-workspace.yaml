@@ -5,17 +5,27 @@
 # Estas cinco lo necesitan de verdad —Prisma baja sus engines, swc y esbuild
 # sus binarios nativos— y se habilitan de forma explícita. Sin esta lista, pnpm
 # abre un prompt interactivo que en CI deja la build colgada hasta el timeout.
-allowBuilds:
-  '@prisma/client': true
-  '@prisma/engines': true
-  '@swc/core': true
-  esbuild: true
-  # Acelerador nativo opcional de msgpackr, que usa BullMQ para serializar los
-  # jobs. Se deja SIN compilar: funciona igual en JavaScript puro, y los jobs
-  # que mandamos son tres campos. Compilar código nativo en cada máquina y en
-  # CI a cambio de microsegundos que no vamos a notar no vale el riesgo.
-  msgpackr-extract: false
-  prisma: true
+# ⚠️ La clave es `onlyBuiltDependencies` y es una LISTA, no un mapa.
+#
+# Antes decía `allowBuilds:` con un mapa de booleanos. pnpm no conoce esa
+# clave: la ignoraba entera y seguía bloqueando TODOS los scripts de
+# instalación. El síntoma es que Prisma se queda sin sus engines nativos y
+# cualquier consulta falla con un mensaje sobre binarios faltantes que no
+# menciona pnpm por ningún lado.
+#
+# Al ser una lista de permitidos, lo que no está no se compila — que es como se
+# expresa ahora el "false" del mapa viejo.
+onlyBuiltDependencies:
+  - '@prisma/client'
+  - '@prisma/engines'
+  - '@swc/core'
+  - esbuild
+  - prisma
+  # Deliberadamente FUERA de la lista: `msgpackr-extract`, el acelerador nativo
+  # opcional de msgpackr que usa BullMQ para serializar los jobs. Funciona igual
+  # en JavaScript puro, y los jobs que mandamos son tres campos. Compilar código
+  # nativo en cada máquina y en CI a cambio de microsegundos que no vamos a
+  # notar no vale el riesgo.
 
 # Una sola versión de Fastify en todo el árbol.
 #

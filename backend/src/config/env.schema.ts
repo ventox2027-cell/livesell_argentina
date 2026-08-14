@@ -401,6 +401,60 @@ export const envSchema = z
      */
     METRICS_TOKEN: optionalOrEmpty(z.string().min(16)),
 
+    // ─── Almacenamiento de imágenes ─────────────────────────────────────────
+
+    /**
+     * Dónde se guardan las imágenes de producto.
+     *
+     *   · `local` → disco, servido por `/media`. Desarrollo y tests.
+     *   · `r2`    → Cloudflare R2, por la API S3.
+     *
+     * El código que sube una foto es el mismo en los dos casos: nadie fuera de
+     * `shared/storage` sabe cuál está activo.
+     */
+    STORAGE_DRIVER: z.enum(['local', 'r2']).default('local'),
+
+    /**
+     * Credenciales de R2. Son de tipo S3.
+     *
+     * ⚠️ Nunca se registran en un log, nunca llegan al cliente, y `R2_ENDPOINT`
+     * jamás se le devuelve a nadie: la app móvil pide imágenes a nuestro
+     * dominio y no sabe que Cloudflare existe.
+     */
+    R2_ACCESS_KEY_ID: optionalOrEmpty(z.string().min(8)),
+    R2_SECRET_ACCESS_KEY: optionalOrEmpty(z.string().min(16)),
+    /** `https://<account_id>.r2.cloudflarestorage.com` */
+    R2_ENDPOINT: optionalOrEmpty(z.string().url()),
+    R2_BUCKET: optionalOrEmpty(z.string().min(3)),
+    R2_ACCOUNT_ID: optionalOrEmpty(z.string().min(8)),
+
+    /**
+     * Dominio público del bucket, cuando exista.
+     *
+     * ─── Por qué es opcional y qué pasa mientras no esté ───
+     *
+     * El bucket es PRIVADO y todavía no hay dominio propio. Sin esta variable,
+     * las imágenes se sirven por una redirección nuestra —`/media/<key>`— que
+     * firma una URL temporal en el momento de la petición. El bucket sigue
+     * cerrado y los bytes van del teléfono a Cloudflare directo, sin pasar por
+     * la API.
+     *
+     * El día que haya dominio o CDN adelante, se configura esto y las URLs
+     * pasan a ser directas. Nada más cambia: lo que se guarda en la base es la
+     * clave del objeto, no la URL.
+     */
+    R2_PUBLIC_BASE_URL: optionalOrEmpty(z.string().url()),
+
+    /**
+     * Cuánto vale una URL firmada.
+     *
+     * Corto a propósito. Una URL firmada es una llave: quien la tenga puede
+     * bajar ese objeto sin autenticarse, y las URLs se copian, se comparten y
+     * quedan en el historial del navegador. Cinco minutos alcanzan de sobra
+     * para que el teléfono siga la redirección y descargue la imagen.
+     */
+    R2_SIGNED_URL_TTL_S: z.coerce.number().int().min(60).max(3_600).default(300),
+
     // ─── Observabilidad ─────────────────────────────────────────────────────
     SENTRY_DSN: z.string().url().optional().or(z.literal('')),
     SENTRY_TRACES_SAMPLE_RATE: z.coerce.number().min(0).max(1).default(0.1),
@@ -620,6 +674,38 @@ export const envSchema = z
       'Fuera de local hace falta METRICS_TOKEN: /metrics expone volumen de ventas, ' +
       'tasa de rechazo de pagos y el mapa completo de rutas. Generar con: openssl rand -hex 32',
     path: ['METRICS_TOKEN'],
+  })
+  /**
+   * `STORAGE_DRIVER=r2` sin credenciales sería peor que no configurarlo.
+   *
+   * El proceso arrancaría, la app funcionaría entera, y el fallo aparecería
+   * recién cuando un vendedor intenta subir su primera foto — con un error de
+   * red de Cloudflare que no dice "falta una variable".
+   */
+  .refine(
+    (e) =>
+      e.STORAGE_DRIVER !== 'r2' ||
+      (!!e.R2_ACCESS_KEY_ID && !!e.R2_SECRET_ACCESS_KEY && !!e.R2_ENDPOINT && !!e.R2_BUCKET),
+    {
+      message:
+        'STORAGE_DRIVER=r2 requiere R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT y ' +
+        'R2_BUCKET. Sin ellas el proceso arranca y sólo falla cuando alguien sube una foto.',
+      path: ['STORAGE_DRIVER'],
+    },
+  )
+  /**
+   * Y fuera de local, el disco no sirve.
+   *
+   * Con más de una instancia, cada una guarda las imágenes en SU disco: la foto
+   * que sube un vendedor se ve o no según a qué máquina caiga la petición. Y en
+   * plataformas que escalan a cero, el disco se borra al apagarse el
+   * contenedor: las imágenes desaparecen solas de noche.
+   */
+  .refine((e) => esEntornoLocal(e.NODE_ENV) || e.STORAGE_DRIVER !== 'local', {
+    message:
+      'Fuera de local, STORAGE_DRIVER no puede ser `local`: el disco del contenedor no se ' +
+      'comparte entre instancias y se borra al apagarse.',
+    path: ['STORAGE_DRIVER'],
   })
   /**
    * El default de desarrollo, aplicado DESPUÉS de validar.

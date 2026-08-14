@@ -36,7 +36,56 @@ export const REDACT_PATHS = [
   '*.first_six_digits',
   '*.cardholder',
   '*.identification',
+
+  /**
+   * Almacenamiento (R2 / S3).
+   *
+   * El código nunca registra estas credenciales a propósito, pero el SDK de AWS
+   * sí las lleva adentro: un error del cliente S3 trae su configuración
+   * completa en `err.config`, credenciales incluidas. Un
+   * `logger.error({ err })` puesto sin pensar las volcaría enteras.
+   *
+   * `r2.provider.ts` sólo registra `err.message` justamente por eso. Esto es la
+   * red debajo, para el día que alguien depure a las 2 AM y no se acuerde.
+   *
+   * ⚠️ Ver la nota de abajo sobre la profundidad: por eso están las rutas
+   * `*.config.credentials` y no sólo `*.credentials`.
+   */
+  '*.secretAccessKey',
+  '*.accessKeyId',
+  '*.sessionToken',
+  '*.credentials',
+  '*.config.credentials',
+  'err.config.credentials',
+  'error.config.credentials',
 ];
+
+/**
+ * ⚠️ EL COMODÍN `*` DE PINO MATCHEA UN SOLO NIVEL
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Esto es fácil de leer mal, y leerlo mal da una sensación de protección que no
+ * existe.
+ *
+ *     '*.token'   tapa  { pago: { token } }        ← dos niveles
+ *                 NO tapa { err: { data: { token } } }  ← tres
+ *
+ * No hay `**` en pino: no se puede pedir "en cualquier profundidad". Se
+ * descubrió agregando las credenciales de S3, que el SDK deja en
+ * `err.config.credentials.secretAccessKey` — cuatro niveles, donde ninguna
+ * ruta con un solo `*` llega.
+ *
+ * De ahí las dos reglas que hay que seguir al agregar algo acá:
+ *
+ *   1. **La primera defensa es no registrar el objeto crudo.** Los errores de
+ *      SDKs se registran por `err.message`, nunca enteros. La redacción es la
+ *      red debajo, no el plan.
+ *   2. **Si un dato sensible puede aparecer a más de dos niveles, hay que
+ *      escribir la ruta completa.** Las genéricas con `*` no lo van a agarrar.
+ *
+ * Vale para todas las rutas de arriba, no sólo para las de storage: `*.cvv`
+ * tapa `{ pago: { cvv } }` y no tapa `{ req: { body: { cvv } } }`.
+ */
 
 export const loggerConfig: Params = {
   pinoHttp: {

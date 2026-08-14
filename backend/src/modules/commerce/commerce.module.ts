@@ -2,7 +2,6 @@ import { Module } from '@nestjs/common';
 
 import { AuditService } from '@/shared/audit/audit.service';
 import { DomainEventBus } from '@/shared/events/domain-events';
-import { LocalStorageProvider, StorageProvider } from '@/shared/storage/storage.provider';
 
 import { CommerceController } from './commerce.controller';
 import { ImagesService } from './images.service';
@@ -20,8 +19,10 @@ import { SellersService } from './sellers.service';
  *
  * ─── El proveedor de almacenamiento ───
  *
- * Se elige acá y en ningún otro lado. Los servicios dependen de la clase
- * abstracta `StorageProvider`; cambiar disco por R2 es cambiar esta línea.
+ * No se elige acá: lo inyecta `StorageModule`, que es global. `ImagesService`
+ * depende de la clase abstracta `StorageProvider` y no tiene forma de saber si
+ * detrás hay un disco o Cloudflare — que es lo que permite que sus tests
+ * corran sin credenciales y sin red.
  */
 @Module({
   controllers: [CommerceController],
@@ -32,13 +33,6 @@ import { SellersService } from './sellers.service';
     OwnershipService,
     AuditService,
     DomainEventBus,
-    LocalStorageProvider,
-    {
-      provide: StorageProvider,
-      // Hoy siempre local. Cuando existan las credenciales de R2, acá se elige
-      // según el entorno y ningún servicio se entera.
-      useExisting: LocalStorageProvider,
-    },
   ],
   exports: [OwnershipService, ProductsService, SellersService],
 })
