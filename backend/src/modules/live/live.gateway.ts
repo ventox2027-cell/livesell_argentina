@@ -20,6 +20,36 @@ import { newId } from '@/shared/utils/id';
 import { EVENTOS, salaDe, type EventoChat } from './live-events';
 
 /**
+ * El `Server` de Socket.IO, venga como venga.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * `@WebSocketServer()` NO SIEMPRE INYECTA UN SERVER
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Este gateway declara `namespace: '/live'`, y con un namespace Nest inyecta un
+ * **`Namespace`**, no el `Server`. El tipo declarado dice `Server` —Nest no
+ * puede saberlo en tiempo de compilación— así que TypeScript no protege nada.
+ *
+ * La diferencia importa por una sutileza: en `Server`, `adapter` es un
+ * **método**; en `Namespace` es una **propiedad**. Llamarlo revienta con:
+ *
+ *     TypeError: this.server.adapter is not a function
+ *
+ * Y como el arranque del adaptador está envuelto en un `try`, el error se
+ * registraba como "sin adaptador de Redis" y el proceso seguía andando. En una
+ * sola instancia no se nota nada. Con dos, un mensaje emitido desde A no le
+ * llega a quien está conectado a B: media sala deja de ver el chat y el
+ * producto destacado, sin un solo error en los logs.
+ *
+ * `Server.adapter(...)` en socket.io 4 vuelve a inicializar el adaptador de los
+ * namespaces que ya existen, así que llamarlo acá alcanza para `/live`.
+ */
+export function servidorDe(server: Server): Server {
+  const posibleNamespace = server as Server & { server?: Server };
+  return typeof server.adapter === 'function' ? server : (posibleNamespace.server ?? server);
+}
+
+/**
  * La capa en tiempo real del vivo.
  *
  * ═══════════════════════════════════════════════════════════════════════════
@@ -124,7 +154,7 @@ export class LiveGateway implements OnGatewayConnection, OnGatewayDisconnect, On
       this.suscriptor = this.redis.client.duplicate();
       await Promise.all([this.publicador.connect(), this.suscriptor.connect()]);
 
-      this.server.adapter(createAdapter(this.publicador, this.suscriptor));
+      servidorDe(this.server).adapter(createAdapter(this.publicador, this.suscriptor));
       this.logger.log('adaptador de Redis activo: el realtime funciona con varias instancias');
     } catch (err) {
       this.logger.error({
@@ -337,13 +367,48 @@ export class LiveGateway implements OnGatewayConnection, OnGatewayDisconnect, On
    */
   private async emitirEspectadores(liveSessionId: string): Promise<void> {
     try {
-      const sockets = await this.server.in(salaDe(liveSessionId)).fetchSockets();
+      const cantidad = await this.contarEspectadores(liveSessionId);
+
       this.emitir(liveSessionId, EVENTOS.espectadores, {
-        cantidad: sockets.length,
+        cantidad,
         fecha: new Date().toISOString(),
+      });
+
+      /**
+       * El pico se PERSISTE acá, no se calcula al cerrar.
+       *
+       * `peakViewers` existía en el esquema, el resumen final lo leía... y nadie
+       * lo escribía nunca. Todos los vivos terminaban informando
+       * `espectadoresPico: null`.
+       *
+       * Al cerrar ya no se puede saber: los sockets se fueron. O se anota
+       * mientras pasa, o el dato no existe — y la regla es no inventar métricas.
+       *
+       * El `updateMany` con la condición adentro evita leer-decidir-escribir:
+       * dos instancias emitiendo a la vez no pueden bajarse el pico entre sí.
+       */
+      await this.prisma.liveSession.updateMany({
+        where: { id: liveSessionId, OR: [{ peakViewers: null }, { peakViewers: { lt: cantidad } }] },
+        data: { peakViewers: cantidad },
       });
     } catch {
       // Un contador que no se pudo calcular no puede romper nada.
+    }
+  }
+
+  /**
+   * Cuánta gente está mirando, para quien pregunte desde fuera del socket.
+   *
+   * Lo usa el panel del vendedor. Con el adaptador de Redis la cuenta abarca
+   * todas las instancias.
+   */
+  async contarEspectadores(liveSessionId: string): Promise<number> {
+    try {
+      const sockets = await this.server.in(salaDe(liveSessionId)).fetchSockets();
+      return sockets.length;
+    } catch {
+      // Sin dato es cero y no una excepción: el panel tiene que abrir igual.
+      return 0;
     }
   }
 }

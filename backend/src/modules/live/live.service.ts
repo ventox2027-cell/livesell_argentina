@@ -224,15 +224,7 @@ export class LiveService {
     const ahora = new Date();
     const desde = sesion.startedAt ?? sesion.createdAt;
 
-    const ventas = await this.prisma.order.aggregate({
-      where: {
-        sellerId: sesion.sellerId,
-        createdAt: { gte: desde, lte: ahora },
-        status: { notIn: ['CANCELLED', 'EXPIRED', 'PAYMENT_FAILED'] },
-      },
-      _count: true,
-      _sum: { grossAmount: true },
-    });
+    const ventas = await this.ventasDesde(sesion.sellerId, desde);
 
     const duracionSegundos = sesion.startedAt
       ? Math.floor((ahora.getTime() - sesion.startedAt.getTime()) / 1000)
@@ -243,8 +235,8 @@ export class LiveService {
       data: {
         state: 'ENDED',
         endedAt: ahora,
-        totalOrders: ventas._count,
-        grossAmount: ventas._sum.grossAmount ?? 0,
+        totalOrders: ventas.ordenes,
+        grossAmount: ventas.brutoCentavos,
       },
     });
 
@@ -267,7 +259,7 @@ export class LiveService {
       resumen: {
         duracionSegundos,
         espectadoresPico: sesion.peakViewers,
-        ordenes: ventas._count,
+        ordenes: ventas.ordenes,
       },
       fecha: ahora.toISOString(),
     });
@@ -277,15 +269,17 @@ export class LiveService {
       entityType: 'live_session',
       entityId: sesion.id,
       actorId: userId,
-      after: { duracionSegundos, ordenes: ventas._count },
+      after: { duracionSegundos, ordenes: ventas.ordenes },
     });
 
     return {
       ok: true as const,
       resumen: {
         duracionSegundos,
-        ordenes: ventas._count,
-        brutoCentavos: ventas._sum.grossAmount ?? 0,
+        espectadoresPico: sesion.peakViewers,
+        ordenes: ventas.ordenes,
+        unidades: ventas.unidades,
+        brutoCentavos: ventas.brutoCentavos,
       },
     };
   }
@@ -330,11 +324,29 @@ export class LiveService {
     const variante = await this.prisma.productVariant.findFirst({
       where: {
         id: variantId,
-        product: { store: { sellerId: sesion.sellerId }, deletedAt: null },
+        /**
+         * Sólo lo que se puede comprar AHORA.
+         *
+         * Antes alcanzaba con que la variante fuera del vendedor. Eso dejaba
+         * destacar un producto pausado o un borrador: la tarjeta aparecía en la
+         * pantalla de todo el mundo con su botón de comprar, y la reserva lo
+         * rechazaba después. El vendedor quedaba hablando de algo que nadie
+         * podía llevarse.
+         *
+         * La pertenencia y el estado van los dos en el `where`: una variante
+         * que no corresponde simplemente no se encuentra, y el 404 sale solo.
+         */
+        status: 'ACTIVE',
+        product: {
+          store: { sellerId: sesion.sellerId },
+          status: 'ACTIVE',
+          deletedAt: null,
+        },
         deletedAt: null,
       },
       include: {
         inventory: true,
+        options: { select: { optionValueId: true } },
         product: {
           include: { images: { where: { position: 0 }, take: 1 } },
         },
@@ -364,7 +376,8 @@ export class LiveService {
       variantId: variante.id,
       productId: variante.productId,
       nombre: variante.product.name,
-      variante: variante.title,
+      // `null` si la variante es la interna del producto. Ver `variantePublica`.
+      variante: variante.options.length === 0 ? null : variante.title,
       imagenUrl: variante.product.images[0]?.url ?? null,
       precioCentavos: variante.priceOverrideCents ?? variante.product.basePriceCents,
       disponible,
@@ -458,6 +471,215 @@ export class LiveService {
     });
 
     return { ...base, video: { token: token.token, wsUrl: token.wsUrl, sala: token.roomName } };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // EL LADO DEL QUE TRANSMITE
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * ¿Este vendedor tiene un vivo abierto?
+   *
+   * Lo pregunta la app al entrar a "Mi tienda" para decidir si el botón dice
+   * "Iniciar LIVE" o "Volver a tu vivo". Sin esto, alguien que cerró la app con
+   * la transmisión andando vería el botón de empezar y crearía confusión sobre
+   * si hay una o dos transmisiones.
+   */
+  async miVivoAbierto(userId: string) {
+    const sesion = await this.prisma.liveSession.findFirst({
+      where: {
+        seller: { userId },
+        state: { in: ['SCHEDULED', 'STARTING', 'LIVE', 'RECONNECTING'] },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, title: true, state: true, startedAt: true },
+    });
+
+    if (!sesion) return { vivo: null };
+
+    return {
+      vivo: {
+        id: sesion.id,
+        titulo: sesion.title,
+        estado: sesion.state,
+        iniciadoEl: sesion.startedAt,
+      },
+    };
+  }
+
+  /**
+   * Todo lo que la pantalla del vendedor necesita durante la transmisión.
+   *
+   * ─── Por qué una sola llamada y no cinco ───
+   *
+   * Quien transmite está hablando frente a una cámara. La pantalla se refresca
+   * cada pocos segundos y cada refresco tiene que costar una petición, no
+   * cinco: con red móvil variable, cinco peticiones son cinco oportunidades de
+   * que una llegue tarde y el panel muestre datos de momentos distintos —stock
+   * de hace diez segundos junto a ventas de ahora.
+   *
+   * ⚠️ **El stock que sale de acá es de presentación.** Sirve para que el
+   * vendedor vea que se está agotando; quien decide si hay unidades sigue
+   * siendo el UPDATE condicional del inventario.
+   */
+  async panelDelVendedor(userId: string, liveSessionId: string) {
+    const sesion = await this.deVendedor(userId, liveSessionId);
+
+    const [bandeja, espectadores] = await Promise.all([
+      this.prisma.liveSessionProduct.findMany({
+        where: { liveSessionId: sesion.id },
+        orderBy: { position: 'asc' },
+        include: {
+          product: {
+            include: {
+              images: { where: { position: 0 }, take: 1 },
+              variants: {
+                where: { deletedAt: null, status: 'ACTIVE' },
+                include: {
+                  inventory: true,
+                  options: { select: { optionValueId: true } },
+                },
+              },
+            },
+          },
+        },
+      }),
+      this.gateway.contarEspectadores(sesion.id),
+    ]);
+
+    const desde = sesion.startedAt ?? sesion.createdAt;
+    const ventas = await this.ventasDesde(sesion.sellerId, desde);
+
+    return {
+      id: sesion.id,
+      titulo: sesion.title,
+      estado: sesion.state,
+      iniciadoEl: sesion.startedAt,
+      duracionSegundos: sesion.startedAt
+        ? Math.floor((Date.now() - sesion.startedAt.getTime()) / 1000)
+        : 0,
+      espectadores,
+      espectadoresPico: sesion.peakViewers ?? espectadores,
+      destacadoVariantId: sesion.featuredVariantId,
+      ventas,
+      bandeja: bandeja.map((b) => ({
+        productId: b.productId,
+        nombre: b.product.name,
+        imagenUrl: b.product.images[0]?.url ?? null,
+        posicion: b.position,
+        vecesDestacado: b.featuredCount,
+        /**
+         * Un producto pausado sigue en la bandeja pero no se puede destacar.
+         *
+         * Sacarlo de la lista sería peor: el vendedor lo preparó y no
+         * entendería por qué desapareció. Se muestra apagado, con el motivo.
+         */
+        vendible: b.product.status === 'ACTIVE' && b.product.deletedAt === null,
+        variantes: b.product.variants.map((v) => ({
+          id: v.id,
+          // `null` cuando es la variante interna. Ver `variantePublica`.
+          etiqueta: v.options.length === 0 ? null : v.title,
+          precioCentavos: v.priceOverrideCents ?? b.product.basePriceCents,
+          disponible: v.inventory ? v.inventory.onHand - v.inventory.reserved : 0,
+        })),
+      })),
+    };
+  }
+
+  /**
+   * Cambia qué productos están en la bandeja y en qué orden.
+   *
+   * Reemplaza la lista completa en una transacción, igual que el horario de la
+   * tienda: editar de a uno dejaría estados intermedios donde la bandeja tiene
+   * un producto que el vendedor ya sacó.
+   *
+   * Se conservan `featuredCount` y `lastFeaturedAt` de los que siguen: son el
+   * historial del vivo y reordenar no puede borrarlo.
+   */
+  async actualizarBandeja(userId: string, liveSessionId: string, productIds: string[]) {
+    const sesion = await this.deVendedor(userId, liveSessionId);
+
+    // Los ids se validan contra la tienda del vendedor: mandar el de un
+    // producto ajeno no puede meterlo en la bandeja.
+    const propios = await this.prisma.product.findMany({
+      where: {
+        id: { in: productIds.slice(0, 50) },
+        store: { sellerId: sesion.sellerId },
+        deletedAt: null,
+      },
+      select: { id: true },
+    });
+
+    const validos = productIds.filter((id) => propios.some((p) => p.id === id));
+
+    await this.prisma.$transaction([
+      this.prisma.liveSessionProduct.deleteMany({
+        where: { liveSessionId: sesion.id, productId: { notIn: validos } },
+      }),
+      ...validos.map((productId, i) =>
+        this.prisma.liveSessionProduct.upsert({
+          where: { liveSessionId_productId: { liveSessionId: sesion.id, productId } },
+          create: { id: newId('lsp'), liveSessionId: sesion.id, productId, position: i },
+          update: { position: i },
+        }),
+      ),
+    ]);
+
+    return { ok: true as const, productos: validos.length };
+  }
+
+  /**
+   * El que transmite volvió después de un corte.
+   *
+   * ─── Por qué no alcanza con `iniciar` ───
+   *
+   * `iniciar` sale temprano si el estado ya es `LIVE`, así que no sirve para
+   * salir de `RECONNECTING`. Y `RECONNECTING → LIVE` es una transición válida
+   * que hasta ahora nadie podía disparar: el vivo se quedaba marcado como
+   * reconectando para siempre aunque el video hubiera vuelto, y los
+   * espectadores seguían viendo el cartel encima de una imagen que ya andaba.
+   */
+  async reanudar(userId: string, liveSessionId: string) {
+    const sesion = await this.deVendedor(userId, liveSessionId);
+
+    if (sesion.state === 'LIVE') return { ok: true as const, estado: 'LIVE' as const };
+    if (sesion.state !== 'RECONNECTING') {
+      throw new TransicionInvalidaError(sesion.state, 'LIVE');
+    }
+
+    await this.transicionar(sesion.id, 'RECONNECTING', 'LIVE');
+    return { ok: true as const, estado: 'LIVE' as const };
+  }
+
+  /** Ventas del vendedor desde un instante. Compartido por el panel y el cierre. */
+  private async ventasDesde(sellerId: string, desde: Date) {
+    const [agregado, unidades] = await Promise.all([
+      this.prisma.order.aggregate({
+        where: {
+          sellerId,
+          createdAt: { gte: desde },
+          status: { notIn: ['CANCELLED', 'EXPIRED', 'PAYMENT_FAILED'] },
+        },
+        _count: true,
+        _sum: { grossAmount: true },
+      }),
+      this.prisma.orderItem.aggregate({
+        where: {
+          order: {
+            sellerId,
+            createdAt: { gte: desde },
+            status: { notIn: ['CANCELLED', 'EXPIRED', 'PAYMENT_FAILED'] },
+          },
+        },
+        _sum: { quantity: true },
+      }),
+    ]);
+
+    return {
+      ordenes: agregado._count,
+      brutoCentavos: agregado._sum.grossAmount ?? 0,
+      unidades: unidades._sum.quantity ?? 0,
+    };
   }
 
   /** Los vivos activos, para el feed. */

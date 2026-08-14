@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Put, Query } from '@nestjs/common';
 import { z } from 'zod';
 
 import { CurrentUser, Public, type AuthenticatedUser } from '@/modules/auth/auth.guard';
@@ -20,6 +20,12 @@ const DestacarSchema = z.object({
   variantId: z.string().max(64).nullable(),
 });
 type DestacarDto = z.infer<typeof DestacarSchema>;
+
+const BandejaSchema = z.object({
+  /** La bandeja completa, en orden. Se reemplaza entera, no se edita de a uno. */
+  productIds: z.array(z.string().max(64)).max(50),
+});
+type BandejaDto = z.infer<typeof BandejaSchema>;
 
 @Controller({ path: 'live', version: '1' })
 export class LiveController {
@@ -68,9 +74,50 @@ export class LiveController {
     return this.live.preparar(user.id, dto);
   }
 
+  /**
+   * ¿Tengo un vivo abierto?
+   *
+   * Va ANTES de `:id` a propósito: Nest resuelve por orden de declaración, y
+   * declarada después, `GET /live/mine` entraría por `GET /live/:id` con
+   * `id = 'mine'` y devolvería 404 siempre.
+   */
+  @Get('mine')
+  mio(@CurrentUser() user: AuthenticatedUser) {
+    return this.live.miVivoAbierto(user.id);
+  }
+
+  /** Todo lo que la pantalla del vendedor necesita mientras transmite. */
+  @Get(':id/panel')
+  panel(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.live.panelDelVendedor(user.id, id);
+  }
+
+  /** Cambia qué productos están en la bandeja y en qué orden. */
+  @Put(':id/products')
+  bandeja(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(BandejaSchema)) dto: BandejaDto,
+  ) {
+    return this.live.actualizarBandeja(user.id, id, dto.productIds);
+  }
+
   @Post(':id/start')
   iniciar(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
     return this.live.iniciar(user.id, id);
+  }
+
+  /**
+   * Volví después de un corte.
+   *
+   * Sin límite apretado: quien está transmitiendo con mala señal puede
+   * reconectar varias veces seguidas, y frenarlo ahí lo dejaría marcado como
+   * "reconectando" con el video ya funcionando.
+   */
+  @RateLimit({ limit: 60, windowSec: 60, bucket: 'live:resume' })
+  @Post(':id/resume')
+  reanudar(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.live.reanudar(user.id, id);
   }
 
   @Post(':id/end')

@@ -563,3 +563,194 @@ describe('Vivo — el comercio sobrevive a los problemas de video', () => {
     expect(guardado?.endedAt).toBeTruthy();
   });
 });
+
+/**
+ * El lado del que transmite.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * ESTAS RUTAS EXISTEN PORQUE LA APP NO TENÍA CÓMO TRANSMITIR
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * El backend del vivo estaba completo del lado del espectador, pero para probar
+ * una transmisión había que publicar video desde una PC con el cliente web de
+ * LiveKit: la app no tenía pantalla de vendedor y al backend le faltaba lo que
+ * esa pantalla necesita —el panel, la bandeja editable y la vuelta desde
+ * `RECONNECTING`—.
+ */
+describe('Vivo — panel del vendedor', () => {
+  async function vivoAlAire() {
+    const v = await nuevoVendedorConProducto();
+    const c = await call('POST', '/api/v1/live', {
+      token: v.token,
+      body: { title: 'Vivo del panel', productIds: [v.productId] },
+    });
+    expect(c.status, JSON.stringify(c.body)).toBe(201);
+    await call('POST', `/api/v1/live/${c.body.id}/start`, { token: v.token });
+    return { ...v, liveId: c.body.id as string };
+  }
+
+  it('el panel trae bandeja, stock y ventas en una sola llamada', async () => {
+    const v = await vivoAlAire();
+
+    const r = await call('GET', `/api/v1/live/${v.liveId}/panel`, { token: v.token });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.body.estado).toBe('LIVE');
+    expect(r.body.bandeja).toHaveLength(1);
+    expect(r.body.bandeja[0].productId).toBe(v.productId);
+    expect(r.body.bandeja[0].vendible).toBe(true);
+    expect(r.body.bandeja[0].variantes[0].disponible).toBe(10);
+    // Las ventas del vivo arrancan en cero, no en null: es un número real.
+    expect(r.body.ventas).toEqual({ ordenes: 0, brutoCentavos: 0, unidades: 0 });
+  });
+
+  it('⛔ el panel de un vivo ajeno da 404', async () => {
+    const v = await vivoAlAire();
+    const otro = await nuevoVendedorConProducto();
+
+    const r = await call('GET', `/api/v1/live/${v.liveId}/panel`, { token: otro.token });
+
+    // 404 y no 403: confirmar que existe le diría a quien prueba que acertó.
+    expect(r.status).toBe(404);
+  });
+
+  it('la variante interna llega sin etiqueta también en el panel', async () => {
+    const v = await vivoAlAire();
+    const r = await call('GET', `/api/v1/live/${v.liveId}/panel`, { token: v.token });
+
+    expect(r.body.bandeja[0].variantes[0].etiqueta).toBeNull();
+  });
+
+  it('un producto pausado sigue en la bandeja pero marcado como no vendible', async () => {
+    const v = await vivoAlAire();
+
+    await call('PATCH', `/api/v1/products/${v.productId}`, {
+      token: v.token,
+      body: { status: 'PAUSED' },
+    });
+
+    const r = await call('GET', `/api/v1/live/${v.liveId}/panel`, { token: v.token });
+
+    // Sacarlo de la lista dejaría al vendedor sin entender por qué desapareció
+    // algo que él mismo preparó.
+    expect(r.body.bandeja).toHaveLength(1);
+    expect(r.body.bandeja[0].vendible).toBe(false);
+  });
+
+  it('⛔ NO se puede destacar un producto pausado', async () => {
+    const v = await vivoAlAire();
+
+    await call('PATCH', `/api/v1/products/${v.productId}`, {
+      token: v.token,
+      body: { status: 'PAUSED' },
+    });
+
+    const r = await call('POST', `/api/v1/live/${v.liveId}/feature`, {
+      token: v.token,
+      body: { variantId: v.variantId },
+    });
+
+    // Antes se podía: la tarjeta aparecía con su botón de comprar en la
+    // pantalla de todo el mundo y la reserva lo rechazaba después.
+    expect(r.status).toBe(404);
+  });
+
+  it('mine dice si hay un vivo abierto', async () => {
+    const v = await vivoAlAire();
+
+    const r = await call('GET', '/api/v1/live/mine', { token: v.token });
+
+    // Si esta ruta se declarara después de `:id`, entraría por ahí con
+    // id='mine' y devolvería 404 siempre.
+    expect(r.status).toBe(200);
+    expect(r.body.vivo.id).toBe(v.liveId);
+    expect(r.body.vivo.estado).toBe('LIVE');
+  });
+
+  it('mine devuelve null cuando no hay ninguno', async () => {
+    const v = await nuevoVendedorConProducto();
+    const r = await call('GET', '/api/v1/live/mine', { token: v.token });
+
+    expect(r.status).toBe(200);
+    expect(r.body.vivo).toBeNull();
+  });
+
+  it('la bandeja se reemplaza entera y respeta el orden', async () => {
+    const v = await vivoAlAire();
+
+    const segundo = await call('POST', '/api/v1/products', {
+      token: v.token,
+      body: { name: `Segundo ${Date.now()}`, basePriceCents: 100000, status: 'ACTIVE' },
+    });
+
+    const r = await call('PUT', `/api/v1/live/${v.liveId}/products`, {
+      token: v.token,
+      body: { productIds: [segundo.body.id, v.productId] },
+    });
+    expect(r.status).toBe(200);
+
+    const panel = await call('GET', `/api/v1/live/${v.liveId}/panel`, { token: v.token });
+    expect(panel.body.bandeja.map((b: { productId: string }) => b.productId)).toEqual([
+      segundo.body.id,
+      v.productId,
+    ]);
+  });
+
+  it('⛔ un producto ajeno no entra en la bandeja', async () => {
+    const v = await vivoAlAire();
+    const otro = await nuevoVendedorConProducto();
+
+    await call('PUT', `/api/v1/live/${v.liveId}/products`, {
+      token: v.token,
+      body: { productIds: [otro.productId, v.productId] },
+    });
+
+    const panel = await call('GET', `/api/v1/live/${v.liveId}/panel`, { token: v.token });
+    const ids = panel.body.bandeja.map((b: { productId: string }) => b.productId);
+
+    expect(ids).toEqual([v.productId]);
+    expect(ids).not.toContain(otro.productId);
+  });
+
+  it('reanudar saca al vivo de RECONNECTING', async () => {
+    const v = await vivoAlAire();
+
+    // El vivo se marca reconectando como lo haría el webhook de LiveKit.
+    await prisma.liveSession.update({
+      where: { id: v.liveId },
+      data: { state: 'RECONNECTING' },
+    });
+
+    const r = await call('POST', `/api/v1/live/${v.liveId}/resume`, { token: v.token });
+
+    expect(r.status).toBe(201);
+    expect(r.body.estado).toBe('LIVE');
+
+    const sesion = await prisma.liveSession.findUnique({ where: { id: v.liveId } });
+    expect(sesion?.state).toBe('LIVE');
+  });
+
+  it('reanudar un vivo que ya está al aire no rompe', async () => {
+    const v = await vivoAlAire();
+    const r = await call('POST', `/api/v1/live/${v.liveId}/resume`, { token: v.token });
+
+    // Idempotente: la app puede llamarlo al recuperar la conexión sin saber en
+    // qué estado quedó.
+    expect(r.status).toBe(201);
+    expect(r.body.estado).toBe('LIVE');
+  });
+
+  it('el resumen del cierre trae unidades y no inventa el pico', async () => {
+    const v = await vivoAlAire();
+
+    const r = await call('POST', `/api/v1/live/${v.liveId}/end`, { token: v.token });
+
+    expect(r.status).toBe(201);
+    expect(r.body.resumen.ordenes).toBe(0);
+    expect(r.body.resumen.unidades).toBe(0);
+    expect(r.body.resumen.brutoCentavos).toBe(0);
+    expect(r.body.resumen.duracionSegundos).toBeGreaterThanOrEqual(0);
+    // Sin espectadores no hubo pico. `null` es la respuesta honesta.
+    expect(r.body.resumen.espectadoresPico).toBeNull();
+  });
+});

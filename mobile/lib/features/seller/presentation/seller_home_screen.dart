@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/design/tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../auth/state/auth_providers.dart';
+import '../../lives/data/broadcaster_api.dart';
+import '../../lives/presentation/prepare_live_screen.dart';
 import '../../orders/presentation/seller_orders_screen.dart';
 import '../data/seller_repository.dart';
 import '../domain/seller_models.dart';
@@ -164,6 +166,46 @@ class _SinVendedorState extends ConsumerState<_SinVendedor> {
   }
 }
 
+/// El botón de transmitir.
+///
+/// ─── Por qué pregunta antes de dibujarse ───
+///
+/// Un vendedor que cerró la app con la transmisión andando tiene que ver
+/// "Volver a tu vivo", no "Iniciar LIVE". Ofrecerle empezar uno nuevo lo dejaría
+/// creyendo que tiene dos transmisiones — y el backend, que sólo permite una,
+/// le devolvería la vieja sin explicación.
+class _BotonDeVivo extends ConsumerWidget {
+  const _BotonDeVivo();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final abierto = ref.watch(miVivoAbiertoProvider);
+    final vivo = abierto.valueOrNull;
+    final enCurso = vivo != null;
+
+    return SizedBox(
+      width: double.infinity,
+      child: FilledButton.icon(
+        onPressed: () async {
+          await Navigator.of(context).push<void>(
+            MaterialPageRoute(builder: (_) => const PrepareLiveScreen()),
+          );
+          ref.invalidate(miVivoAbiertoProvider);
+        },
+        style: FilledButton.styleFrom(
+          backgroundColor: enCurso ? AppColor.vivo : AppColor.acento,
+          minimumSize: const Size(0, 56),
+        ),
+        icon: Icon(enCurso ? Icons.sensors_rounded : Icons.videocam_rounded, size: 22),
+        label: Text(
+          enCurso ? 'Volver a tu vivo' : 'Iniciar LIVE',
+          style: const TextStyle(fontSize: 16.5, fontWeight: FontWeight.w800),
+        ),
+      ),
+    );
+  }
+}
+
 class _Panel extends ConsumerWidget {
   const _Panel({required this.perfil});
   final PerfilVendedor perfil;
@@ -187,6 +229,12 @@ class _Panel extends ConsumerWidget {
           ],
 
           _Encabezado(perfil: perfil),
+          const SizedBox(height: Gap.lg),
+
+          // Transmitir es la acción principal de esta app. Va arriba de todo y
+          // en un solo toque: enterrarla dos niveles adentro de ajustes sería
+          // esconder lo único que la diferencia de una tienda cualquiera.
+          const _BotonDeVivo(),
           const SizedBox(height: Gap.lg),
 
           // Las ventas primero: es lo que un vendedor abre a mirar cuando algo
