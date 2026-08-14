@@ -23,6 +23,7 @@ import { StorageModule } from '@/shared/storage/storage.module';
 import { AdminModule } from '@/modules/admin/admin.module';
 import { SellersModule } from '@/modules/sellers/sellers.module';
 import { LiveModule } from '@/modules/live/live.module';
+import { StoresModule } from '@/modules/stores/stores.module';
 
 /**
  * Los módulos de spike solo existen si están explícitamente habilitados.
@@ -59,6 +60,7 @@ function optionalModules(): DynamicModule['imports'] {
     OrdersModule,
     SellersModule,
     LiveModule,
+    StoresModule,
     AdminModule,
     ...(optionalModules() ?? []),
   ],

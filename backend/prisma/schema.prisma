@@ -534,6 +534,9 @@ model User {
   seller        Seller?
   addresses     UserAddress[]
   orders        Order[]
+  follows       Follow[]
+  reviews       Review[]
+  intents       PurchaseIntent[]
 
   @@index([phoneE164])
   @@index([status, createdAt])
@@ -829,7 +832,16 @@ model Seller {
   orders          Order[]
   paymentAccounts SellerPaymentAccount[]
   verification    SellerVerification?
-  liveSessions    LiveSession[]
+  /// Denormalizados. Las restricciones únicas de Follow y Review son lo que
+  /// los hace confiables: el incremento va en la MISMA transacción que la
+  /// fila, y un duplicado deshace las dos cosas juntas.
+  followersCount  Int                    @default(0) @map("followers_count")
+  ratingSum       Int                    @default(0) @map("rating_sum")
+  ratingCount     Int                    @default(0) @map("rating_count")
+
+  liveSessions LiveSession[]
+  followers    Follow[]
+  reviews      Review[]
 
   @@index([status, createdAt])
   @@index([riskLevel, status])
@@ -850,23 +862,24 @@ model Store {
 
   name        String
   /// Global y único: la tienda tiene URL propia.
-  slug        String @unique
+  slug        String  @unique
   description String?
   logoUrl     String? @map("logo_url")
   coverUrl    String? @map("cover_url")
 
-  status StoreStatus @default(ACTIVE)
+  status    StoreStatus @default(ACTIVE)
   /// Tienda principal del vendedor. Hoy siempre hay exactamente una.
-  isPrimary Boolean @default(true) @map("is_primary")
+  isPrimary Boolean     @default(true) @map("is_primary")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  seller   Seller           @relation(fields: [sellerId], references: [id], onDelete: Cascade)
-  products Product[]
-  variants ProductVariant[]
+  seller       Seller           @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  products     Product[]
+  variants     ProductVariant[]
   orders       Order[]
   liveSessions LiveSession[]
+  schedule     StoreSchedule?
 
   @@index([sellerId, status])
   @@map("stores")
@@ -927,10 +940,10 @@ model Product {
   /// dejarlo bien ahora: después ya hay datos.
   deletedAt DateTime? @map("deleted_at")
 
-  store    Store            @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  category Category?        @relation(fields: [categoryId], references: [id], onDelete: SetNull)
-  options  ProductOption[]
-  variants ProductVariant[]
+  store        Store                @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  category     Category?            @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  options      ProductOption[]
+  variants     ProductVariant[]
   images       ProductImage[]
   liveSessions LiveSessionProduct[]
 
@@ -1011,14 +1024,13 @@ model ProductVariant {
   priceOverrideCents          Int? @map("price_override_cents")
   compareAtPriceOverrideCents Int? @map("compare_at_price_override_cents")
 
-  status VariantStatus @default(ACTIVE)
+  status    VariantStatus @default(ACTIVE)
   /// La variante única de un producto sin opciones.
-  isDefault Boolean @default(false) @map("is_default")
-  position  Int     @default(0) @db.SmallInt
+  isDefault Boolean       @default(false) @map("is_default")
+  position  Int           @default(0) @db.SmallInt
 
   /**
    * Huella canónica de la combinación de opciones.
-   *
    * Es la concatenación ordenada de los ids de valor. Existe para que la base
    * —y no el código— garantice que no haya dos variantes con la misma
    * combinación. Comprobarlo en código deja una ventana de carrera entre la
@@ -1035,6 +1047,7 @@ model ProductVariant {
   store     Store                  @relation(fields: [storeId], references: [id], onDelete: Cascade)
   options   ProductVariantOption[]
   inventory Inventory?
+  intents   PurchaseIntent[]
 
   @@unique([productId, optionsKey])
   @@unique([storeId, sku])
@@ -1076,8 +1089,8 @@ model ProductImage {
 
   width     Int?
   height    Int?
-  sizeBytes Int?    @map("size_bytes")
-  mimeType  String  @map("mime_type")
+  sizeBytes Int?   @map("size_bytes")
+  mimeType  String @map("mime_type")
 
   createdAt DateTime @default(now()) @map("created_at")
 
@@ -1250,15 +1263,12 @@ model InventoryReservation {
 
   /**
    * Clave de idempotencia, generada por el cliente.
-   *
    * ─── Por qué es única por USUARIO y no globalmente ───
-   *
    * La clave la elige la app, así que no hay nada que garantice que dos
    * personas no manden la misma. Con unicidad global, la petición de la
    * segunda chocaría con la de la primera y —según cómo se resuelva el
    * conflicto— podría devolverle la reserva de otro. Es una fuga entre
    * cuentas provocada por una colisión de UUID.
-   *
    * Acotada al usuario, esa colisión es inofensiva: cada uno vive en su
    * propio espacio de claves.
    */
@@ -1266,7 +1276,6 @@ model InventoryReservation {
 
   /**
    * Huella del cuerpo de la petición.
-   *
    * Reusar una clave con un cuerpo distinto casi siempre es un error del
    * cliente —reutilizó la clave de otro intento— y devolverle en silencio la
    * reserva anterior le haría creer que reservó tres cuando pidió una. Se
@@ -1290,12 +1299,10 @@ model InventoryReservation {
   /**
    * ⚠️ Dos índices de esta tabla NO están acá y se crean a mano en la
    * migración, porque Prisma no sabe expresar índices parciales:
-   *
-   *   · `reserva_activa_unica_por_usuario_y_variante` — UNIQUE sobre
-   *     (user_id, product_variant_id) WHERE status = 'ACTIVE'. Es lo que
-   *     impide apartar la misma unidad dos veces con un doble toque.
-   *   · `reservas_activas_por_vencimiento` — el barrido del reconciliador.
-   *
+   * · `reserva_activa_unica_por_usuario_y_variante` — UNIQUE sobre
+   * (user_id, product_variant_id) WHERE status = 'ACTIVE'. Es lo que
+   * impide apartar la misma unidad dos veces con un doble toque.
+   * · `reservas_activas_por_vencimiento` — el barrido del reconciliador.
    * Si algún día un `prisma migrate dev` propone borrarlos, **no lo dejes**:
    * volvelos a agregar a mano. El test "una sola reserva ACTIVA por usuario y
    * variante" se pone en rojo si desaparecen.
@@ -1359,8 +1366,8 @@ model Order {
   /// ilegibles por teléfono y nadie los dicta bien.
   reference String @unique
 
-  buyerId String @map("buyer_id")
-  storeId String @map("store_id")
+  buyerId  String @map("buyer_id")
+  storeId  String @map("store_id")
   /// Desnormalizado desde la tienda: el panel del vendedor filtra por acá y
   /// las tiendas no cambian de dueño.
   sellerId String @map("seller_id")
@@ -1432,6 +1439,7 @@ model Order {
   items    OrderItem[]
   attempts PaymentAttempt[]
   refunds  Refund[]
+  review   Review?
 
   @@index([buyerId, createdAt])
   @@index([sellerId, status, createdAt])
@@ -1485,10 +1493,10 @@ model PaymentAttempt {
   id      String @id // pat_<ulid>
   orderId String @map("order_id")
 
-  provider PaymentProvider @default(MERCADO_PAGO)
+  provider          PaymentProvider @default(MERCADO_PAGO)
   /// Id del pago en el proveedor. `null` hasta que responda — y si nunca
   /// responde, ese `null` es justamente lo que hay que conciliar.
-  providerPaymentId String? @unique @map("provider_payment_id")
+  providerPaymentId String?         @unique @map("provider_payment_id")
 
   status PaymentAttemptStatus @default(CREATED)
 
@@ -1526,9 +1534,9 @@ model PaymentAttempt {
   /// Cuánto cobró el proveedor por este cobro, cuando lo informa.
   processorFeeAmount Int? @map("processor_fee_amount")
 
-  createdAt  DateTime  @default(now()) @map("created_at")
-  updatedAt  DateTime  @updatedAt @map("updated_at")
-  approvedAt DateTime? @map("approved_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+  approvedAt    DateTime? @map("approved_at")
   /// Última vez que se le preguntó al proveedor. Ordena el conciliador.
   lastCheckedAt DateTime? @map("last_checked_at")
 
@@ -1563,7 +1571,7 @@ model Refund {
 
   failureMessageSafe String? @map("failure_message_safe")
   /// Cuántas veces se intentó. El conciliador no reintenta para siempre.
-  attempts Int @default(0)
+  attempts           Int     @default(0)
 
   createdAt   DateTime  @default(now()) @map("created_at")
   updatedAt   DateTime  @updatedAt @map("updated_at")
@@ -1588,9 +1596,9 @@ model UserAddress {
 
   recipientFullName String @map("recipient_full_name")
   /// DNI o CUIL. Lo pide el correo para entregar y Mercado Pago para facturar.
-  documentType   String @default("DNI") @map("document_type")
-  documentNumber String @map("document_number")
-  phoneE164      String @map("phone_e164")
+  documentType      String @default("DNI") @map("document_type")
+  documentNumber    String @map("document_number")
+  phoneE164         String @map("phone_e164")
 
   street     String
   number     String
@@ -1598,7 +1606,7 @@ model UserAddress {
   apartment  String?
   city       String
   province   String
-  postalCode String @map("postal_code")
+  postalCode String  @map("postal_code")
   /// "Portón negro, timbre 3". Lo que evita que el pedido vuelva al depósito.
   references String?
 
@@ -1631,9 +1639,9 @@ model SellerPaymentAccount {
   id       String @id // spa_<ulid>
   sellerId String @map("seller_id")
 
-  provider PaymentProvider @default(MERCADO_PAGO)
+  provider          PaymentProvider @default(MERCADO_PAGO)
   /// El `user_id` del vendedor en Mercado Pago. NO es un secreto.
-  providerAccountId String? @map("provider_account_id")
+  providerAccountId String?         @map("provider_account_id")
 
   status SellerPaymentAccountStatus @default(NOT_CONNECTED)
 
@@ -1809,8 +1817,8 @@ model SellerVerification {
   // resultado, no el insumo. Si hiciera falta re-verificar, la persona lo
   // vuelve a escribir.
   // ───────────────────────────────────────────────────────────────────────────
-  docType       String? @map("doc_type")
-  docNumberHash String? @map("doc_number_hash")
+  docType        String? @map("doc_type")
+  docNumberHash  String? @map("doc_number_hash")
   docNumberLast4 String? @map("doc_number_last4")
 
   /// CUIT/CUIL, con el mismo tratamiento.
@@ -1964,4 +1972,191 @@ model LiveSessionProduct {
   @@unique([liveSessionId, productId])
   @@index([liveSessionId, position])
   @@map("live_session_products")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HORARIOS DE TIENDA
+//
+// ─── Tres cosas distintas que no hay que mezclar ───
+//
+//   SellerStatus     ACTIVE / SUSPENDED / BLOCKED   ← ¿está habilitado?
+//   StoreStatus      ACTIVE / PAUSED / CLOSED       ← ¿el dueño la abrió?
+//   Horario          abierta / cerrada ahora        ← ¿es hora de atender?
+//
+// Un vendedor habilitado, con la tienda activa, puede estar cerrado porque son
+// las tres de la mañana. Y un vivo puede terminar con la tienda siguiendo
+// abierta — que es exactamente lo que permite seguir vendiendo después.
+//
+// Sin esta separación terminaríamos con booleanos sueltos por todos lados y
+// nadie sabría cuál manda.
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum StoreOpeningMode {
+  /// Siempre se puede comprar. Lo natural para quien vende por catálogo.
+  ALWAYS_OPEN
+  /// Por franjas horarias.
+  SCHEDULED
+  /// Sólo mientras hay una transmisión. Para quien vende exclusivamente en vivo.
+  LIVE_ONLY
+}
+
+model StoreSchedule {
+  id      String @id // sch_<ulid>
+  storeId String @unique @map("store_id")
+
+  mode StoreOpeningMode @default(ALWAYS_OPEN)
+
+  /// Zona horaria de la tienda.
+  ///
+  /// Se guarda aunque hoy todas sean argentinas: un horario sin zona es
+  /// ambiguo, y el día que haya un vendedor con otro huso —o que Argentina
+  /// vuelva al horario de verano— la interpretación cambia.
+  timezone String @default("America/Argentina/Buenos_Aires")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  store Store               @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  slots StoreScheduleSlot[]
+
+  @@map("store_schedules")
+}
+
+/// Una franja de atención.
+///
+/// Varias por día permiten el corte del mediodía sin inventar un campo
+/// "descanso": dos franjas de 9 a 13 y de 16 a 20 dicen lo mismo y son más
+/// simples de razonar.
+model StoreScheduleSlot {
+  id         String @id // sls_<ulid>
+  scheduleId String @map("schedule_id")
+
+  /// 0 = domingo, 6 = sábado. Igual que `Date.getDay()`.
+  weekday Int @db.SmallInt
+
+  /// Minutos desde medianoche.
+  ///
+  /// ─── Por qué no "09:00" ni un DateTime ───
+  ///
+  /// Una hora del día NO es un instante: no tiene fecha, y guardarla como
+  /// `DateTime` obliga a inventar una y a acordarse de ignorarla siempre.
+  /// Una cadena "09:00" se puede escribir mal de diez formas y hay que
+  /// parsearla en cada comparación.
+  ///
+  /// Un entero se compara con `<` y no admite estados imposibles.
+  opensAtMinutes Int @map("opens_at_minutes") @db.SmallInt
+
+  /// Si es MENOR que el de apertura, la franja cruza la medianoche.
+  /// De 22:00 a 02:00 es un caso real de quien vende de noche.
+  closesAtMinutes Int @map("closes_at_minutes") @db.SmallInt
+
+  schedule StoreSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+
+  @@index([scheduleId, weekday])
+  @@map("store_schedule_slots")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SEGUIDORES
+// ═══════════════════════════════════════════════════════════════════════════
+
+model Follow {
+  id       String @id // flw_<ulid>
+  userId   String @map("user_id")
+  sellerId String @map("seller_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  seller Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  /// ⚠️ Esta restricción es lo que hace confiable al contador denormalizado.
+  ///
+  /// `Seller.followersCount` se incrementa en la MISMA transacción que inserta
+  /// la fila. Si dos peticiones concurrentes intentaran seguir al mismo
+  /// vendedor, la segunda choca contra este índice y su transacción entera se
+  /// deshace — incremento incluido.
+  ///
+  /// Sin la restricción, el contador se despegaría de la realidad y no habría
+  /// forma de saber cuál de los dos números miente.
+  @@unique([userId, sellerId])
+  @@index([sellerId, createdAt])
+  @@index([userId, createdAt])
+  @@map("follows")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RESEÑAS
+//
+// ─── Una reseña necesita una compra ───
+//
+// `orderId` es único y obligatorio. No se puede reseñar sin haber comprado, y
+// no se puede reseñar dos veces la misma compra.
+//
+// Es la defensa más efectiva contra reseñas falsas y no requiere moderación:
+// para dejar una hay que haber pagado, y cada compra vale una sola. Un sistema
+// abierto se llena de basura el primer mes y después hay que moderar a mano
+// para siempre.
+// ═══════════════════════════════════════════════════════════════════════════
+
+model Review {
+  id String @id // rev_<ulid>
+
+  /// Una reseña por compra. La restricción está en la base, no en el código.
+  orderId  String @unique @map("order_id")
+  sellerId String @map("seller_id")
+  authorId String @map("author_id")
+
+  /// 1 a 5. El CHECK va en la migración: un rating de 47 no puede existir
+  /// aunque el código tenga un bug.
+  rating Int @db.SmallInt
+
+  comment String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  order  Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  seller Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  author User   @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([sellerId, createdAt])
+  @@map("reviews")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INTENCIÓN DE COMPRA
+//
+// ─── Por qué esto NO es una reserva ───
+//
+// Cuando la tienda está cerrada, quien quiere ese producto deja su intención.
+// **No se descuenta stock.**
+//
+// Una `InventoryReservation` dura cinco minutos porque bloquea una unidad real:
+// mientras existe, nadie más puede comprarla. Bloquear stock durante las diez
+// horas que una tienda está cerrada sería sacar productos de la venta para
+// gente que quizás no vuelva — y con varias intenciones sobre lo mismo, dejar
+// el catálogo vacío sin haber vendido nada.
+//
+// Esto es una lista de espera. No promete nada y no compromete inventario.
+// ═══════════════════════════════════════════════════════════════════════════
+
+model PurchaseIntent {
+  id               String @id // pin_<ulid>
+  userId           String @map("user_id")
+  productVariantId String @map("product_variant_id")
+
+  quantity Int @default(1) @db.SmallInt
+
+  /// Cuándo se le avisó que ya podía comprar. `null` = todavía no.
+  notifiedAt DateTime? @map("notified_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  user    User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  variant ProductVariant @relation(fields: [productVariantId], references: [id], onDelete: Cascade)
+
+  /// Una intención por persona y variante: tocar el botón dos veces no crea dos.
+  @@unique([userId, productVariantId])
+  @@index([productVariantId, notifiedAt])
+  @@map("purchase_intents")
 }

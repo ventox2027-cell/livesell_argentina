@@ -51,6 +51,12 @@ export const ID_PREFIX = {
   liveSession: 'liv',
   liveSessionProduct: 'lsp',
   chatMessage: 'msg',
+  // Tiendas, seguidores y reseñas
+  storeSchedule: 'sch',
+  scheduleSlot: 'sls',
+  follow: 'flw',
+  review: 'rev',
+  purchaseIntent: 'pin',
   auditLog: 'aud',
 } as const;
 
