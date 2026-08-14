@@ -11,6 +11,7 @@ import { CommerceModule } from '@/modules/commerce/commerce.module';
 import { InventoryModule } from '@/modules/inventory/inventory.module';
 import { NotificationsModule } from '@/modules/notifications/notifications.module';
 import { SellerOAuthModule } from '@/modules/payments/seller-oauth.module';
+import { ModerationModule } from '@/modules/moderation/moderation.module';
 import { SocialModule } from '@/modules/social/social.module';
 import { SupportModule } from '@/modules/support/support.module';
 import { OrdersModule } from '@/modules/orders/orders.module';
@@ -63,6 +64,7 @@ function optionalModules(): DynamicModule['imports'] {
     InventoryModule,
     NotificationsModule,
     SellerOAuthModule,
+    ModerationModule,
     SocialModule,
     SupportModule,
     OrdersModule,

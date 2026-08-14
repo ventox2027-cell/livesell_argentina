@@ -63,6 +63,11 @@ export class SearchService {
       WHERE p.search_vector @@ websearch_to_tsquery('spanish', ${consulta})
         AND p.status = 'ACTIVE'
         AND p.deleted_at IS NULL
+        -- Oculto por moderación. Es un filtro TEMPRANO: la consulta que arma
+        -- la respuesta vuelve a filtrar con PRODUCTO_COMPRABLE, así que la
+        -- garantía no depende de esta línea. Está para no traer ids que se van
+        -- a descartar. Ver visibilidad.ts.
+        AND p.hidden_at IS NULL
         AND s.status = 'ACTIVE'
         AND v.status = 'ACTIVE'
       ORDER BY rank DESC, p.created_at DESC
@@ -95,6 +100,7 @@ export class SearchService {
       WHERE p.search_vector @@ websearch_to_tsquery('spanish', ${consulta})
         AND p.status = 'ACTIVE'
         AND p.deleted_at IS NULL
+        AND p.hidden_at IS NULL
         AND s.status = 'ACTIVE'
       ORDER BY p.name
       LIMIT 5

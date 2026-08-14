@@ -89,20 +89,54 @@ for (const [etiqueta, url] of BASES) {
   );
 
   if (yaEsta[0].n > 0) {
-    console.log(`${AMARILLO}=${FIN} ${etiqueta}: ya estaba aplicada.`);
+    /**
+     * Ya estaba aplicada: se refresca el checksum.
+     *
+     * Editar el SQL de una migración YA aplicada —para corregir algo antes de
+     * commitear— deja el checksum guardado apuntando a la versión vieja, y
+     * Prisma se niega a seguir con:
+     *
+     *     The migration `X` was modified after it was applied.
+     *     We need to reset the schema. All data will be lost.
+     *
+     * En desarrollo eso significa perder la base entera por un comentario
+     * corregido. Se refresca el checksum y listo.
+     *
+     * ⚠️ Es correcto SÓLO en desarrollo, donde el SQL ya aplicado y el del
+     * archivo son equivalentes porque los editó la misma persona hace un
+     * minuto. En un servidor, un checksum que no coincide es una señal de que
+     * alguien cambió una migración desplegada, y ahí hay que mirar de verdad.
+     */
+    await prisma.$executeRawUnsafe(
+      'update _prisma_migrations set checksum = $1 where migration_name = $2',
+      checksum,
+      nombre,
+    );
+    console.log(`${AMARILLO}=${FIN} ${etiqueta}: ya estaba aplicada (checksum refrescado).`);
     await prisma.$disconnect();
     continue;
   }
 
+  /**
+   * Todo o nada.
+   *
+   * ─── Por qué una transacción y no sentencia por sentencia ───
+   *
+   * La primera versión aplicaba de a una y seguía cuando alguna fallaba. El
+   * resultado fue una migración a MEDIAS: los enums y una tabla creados, la
+   * otra no, y la fila de `_prisma_migrations` sin escribir. Reintentar fallaba
+   * con "ya existe", y limpiarlo a mano llevó más tiempo que escribir esto.
+   *
+   * PostgreSQL soporta DDL transaccional —a diferencia de MySQL— así que un
+   * fallo a la mitad deshace también las tablas ya creadas.
+   */
   let fallos = 0;
-  for (const sentencia of sentencias) {
-    try {
-      await prisma.$executeRawUnsafe(sentencia);
-    } catch (err) {
-      fallos += 1;
-      hubo = true;
-      console.log(`  ${ROJO}${String(err.message).replace(/\s+/g, ' ').slice(-140)}${FIN}`);
-    }
+  try {
+    await prisma.$transaction(sentencias.map((s) => prisma.$executeRawUnsafe(s)));
+  } catch (err) {
+    fallos = 1;
+    hubo = true;
+    console.log(`  ${ROJO}${String(err.message).replace(/\s+/g, ' ').slice(-200)}${FIN}`);
   }
 
   // Las filas a medias de un intento anterior confunden a `migrate deploy`,

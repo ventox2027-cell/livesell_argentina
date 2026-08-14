@@ -21,6 +21,7 @@ import type {
 import { OwnershipService } from './ownership.service';
 import { ordenarPorPuntaje } from './ranking';
 import { SearchService } from './search.service';
+import { PRODUCTO_COMPRABLE, PRODUCTO_VISIBLE } from './visibilidad';
 import {
   calcularOptionsKey,
   generarCombinaciones,
@@ -399,8 +400,7 @@ export class ProductsService {
     const filas = await this.prisma.product.findMany({
       where: {
         storeId: store.id,
-        status: 'ACTIVE',
-        deletedAt: null,
+        ...PRODUCTO_VISIBLE,
         ...(query.cursor ? { id: { lt: query.cursor } } : {}),
       },
       select: {
@@ -466,9 +466,7 @@ export class ProductsService {
 
     const filas = await this.prisma.product.findMany({
       where: {
-        status: 'ACTIVE',
-        deletedAt: null,
-        store: { status: 'ACTIVE', seller: { status: 'ACTIVE' } },
+        ...PRODUCTO_COMPRABLE,
         ...(idsBuscados ? { id: { in: idsBuscados } } : {}),
         ...(query.cursor && !idsBuscados ? { id: { lt: query.cursor } } : {}),
       },

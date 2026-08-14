@@ -540,6 +540,7 @@ model User {
   notifications Notification[]
   supportTickets SupportTicket[]
   likes          Like[]
+  reportesHechos Report[] @relation("reportesHechos")
 
   @@index([phoneE164])
   @@index([status, createdAt])
@@ -1020,6 +1021,14 @@ model Product {
 
   /// Cuántos "me gusta" tiene. Denormalizado, igual que en el vivo.
   likesCount Int @default(0) @map("likes_count")
+
+  /// Oculto por moderación. Distinto de PAUSED, que lo decide el vendedor.
+  ///
+  /// Un producto oculto no aparece en el feed, ni en la búsqueda, ni en la
+  /// vidriera, y no se puede comprar. El vendedor lo sigue viendo en su panel
+  /// —con el motivo— porque enterarse de que algo desapareció sin explicación
+  /// es peor que la sanción misma.
+  hiddenAt DateTime? @map("hidden_at")
 
   /// El vector de búsqueda. **Lo mantiene PostgreSQL, no Prisma.**
   ///
@@ -2804,4 +2813,141 @@ model Like {
   /// "¿Le gusta a esta persona?", que se pregunta al pintar cada tarjeta.
   @@index([targetType, targetId])
   @@map("likes")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// REPORTES Y MODERACIÓN
+//
+// ─── Por qué esto va antes de abrir al público ───
+//
+// El día que entre alguien vendiendo algo que no se puede vender, o insultando
+// en el chat de un vivo, la única pregunta que importa es cuánto tarda en
+// desaparecer. Sin un botón de reportar, la respuesta es "hasta que alguien nos
+// escriba por Instagram".
+//
+// Y sin registro de quién reportó qué, no hay forma de distinguir un problema
+// real de una campaña de un competidor.
+//
+// ─── Lo que este modelo NO hace ───
+//
+// No decide nada solo. Un reporte no oculta un producto ni suspende a nadie:
+// arma una cola para que una persona mire. La moderación automática necesita
+// volumen para calibrarse, y calibrarla mal —bajar publicaciones legítimas— es
+// peor que tardar dos horas.
+//
+// La única excepción es el umbral de reportes distintos sobre lo mismo, que
+// oculta preventivamente. Ver `ReportTarget`.
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum ReportTarget {
+  PRODUCT
+  LIVE
+  SELLER
+  REVIEW
+  /// Un mensaje del chat de un vivo.
+  CHAT_MESSAGE
+}
+
+enum ReportReason {
+  /// No se puede vender: armas, drogas, animales, documentos.
+  PROHIBIDO
+  /// Falsificación de marca.
+  FALSIFICADO
+  /// La foto o el texto no son de quien publica.
+  CONTENIDO_AJENO
+  /// Desnudez o contenido sexual.
+  CONTENIDO_SEXUAL
+  /// Insultos, amenazas, discriminación.
+  VIOLENCIA
+  /// Intento de estafa: pide pagar por afuera, precio imposible.
+  ESTAFA
+  /// Lo que se recibe no es lo que se publicó.
+  ENGANOSO
+  SPAM
+  OTRO
+}
+
+enum ReportStatus {
+  /// Esperando que alguien lo mire.
+  PENDIENTE
+  /// Se revisó y había algo. Se actuó.
+  CONFIRMADO
+  /// Se revisó y no había nada.
+  DESESTIMADO
+  /// Se juntó con otro reporte sobre lo mismo.
+  DUPLICADO
+}
+
+model Report {
+  id String @id // rep_<ulid>
+
+  /// Quién reportó. `null` sólo para reportes del sistema.
+  reporterUserId String? @map("reporter_user_id")
+
+  targetType ReportTarget @map("target_type")
+  targetId   String       @map("target_id")
+
+  reason ReportReason
+  /// Lo que escribió quien reportó. Opcional pero muy útil.
+  detail String?
+
+  status ReportStatus @default(PENDIENTE)
+
+  /// Quién lo revisó y qué decidió.
+  reviewedByUserId String?   @map("reviewed_by_user_id")
+  reviewedAt       DateTime? @map("reviewed_at")
+  /// Por qué se decidió eso. Obligatorio al resolver: una decisión de
+  /// moderación sin motivo no se puede defender ni revisar después.
+  resolution       String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  reporter User? @relation("reportesHechos", fields: [reporterUserId], references: [id], onDelete: SetNull)
+
+  /// Una persona reporta una cosa UNA vez.
+  ///
+  /// Sin esto, alguien puede reportar veinte veces el mismo producto y disparar
+  /// solo el umbral de ocultamiento preventivo. El índice único convierte esa
+  /// campaña en un solo reporte.
+  @@unique([reporterUserId, targetType, targetId])
+  /// La cola de moderación: lo pendiente, lo más viejo primero.
+  @@index([status, createdAt])
+  /// Cuántos reportes distintos tiene una cosa. Es lo que dispara el umbral.
+  @@index([targetType, targetId, status])
+  @@map("reports")
+}
+
+/// Una acción de moderación sobre algo.
+///
+/// ─── Por qué es una tabla y no un campo en el producto ───
+///
+/// Un producto oculto y después restaurado tiene una historia: quién lo ocultó,
+/// cuándo, por qué, y quién lo devolvió. Con un booleano en el producto, esa
+/// historia no existe — y cuando el vendedor reclame, no hay nada que mirar.
+///
+/// Además el mismo mecanismo sirve para productos, vivos, reseñas y vendedores
+/// sin agregarle una columna a cada tabla.
+model ModerationAction {
+  id String @id // mod_<ulid>
+
+  targetType ReportTarget @map("target_type")
+  targetId   String       @map("target_id")
+
+  /// `HIDE`, `UNHIDE`, `SUSPEND`, `UNSUSPEND`, `WARN`.
+  action String
+
+  /// `null` cuando la tomó el sistema por umbral de reportes.
+  actorUserId String? @map("actor_user_id")
+
+  /// Obligatorio. Una acción de moderación sin motivo no se puede defender.
+  reason String
+
+  /// Si fue automática por umbral. Se distingue para poder medir cuántas
+  /// revierte después una persona: si son muchas, el umbral está mal.
+  automatic Boolean @default(false)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([targetType, targetId, createdAt])
+  @@map("moderation_actions")
 }

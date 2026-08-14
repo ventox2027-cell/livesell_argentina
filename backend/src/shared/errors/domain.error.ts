@@ -46,6 +46,15 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<string, number>> = {
   // corregir el JSON sino mostrarle el motivo a la persona.
   EXCHANGE_POLICY_INVALID: 422,
 
+  // Moderación
+  //
+  // 409 y no 400: el reporte es válido, lo que pasa es que esta persona ya
+  // reportó esto. La app tiene que poder mostrar "ya lo reportaste, lo estamos
+  // revisando" en vez de un error genérico — hizo algo razonable.
+  ALREADY_REPORTED: 409,
+  REPORT_NOT_FOUND: 404,
+  REPORT_TARGET_NOT_FOUND: 404,
+
   // Soporte
   //
   // 404 y no 403 para un ticket ajeno: confirmar que existe ya es

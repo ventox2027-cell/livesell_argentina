@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 
 import { diasEfectivos, resumenParaElComprador } from '@/modules/commerce/politicas';
+import { PRODUCTO_VISIBLE } from '@/modules/commerce/visibilidad';
 import { NotificationsService } from '@/modules/notifications/notifications.service';
 import {
   costoDeEnvio,
@@ -516,8 +517,7 @@ export class StoresService {
     const productos = await this.prisma.product.findMany({
       where: {
         storeId,
-        status: 'ACTIVE',
-        deletedAt: null,
+        ...PRODUCTO_VISIBLE,
         ...(dto.q ? { name: { contains: dto.q, mode: 'insensitive' } } : {}),
       },
       orderBy: { createdAt: 'desc' },
@@ -587,7 +587,7 @@ export class StoresService {
    */
   async detalleParaComprar(productId: string) {
     const producto = await this.prisma.product.findFirst({
-      where: { id: productId, status: 'ACTIVE', deletedAt: null },
+      where: { id: productId, ...PRODUCTO_VISIBLE },
       include: {
         images: { orderBy: { position: 'asc' } },
         options: {

@@ -26,6 +26,7 @@ class RailDeAcciones extends StatelessWidget {
     required this.onPerfil,
     required this.liveSessionId,
     this.onCompartir,
+    this.onReportar,
   });
 
   final VoidCallback onTienda;
@@ -36,6 +37,10 @@ class RailDeAcciones extends StatelessWidget {
   final String liveSessionId;
 
   final VoidCallback? onCompartir;
+
+  /// Reportar el vivo. Va abajo de todo: es lo que menos se usa y no puede
+  /// competir por el pulgar con "Tienda".
+  final VoidCallback? onReportar;
 
   @override
   Widget build(BuildContext context) {
@@ -73,6 +78,12 @@ class RailDeAcciones extends StatelessWidget {
           etiqueta: 'Perfil',
           onTap: onPerfil,
         ),
+        if (onReportar != null)
+          _Accion(
+            icono: Icons.flag_outlined,
+            etiqueta: 'Reportar',
+            onTap: onReportar,
+          ),
       ],
     );
   }

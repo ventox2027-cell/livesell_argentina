@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../../core/design/tokens.dart';
+import '../../moderation/presentation/reportar_sheet.dart';
 import '../../social/data/social_api.dart';
 import '../../auth/state/auth_providers.dart';
 import '../data/live_api.dart';
@@ -345,6 +346,11 @@ class _LiveViewerScreenState extends ConsumerState<LiveViewerScreen> {
                         liveSessionId: live.id,
                         onTienda: _abrirTienda,
                         onCompartir: () => _compartir(live.id),
+                        onReportar: () => ReportarSheet.mostrar(
+                          context,
+                          targetType: 'LIVE',
+                          targetId: live.id,
+                        ),
                         onComentar: () => _focoComposer.requestFocus(),
                         onPerfil: () => Navigator.of(context).push(
                           MaterialPageRoute<void>(

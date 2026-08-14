@@ -59,6 +59,8 @@ export const ID_PREFIX = {
   purchaseIntent: 'pin',
   notification: 'ntf',
   like: 'lik',
+  report: 'rep',
+  moderationAction: 'mod',
   supportTicket: 'sup',
   supportMessage: 'sms',
   oauthState: 'oas',

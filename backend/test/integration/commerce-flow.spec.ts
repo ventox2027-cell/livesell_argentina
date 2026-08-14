@@ -63,7 +63,7 @@ beforeAll(async () => {
     throw new Error('Los tests de integración borran datos y sólo corren contra una base *_test');
   }
   await prisma.$executeRawUnsafe(
-    'TRUNCATE live_sessions, likes, audit_logs, product_variant_options, product_images, product_variants, ' +
+    'TRUNCATE reports, moderation_actions, notifications, live_sessions, likes, audit_logs, product_variant_options, product_images, product_variants, ' +
       'product_option_values, product_options, products, stores, sellers, ' +
       'auth_events, refresh_tokens, devices, user_identities, users CASCADE',
   );
@@ -1492,5 +1492,451 @@ describe('Ranking del feed', () => {
     const despues = await call('GET', '/api/v1/discover/products');
     const ordenDespues = (despues.body.items as Array<{ name: string }>).map((p) => p.name);
     expect(ordenDespues[0]).toContain('con vivo');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// REPORTES Y MODERACIÓN
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Ocultar un producto tiene que ocultarlo EN TODOS LADOS.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * EL BUG QUE ESTE BLOQUE EXISTE PARA IMPEDIR
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Un producto se muestra en cinco lugares: el feed, la búsqueda, la vidriera de
+ * la tienda, el catálogo del vivo y la ficha del producto. Cada uno tenía su
+ * `where` copiado a mano.
+ *
+ * Olvidarse de uno significa que un producto ocultado por contenido prohibido
+ * **sigue apareciendo** en la búsqueda mientras el equipo cree que lo bajó. Y
+ * peor: nadie se entera, porque el panel dice que está oculto.
+ *
+ * La búsqueda además usa SQL a mano y no puede importar la definición común, así
+ * que su copia SÓLO está protegida por este test.
+ */
+describe('Moderación: ocultar', () => {
+  async function productoBuscable(vendedor: { token: string }, nombre: string) {
+    n += 1;
+    const r = await call('POST', '/api/v1/products', {
+      token: vendedor.token,
+      body: {
+        name: nombre,
+        slug: `mod-${n}-${Date.now().toString(36)}`,
+        basePriceCents: 500_000,
+        status: 'ACTIVE',
+      },
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    return r.body.id as string;
+  }
+
+  /** Los cinco lugares donde un producto puede aparecer. */
+  async function apareceEn(productId: string, storeSlug: string, storeId: string, nombre: string) {
+    const feed = await call('GET', '/api/v1/discover/products?limit=50');
+    const busqueda = await call(
+      'GET',
+      `/api/v1/discover/products?q=${encodeURIComponent(nombre.split(' ')[0]!)}`,
+    );
+    const vidriera = await call('GET', `/api/v1/stores/by-slug/${storeSlug}/products`);
+    const catalogo = await call('GET', `/api/v1/stores/${storeId}/catalog`);
+    const ficha = await call('GET', `/api/v1/catalog/products/${productId}`);
+
+    const tiene = (r: { body: unknown }) =>
+      JSON.stringify((r.body as { items?: unknown })?.items ?? []).includes(productId);
+
+    return {
+      feed: tiene(feed),
+      busqueda: tiene(busqueda),
+      vidriera: tiene(vidriera),
+      catalogo: tiene(catalogo),
+      ficha: ficha.status === 200,
+    };
+  }
+
+  it('⛔ un producto oculto desaparece de LOS CINCO lugares', async () => {
+    const vendedor = await nuevoVendedor();
+    const tienda = await prisma.store.findFirstOrThrow({
+      where: { sellerId: vendedor.seller.id as string },
+    });
+    const nombre = `Chomba moderada ${n}`;
+    const productId = await productoBuscable(vendedor, nombre);
+
+    // Primero: aparece en todos.
+    const antes = await apareceEn(productId, tienda.slug, tienda.id, nombre);
+    expect(antes).toEqual({
+      feed: true,
+      busqueda: true,
+      vidriera: true,
+      catalogo: true,
+      ficha: true,
+    });
+
+    await prisma.product.update({
+      where: { id: productId },
+      data: { hiddenAt: new Date() },
+    });
+
+    // Y después: en ninguno.
+    const despues = await apareceEn(productId, tienda.slug, tienda.id, nombre);
+    expect(despues).toEqual({
+      feed: false,
+      busqueda: false,
+      vidriera: false,
+      catalogo: false,
+      ficha: false,
+    });
+  });
+
+  it('el vendedor SÍ lo sigue viendo en su panel', async () => {
+    /**
+     * Enterarse de que una publicación desapareció sin explicación es peor que
+     * la sanción: el vendedor no sabe qué corregir, asume que fue un error del
+     * sistema, y vuelve a publicar lo mismo.
+     */
+    const vendedor = await nuevoVendedor();
+    const productId = await productoBuscable(vendedor, `Producto oculto visible ${n}`);
+
+    await prisma.product.update({
+      where: { id: productId },
+      data: { hiddenAt: new Date() },
+    });
+
+    const mios = await call('GET', '/api/v1/products/mine', { token: vendedor.token });
+    expect(JSON.stringify(mios.body)).toContain(productId);
+  });
+
+  it('ocultar es distinto de pausar', async () => {
+    /**
+     * Pausar lo decide el vendedor y lo puede revertir cuando quiera; ocultar lo
+     * decide la moderación. Si fueran el mismo campo, el vendedor deshacería una
+     * sanción despausando.
+     */
+    const vendedor = await nuevoVendedor();
+    const productId = await productoBuscable(vendedor, `Producto pausa vs oculto ${n}`);
+
+    await prisma.product.update({ where: { id: productId }, data: { hiddenAt: new Date() } });
+
+    // El vendedor lo "despausa": no cambia nada, porque nunca estuvo pausado.
+    const r = await call('PATCH', `/api/v1/products/${productId}`, {
+      token: vendedor.token,
+      body: { status: 'ACTIVE' },
+    });
+    expect(r.status).toBe(200);
+
+    const producto = await prisma.product.findUniqueOrThrow({ where: { id: productId } });
+    expect(producto.hiddenAt).not.toBeNull();
+
+    const ficha = await call('GET', `/api/v1/catalog/products/${productId}`);
+    expect(ficha.status).toBe(404);
+  });
+});
+
+describe('Reportar', () => {
+  async function productoDe(vendedor: { token: string }) {
+    n += 1;
+    const r = await call('POST', '/api/v1/products', {
+      token: vendedor.token,
+      body: {
+        name: `Producto reportable ${n}`,
+        slug: `rep-${n}-${Date.now().toString(36)}`,
+        basePriceCents: 500_000,
+        status: 'ACTIVE',
+      },
+    });
+    return r.body.id as string;
+  }
+
+  it('un reporte se guarda y no baja nada', async () => {
+    const vendedor = await nuevoVendedor();
+    const productId = await productoDe(vendedor);
+    const quienReporta = await nuevoUsuario();
+
+    const r = await call('POST', '/api/v1/reports', {
+      token: quienReporta.token,
+      body: { targetType: 'PRODUCT', targetId: productId, reason: 'SPAM', detail: 'Repite' },
+    });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+
+    const producto = await prisma.product.findUniqueOrThrow({ where: { id: productId } });
+    expect(producto.hiddenAt).toBeNull();
+  });
+
+  it('⛔ la misma persona no puede reportar dos veces lo mismo', async () => {
+    /**
+     * Sin el índice único, alguien reporta veinte veces y dispara solo el
+     * umbral. Es la forma más barata de bajarle la publicación a un competidor.
+     */
+    const vendedor = await nuevoVendedor();
+    const productId = await productoDe(vendedor);
+    const quienReporta = await nuevoUsuario();
+
+    const cuerpo = { targetType: 'PRODUCT', targetId: productId, reason: 'SPAM' };
+    await call('POST', '/api/v1/reports', { token: quienReporta.token, body: cuerpo });
+    const segunda = await call('POST', '/api/v1/reports', {
+      token: quienReporta.token,
+      body: cuerpo,
+    });
+
+    expect(segunda.status).toBe(409);
+    expect(await prisma.report.count({ where: { targetId: productId } })).toBe(1);
+  });
+
+  it('⛔ un reporte de contenido prohibido oculta al instante', async () => {
+    const vendedor = await nuevoVendedor();
+    const productId = await productoDe(vendedor);
+    const quienReporta = await nuevoUsuario();
+
+    await call('POST', '/api/v1/reports', {
+      token: quienReporta.token,
+      body: {
+        targetType: 'PRODUCT',
+        targetId: productId,
+        reason: 'PROHIBIDO',
+        detail: 'Vende algo que no se puede vender',
+      },
+    });
+
+    const producto = await prisma.product.findUniqueOrThrow({ where: { id: productId } });
+    expect(producto.hiddenAt).not.toBeNull();
+
+    // Y queda registrado como automático, para poder medir si el umbral está
+    // mal calibrado.
+    const accion = await prisma.moderationAction.findFirst({
+      where: { targetId: productId, action: 'HIDE' },
+    });
+    expect(accion?.automatic).toBe(true);
+    expect(accion?.reason).toBe('PROHIBIDO');
+  });
+
+  it('el vendedor recibe un aviso con el motivo, sin saber quién reportó', async () => {
+    const vendedor = await nuevoVendedor();
+    const productId = await productoDe(vendedor);
+    const quienReporta = await nuevoUsuario();
+
+    await call('POST', '/api/v1/reports', {
+      token: quienReporta.token,
+      body: { targetType: 'PRODUCT', targetId: productId, reason: 'PROHIBIDO' },
+    });
+
+    const avisos = await call('GET', '/api/v1/notifications', { token: vendedor.token });
+    const crudo = JSON.stringify(avisos.body);
+
+    expect(crudo).toContain('Ocultamos');
+    expect(crudo).toContain('no se puede vender');
+    // ⚠️ Un vendedor que sabe quién lo reportó puede represaliar.
+    expect(crudo).not.toContain(quienReporta.userId);
+  });
+
+  it('⛔ el spam necesita cinco personas distintas', async () => {
+    const vendedor = await nuevoVendedor();
+    const productId = await productoDe(vendedor);
+
+    for (let i = 0; i < 4; i += 1) {
+      const u = await nuevoUsuario();
+      await call('POST', '/api/v1/reports', {
+        token: u.token,
+        body: { targetType: 'PRODUCT', targetId: productId, reason: 'SPAM' },
+      });
+    }
+
+    let producto = await prisma.product.findUniqueOrThrow({ where: { id: productId } });
+    expect(producto.hiddenAt).toBeNull();
+
+    const quinto = await nuevoUsuario();
+    await call('POST', '/api/v1/reports', {
+      token: quinto.token,
+      body: { targetType: 'PRODUCT', targetId: productId, reason: 'SPAM' },
+    });
+
+    producto = await prisma.product.findUniqueOrThrow({ where: { id: productId } });
+    expect(producto.hiddenAt).not.toBeNull();
+  });
+
+  it('reportar algo que no existe se rechaza', async () => {
+    // Sin esto se acumulan reportes sobre ids inventados que ensucian la cola.
+    const u = await nuevoUsuario();
+    const r = await call('POST', '/api/v1/reports', {
+      token: u.token,
+      body: {
+        targetType: 'PRODUCT',
+        targetId: 'prd_00000000000000000000000000',
+        reason: 'SPAM',
+      },
+    });
+    expect(r.status).toBe(404);
+  });
+
+  it('sin sesión no se puede reportar', async () => {
+    const r = await call('POST', '/api/v1/reports', {
+      body: { targetType: 'PRODUCT', targetId: 'prd_x', reason: 'SPAM' },
+    });
+    expect(r.status).toBe(401);
+  });
+});
+
+describe('La cola de moderación', () => {
+  it('⛔ un usuario común no la ve', async () => {
+    const u = await nuevoUsuario();
+    const r = await call('GET', '/api/v1/admin/moderation/queue', { token: u.token });
+    expect(r.status).toBe(403);
+  });
+
+  it('agrupa por contenido, no por reporte', async () => {
+    /**
+     * Un producto con ocho reportes genera ocho filas, y quien modera revisa el
+     * producto UNA vez. Con la lista plana, resuelve el primero y los otros
+     * siete siguen pidiendo la misma decisión.
+     */
+    const admin = await nuevoUsuario();
+    await prisma.user.update({ where: { id: admin.userId }, data: { role: 'admin' } });
+
+    const vendedor = await nuevoVendedor();
+    n += 1;
+    const p = await call('POST', '/api/v1/products', {
+      token: vendedor.token,
+      body: {
+        name: `Producto cola ${n}`,
+        slug: `cola-${n}-${Date.now().toString(36)}`,
+        basePriceCents: 500_000,
+        status: 'ACTIVE',
+      },
+    });
+    const productId = p.body.id as string;
+
+    for (let i = 0; i < 3; i += 1) {
+      const u = await nuevoUsuario();
+      await call('POST', '/api/v1/reports', {
+        token: u.token,
+        body: { targetType: 'PRODUCT', targetId: productId, reason: 'ENGANOSO' },
+      });
+    }
+
+    const cola = await call('GET', '/api/v1/admin/moderation/queue', { token: admin.token });
+    expect(cola.status, JSON.stringify(cola.body)).toBe(200);
+
+    const grupo = (cola.body.items as Array<Record<string, unknown>>).find(
+      (g) => g.targetId === productId,
+    );
+    expect(grupo).toBeDefined();
+    expect(grupo!.reportes).toBe(3);
+    expect(grupo!.motivos).toEqual(['ENGANOSO']);
+  });
+
+  it('resolver cierra TODOS los reportes de ese contenido', async () => {
+    const admin = await nuevoUsuario();
+    await prisma.user.update({ where: { id: admin.userId }, data: { role: 'admin' } });
+
+    const vendedor = await nuevoVendedor();
+    n += 1;
+    const p = await call('POST', '/api/v1/products', {
+      token: vendedor.token,
+      body: {
+        name: `Producto resolver ${n}`,
+        slug: `resolver-${n}-${Date.now().toString(36)}`,
+        basePriceCents: 500_000,
+        status: 'ACTIVE',
+      },
+    });
+    const productId = p.body.id as string;
+
+    for (let i = 0; i < 2; i += 1) {
+      const u = await nuevoUsuario();
+      await call('POST', '/api/v1/reports', {
+        token: u.token,
+        body: { targetType: 'PRODUCT', targetId: productId, reason: 'SPAM' },
+      });
+    }
+
+    const r = await call('POST', '/api/v1/admin/moderation/resolve', {
+      token: admin.token,
+      body: {
+        targetType: 'PRODUCT',
+        targetId: productId,
+        decision: 'DESESTIMADO',
+        resolution: 'Revisado: el producto está bien, no hay spam.',
+        accion: 'NADA',
+      },
+    });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(r.body.resueltos).toBe(2);
+    expect(
+      await prisma.report.count({ where: { targetId: productId, status: 'PENDIENTE' } }),
+    ).toBe(0);
+  });
+
+  it('⛔ resolver sin un motivo de verdad se rechaza', async () => {
+    // "ok" no es un motivo. Cuando el vendedor reclame, esto es lo único que
+    // hay para mirar.
+    const admin = await nuevoUsuario();
+    await prisma.user.update({ where: { id: admin.userId }, data: { role: 'admin' } });
+
+    const r = await call('POST', '/api/v1/admin/moderation/resolve', {
+      token: admin.token,
+      body: {
+        targetType: 'PRODUCT',
+        targetId: 'prd_x',
+        decision: 'DESESTIMADO',
+        resolution: 'ok',
+      },
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it('devolver un producto a la venta queda en el historial', async () => {
+    /**
+     * Con un booleano en el producto, la historia no existiría: quién ocultó,
+     * cuándo, por qué, y quién lo devolvió. Es lo que se mira ante un reclamo.
+     */
+    const admin = await nuevoUsuario();
+    await prisma.user.update({ where: { id: admin.userId }, data: { role: 'admin' } });
+
+    const vendedor = await nuevoVendedor();
+    n += 1;
+    const p = await call('POST', '/api/v1/products', {
+      token: vendedor.token,
+      body: {
+        name: `Producto restaurado ${n}`,
+        slug: `restaurar-${n}-${Date.now().toString(36)}`,
+        basePriceCents: 500_000,
+        status: 'ACTIVE',
+      },
+    });
+    const productId = p.body.id as string;
+
+    const u = await nuevoUsuario();
+    await call('POST', '/api/v1/reports', {
+      token: u.token,
+      body: { targetType: 'PRODUCT', targetId: productId, reason: 'PROHIBIDO' },
+    });
+
+    await call('POST', '/api/v1/admin/moderation/resolve', {
+      token: admin.token,
+      body: {
+        targetType: 'PRODUCT',
+        targetId: productId,
+        decision: 'DESESTIMADO',
+        resolution: 'Falso positivo: el producto es legítimo.',
+        accion: 'UNHIDE',
+      },
+    });
+
+    const producto = await prisma.product.findUniqueOrThrow({ where: { id: productId } });
+    expect(producto.hiddenAt).toBeNull();
+
+    const historial = await call(
+      'GET',
+      `/api/v1/admin/moderation/history/PRODUCT/${productId}`,
+      { token: admin.token },
+    );
+    const acciones = historial.body.items as Array<{ action: string; automatic: boolean }>;
+    expect(acciones.map((a) => a.action)).toEqual(['UNHIDE', 'HIDE']);
+    // El HIDE fue automático; el UNHIDE lo hizo una persona.
+    expect(acciones[0]!.automatic).toBe(false);
+    expect(acciones[1]!.automatic).toBe(true);
   });
 });
