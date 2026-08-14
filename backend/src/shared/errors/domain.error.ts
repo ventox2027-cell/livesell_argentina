@@ -46,6 +46,17 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<string, number>> = {
   // corregir el JSON sino mostrarle el motivo a la persona.
   EXCHANGE_POLICY_INVALID: 422,
 
+  // Soporte
+  //
+  // 404 y no 403 para un ticket ajeno: confirmar que existe ya es
+  // información. Y 404 y no 400 porque la app tiene que poder distinguir "no
+  // encontramos esa conversación" de "mandaste algo mal" — con 400 muestra
+  // "algo salió mal" en una pantalla donde lo correcto es "no existe".
+  SUPPORT_TICKET_NOT_FOUND: 404,
+  // 409: el ticket existe y es tuyo, pero está en un estado que no admite
+  // mensajes nuevos. La app puede ofrecer abrir uno nuevo.
+  SUPPORT_TICKET_CLOSED: 409,
+
   // Dominio de autenticación
   INVALID_TOKEN: 401,
   // 401 y no 403: la sesión se puede recuperar reiniciándola, y el cliente

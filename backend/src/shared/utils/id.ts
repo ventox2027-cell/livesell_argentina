@@ -58,6 +58,8 @@ export const ID_PREFIX = {
   review: 'rev',
   purchaseIntent: 'pin',
   notification: 'ntf',
+  supportTicket: 'sup',
+  supportMessage: 'sms',
   oauthState: 'oas',
   oauthCredential: 'soc',
   auditLog: 'aud',

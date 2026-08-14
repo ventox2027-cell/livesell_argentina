@@ -538,6 +538,7 @@ model User {
   reviews       Review[]
   intents       PurchaseIntent[]
   notifications Notification[]
+  supportTickets SupportTicket[]
 
   @@index([phoneE164])
   @@index([status, createdAt])
@@ -2589,4 +2590,132 @@ model SellerOAuthCredential {
   /// Una credencial por vendedor y proveedor. Reconectar reemplaza, no acumula.
   @@unique([sellerId, provider])
   @@map("seller_oauth_credentials")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SOPORTE
+//
+// ─── Por qué hay IA y humanos, y no uno solo ───
+//
+// La mayoría de las consultas de un marketplace son las mismas diez preguntas:
+// "dónde está mi pedido", "cómo cambio un talle", "por qué no me acreditaron".
+// Contestarlas a mano, 24 horas, con un equipo de una persona, es imposible.
+//
+// Pero hay un grupo que NO puede contestar una máquina: todo lo que decide
+// quién se queda con la plata. Una devolución, una disputa, un cobro duplicado.
+// Ahí una respuesta equivocada no es una molestia: es dinero de alguien.
+//
+// Por eso el diseño no es "IA con humano de respaldo" sino "IA para lo que se
+// puede automatizar y ESCALADA OBLIGATORIA para lo que no". La diferencia está
+// en `SupportCategory`: hay categorías donde la IA no llega a opinar.
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum SupportCategory {
+  /// Dónde está mi pedido, cuándo llega, no me llegó.
+  ENVIO
+  /// Cómo cambio, cómo devuelvo, qué política tiene esta tienda.
+  CAMBIOS
+  /// ⚠️ No me acreditaron, me cobraron dos veces, quiero mi plata.
+  PAGOS
+  /// ⚠️ Tengo un problema con el vendedor / con el comprador.
+  DISPUTA
+  /// No puedo entrar, perdí el acceso, quiero borrar mi cuenta.
+  CUENTA
+  /// Cómo vendo, cómo hago un vivo, cómo cargo productos.
+  VENDEDOR
+  /// Algo está roto en la app.
+  PROBLEMA_TECNICO
+  /// Cualquier otra cosa.
+  OTRO
+}
+
+enum SupportStatus {
+  /// Esperando una respuesta nuestra.
+  ABIERTO
+  /// Contestamos y esperamos a la persona.
+  ESPERANDO_RESPUESTA
+  /// La IA no puede o no debe: espera a una persona del equipo.
+  ESCALADO
+  /// Resuelto. Se puede reabrir contestando.
+  RESUELTO
+  /// Cerrado sin actividad. No se reabre: se crea uno nuevo.
+  CERRADO
+}
+
+enum SupportAuthor {
+  /// Quien abrió el ticket.
+  USUARIO
+  /// El asistente automático.
+  ASISTENTE
+  /// Una persona del equipo.
+  EQUIPO
+  /// Mensajes del sistema: "escalado a una persona", "cerrado por inactividad".
+  SISTEMA
+}
+
+model SupportTicket {
+  id     String @id // sup_<ulid>
+  userId String @map("user_id")
+
+  category SupportCategory @default(OTRO)
+  status   SupportStatus   @default(ABIERTO)
+
+  /// Lo que la persona escribió al abrirlo, recortado. Para la lista.
+  subject String
+
+  /// El pedido del que habla, si habla de uno.
+  ///
+  /// Sin relación de base a propósito: un ticket sobre un pedido tiene que
+  /// sobrevivir a que ese pedido se borre. Es el registro de una conversación,
+  /// no un dato derivado.
+  orderId String? @map("order_id")
+
+  /// Si una persona del equipo ya lo miró. `null` = nadie todavía.
+  assignedToUserId String? @map("assigned_to_user_id")
+
+  /// Por qué se escaló. Lo escribe el sistema, no la persona.
+  escalationReason String? @map("escalation_reason")
+  escalatedAt      DateTime? @map("escalated_at")
+
+  /// Para ordenar la bandeja por lo que hace más que esperar.
+  lastMessageAt DateTime  @default(now()) @map("last_message_at")
+  resolvedAt    DateTime? @map("resolved_at")
+  closedAt      DateTime? @map("closed_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user     User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages SupportMessage[]
+
+  /// Los tickets de una persona, los más recientes primero.
+  @@index([userId, lastMessageAt])
+  /// La bandeja del equipo: lo escalado primero, lo más viejo arriba.
+  @@index([status, lastMessageAt])
+  @@map("support_tickets")
+}
+
+model SupportMessage {
+  id       String @id // sms_<ulid>
+  ticketId String @map("ticket_id")
+
+  author SupportAuthor
+  body   String
+
+  /// Quién lo escribió, cuando fue una persona. `null` para IA y sistema.
+  authorUserId String? @map("author_user_id")
+
+  /// Si el asistente decidió escalar en este mensaje.
+  ///
+  /// Se guarda en el mensaje y no sólo en el ticket porque una conversación
+  /// puede escalar, resolverse y volver a escalar. El ticket dice el estado de
+  /// AHORA; esto dice qué pasó en cada paso.
+  escalated Boolean @default(false)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  ticket SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId, createdAt])
+  @@map("support_messages")
 }
