@@ -77,6 +77,12 @@ export class MercadoPagoPaymentProvider extends PaymentProvider {
           description: input.description,
           externalReference: input.externalReference,
           notificationUrl: this.mp.notificationUrl,
+          // Centavos adentro, unidades de moneda hacia afuera. La conversión
+          // vive acá porque es un detalle del formato de la API de Mercado
+          // Pago, no una regla de negocio.
+          applicationFee:
+            input.applicationFee === undefined ? undefined : centavosAMonto(input.applicationFee),
+          sellerAccessToken: input.sellerAccessToken,
         },
         idempotencyKey,
       );

@@ -6,6 +6,7 @@ import '../../../core/design/tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../data/seller_repository.dart';
 import '../domain/seller_models.dart';
+import 'mercadopago_screen.dart';
 import 'politicas_screen.dart';
 import 'schedule_screen.dart';
 
@@ -223,6 +224,17 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
                     // tenemos en memoria quedó vieja.
                     if (cambio ?? false) ref.invalidate(miPerfilVendedorProvider);
                   },
+                ),
+                const SizedBox(height: Gap.md),
+                // Los cobros van con el resto de lo que define plata: quién
+                // recibe el dinero es tan importante como cuánto se cobra.
+                _FilaDeAjuste(
+                  icono: Icons.account_balance_wallet_outlined,
+                  titulo: 'Cobros',
+                  detalle: 'Dónde entra el dinero de tus ventas',
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(builder: (_) => const MercadoPagoScreen()),
+                  ),
                 ),
                 const SizedBox(height: Gap.lg),
                 _Apertura(

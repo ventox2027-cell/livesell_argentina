@@ -50,6 +50,37 @@ const TEST_DEFAULTS: Record<string, string> = {
   MP_ACCESS_TOKEN: 'TEST-token-de-prueba-suficientemente-largo',
   MP_PUBLIC_KEY: 'TEST-public-key-de-prueba-larga',
   MP_WEBHOOK_SECRET: 'secreto-de-webhook-para-tests',
+  /**
+   * OAuth de marketplace. Credenciales de mentira con la forma correcta.
+   *
+   * Van acá y no en cada archivo de test porque `env.schema.ts` se evalúa la
+   * PRIMERA vez que alguien lo importa, y `helpers/app.ts` lo importa a través
+   * de `http-setup.ts`. Para cuando el `beforeAll` de un test corre
+   * `Object.assign(process.env, ...)`, la configuración ya está congelada.
+   *
+   * Se perdió un rato buscándolo en el lugar equivocado: los endpoints
+   * respondían "no configurado" con las variables puestas en el archivo de
+   * test, tres líneas antes de arrancar la aplicación.
+   *
+   * ⚠️ La redirección tiene que coincidir con la ruta que el servidor registra
+   * o el esquema rechaza el arranque. Es la misma validación que protege a
+   * `MP_NOTIFICATION_URL`.
+   */
+  MP_CLIENT_ID: '1234567890123456',
+  MP_CLIENT_SECRET: 'secreto-de-aplicacion-solo-para-tests-0123456789',
+  MP_OAUTH_REDIRECT_URI: 'https://api.vendox.test/oauth/mercadopago/callback',
+
+  /**
+   * Llave de cifrado FIJA para los tests.
+   *
+   * Fija y no aleatoria a propósito: con una llave distinta por corrida, un
+   * test que guarde algo cifrado y otro que lo lea fallarían de formas que
+   * dependen del orden de ejecución.
+   *
+   * ⛔ Obviamente no se usa en ningún otro lado.
+   */
+  CREDENTIALS_ENCRYPTION_KEY: 'dGVzdC1rZXktc29sby1wYXJhLXRlc3RzLTMyYnl0ZXM=',
+
 
   METRICS_ENABLED: 'false',
 };

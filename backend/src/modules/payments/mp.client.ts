@@ -83,6 +83,30 @@ export interface CreatePaymentInput {
   /** Para cobrar con tarjeta guardada. */
   issuerId?: string;
   payerCustomerId?: string;
+
+  /**
+   * La comisión de VendoX, en unidades de moneda (no en centavos).
+   *
+   * Mercado Pago la descuenta del cobro y la deposita en NUESTRA cuenta; el
+   * resto va a la del vendedor, en el mismo movimiento. Nunca tocamos la plata
+   * de nadie.
+   *
+   * Sólo tiene efecto junto con `sellerAccessToken`: sobre nuestra propia
+   * cuenta, cobrarnos comisión a nosotros mismos no significa nada.
+   */
+  applicationFee?: number;
+
+  /**
+   * El access token del vendedor, para cobrar en SU cuenta.
+   *
+   * ⛔ Llega en claro, se usa y muere con la llamada. No se guarda, no se
+   * registra y no se reenvía. Lo descifra `SellerOAuthService` justo antes.
+   *
+   * Sin esto, el cobro entra en la cuenta de VendoX: estaríamos moviendo plata
+   * de terceros por nuestro balance, que es exactamente lo que el modelo de
+   * marketplace existe para evitar.
+   */
+  sellerAccessToken?: string;
 }
 
 /**
@@ -169,9 +193,24 @@ export class MercadoPagoService {
     const notificationUrl = input.notificationUrl ?? this.notificationUrl;
     if (notificationUrl) body.notification_url = notificationUrl;
 
+    /**
+     * La comisión sólo viaja si es mayor que cero.
+     *
+     * Mercado Pago rechaza `application_fee: 0` con un error que no dice cuál
+     * es el problema. Y un cobro sin comisión es un caso legítimo —una venta de
+     * un peso, donde el 6 % redondea a cero— así que no puede fallar.
+     */
+    if (input.applicationFee !== undefined && input.applicationFee > 0) {
+      body.application_fee = input.applicationFee;
+    }
+
     return this.request<MpPayment>('POST', '/v1/payments', {
       body,
       idempotencyKey,
+      // Con el token del vendedor, el cobro entra en SU cuenta y Mercado Pago
+      // nos deposita la comisión en el mismo movimiento. Sin él, entra en la
+      // nuestra — que es lo que hace el spike.
+      accessToken: input.sellerAccessToken,
     });
   }
 
@@ -263,11 +302,14 @@ export class MercadoPagoService {
   private async request<T>(
     method: 'GET' | 'POST' | 'PUT',
     path: string,
-    opts: { body?: unknown; idempotencyKey?: string } = {},
+    opts: { body?: unknown; idempotencyKey?: string; accessToken?: string } = {},
   ): Promise<T> {
     const url = `${env.MP_API_BASE_URL}${path}`;
     const headers: Record<string, string> = {
-      Authorization: `Bearer ${this.token}`,
+      // El token del vendedor cuando se cobra en su nombre; el nuestro si no.
+      // ⛔ NUNCA se registra: ni acá, ni en el log de la petición, ni en el del
+      // error. Ver `camposProhibidos`.
+      Authorization: `Bearer ${opts.accessToken ?? this.token}`,
       'Content-Type': 'application/json',
     };
     if (opts.idempotencyKey) headers['X-Idempotency-Key'] = opts.idempotencyKey;

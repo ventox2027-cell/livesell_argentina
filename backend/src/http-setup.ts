@@ -4,6 +4,7 @@ import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fa
 
 import { env } from '@/config/env.schema';
 import {
+  RUTA_OAUTH_MERCADOPAGO,
   RUTA_WEBHOOK_LIVEKIT,
   RUTA_WEBHOOK_MERCADOPAGO,
   RUTA_WEBHOOK_SPIKE,
@@ -187,6 +188,10 @@ export function configurarPrefijoYVersionado(app: NestFastifyApplication): void 
       { path: RUTA_WEBHOOK_LIVEKIT, method: RequestMethod.POST },
       { path: RUTA_WEBHOOK_MERCADOPAGO, method: RequestMethod.POST },
       { path: RUTA_WEBHOOK_SPIKE, method: RequestMethod.POST },
+      // El callback del OAuth: lo abre el navegador del vendedor siguiendo
+      // una redirección de Mercado Pago, y la URL está cargada a mano en su
+      // panel.
+      { path: `${RUTA_OAUTH_MERCADOPAGO}/callback`, method: RequestMethod.GET },
       { path: 'media/*', method: RequestMethod.GET },
       { path: 'checkout', method: RequestMethod.GET },
     ],

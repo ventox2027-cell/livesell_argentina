@@ -44,3 +44,14 @@ export const RUTA_WEBHOOK_SPIKE = 'webhooks/spike/mercadopago';
 
 /** El webhook de LiveKit. Misma lógica: URL cargada a mano en su panel. */
 export const RUTA_WEBHOOK_LIVEKIT = 'webhooks/livekit';
+
+/**
+ * El callback del OAuth de Mercado Pago.
+ *
+ * Misma lógica que los webhooks: la URL se carga a mano en el panel de
+ * aplicaciones de Mercado Pago y tiene que coincidir carácter por carácter.
+ * Bajo `/api/v1/`, el día que exista `/api/v2/` habría que entrar al panel a
+ * cambiarla, y mientras tanto cada vendedor que intente conectar vería un
+ * error de Mercado Pago que no dice cuál es el problema.
+ */
+export const RUTA_OAUTH_MERCADOPAGO = 'oauth/mercadopago';

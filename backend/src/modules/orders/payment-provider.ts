@@ -89,6 +89,23 @@ export interface CobrarInput {
   payerEmail: string;
   description: string;
   externalReference: string;
+
+  /**
+   * La comisión de VendoX, en CENTAVOS.
+   *
+   * En centavos como todo el dinero del proyecto. La conversión a unidades de
+   * moneda -que es lo que Mercado Pago espera- la hace el proveedor, que es el
+   * único que conoce el formato de su API.
+   */
+  applicationFee?: number;
+
+  /**
+   * El token del vendedor, si cobra en su propia cuenta.
+   *
+   * ⛔ Se pasa en claro y muere con la llamada. Sin esto, el cobro entra en la
+   * cuenta de VendoX.
+   */
+  sellerAccessToken?: string;
 }
 
 /**

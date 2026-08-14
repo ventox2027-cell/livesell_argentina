@@ -9,6 +9,7 @@ import { AuditService } from '@/shared/audit/audit.service';
 import { DomainError } from '@/shared/errors/domain.error';
 import { DomainEvent, DomainEventBus } from '@/shared/events/domain-events';
 import { MetricsService } from '@/shared/observability/metrics.service';
+import { SellerOAuthService } from '@/modules/payments/seller-oauth.service';
 import { PrismaService } from '@/shared/prisma/prisma.service';
 import { newId } from '@/shared/utils/id';
 
@@ -107,6 +108,7 @@ export class OrderPaymentsService {
     private readonly audit: AuditService,
     private readonly events: DomainEventBus,
     private readonly metrics: MetricsService,
+    private readonly sellerOAuth: SellerOAuthService,
   ) {}
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -149,6 +151,11 @@ export class OrderPaymentsService {
         currency: true,
         reference: true,
         buyerSnapshot: true,
+        // Para el cobro en la cuenta del vendedor: a quién pertenece y cuánta
+        // comisión se calculó CUANDO se creó el pedido. Ver el comentario en
+        // la llamada al proveedor.
+        sellerId: true,
+        platformFeeAmount: true,
         items: { select: { productNameSnapshot: true }, take: 1 },
       },
     });
@@ -246,6 +253,35 @@ export class OrderPaymentsService {
     // ─── La llamada al proveedor ───
     const comprador = orden.buyerSnapshot as { email?: string } | null;
 
+    /**
+     * ═══════════════════════════════════════════════════════════════════════
+     * DÓNDE ENTRA LA PLATA
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * Si el vendedor conectó su cuenta de Mercado Pago, el cobro va **directo
+     * a la suya** y Mercado Pago nos deposita la comisión en el mismo
+     * movimiento. Nunca tocamos su plata.
+     *
+     * Si no la conectó, el cobro entra en la nuestra. Eso NO es el modelo
+     * definitivo —nos convierte en intermediarios del dinero de terceros— y
+     * está acá sólo para que el sistema funcione durante la beta, mientras la
+     * habilitación de marketplace de Mercado Pago no esté lista.
+     *
+     * ⚠️ Antes de abrir al público hay que exigir la cuenta conectada para
+     * poder publicar. Está anotado como deuda y es de las que no se pueden
+     * dejar pasar: acumular ventas sin cuenta conectada significa deberle plata
+     * a gente, y devolverla a mano.
+     *
+     * ─── La comisión se toma de la ORDEN, no del entorno ───
+     *
+     * `orden.platformFeeAmount` es la foto de lo que se calculó cuando se creó
+     * el pedido, con el porcentaje vigente en ese momento. Recalcularlo acá con
+     * `env.VENDOX_PLATFORM_FEE_BPS` haría que un cambio de comisión entre la
+     * creación y el pago cobre un número distinto del que se le mostró a la
+     * persona.
+     */
+    const sellerAccessToken = await this.tokenDelVendedor(orden.sellerId);
+
     let pago: ProviderPayment;
     try {
       pago = await this.provider.cobrar(
@@ -257,6 +293,11 @@ export class OrderPaymentsService {
           payerEmail: comprador?.email ?? '',
           description: orden.items[0]?.productNameSnapshot ?? `Pedido ${orden.reference}`,
           externalReference: orden.id,
+          // La comisión sólo tiene sentido si el cobro va a la cuenta del
+          // vendedor. Sobre la nuestra, cobrarnos a nosotros mismos no
+          // significa nada y Mercado Pago lo rechaza.
+          applicationFee: sellerAccessToken ? orden.platformFeeAmount : undefined,
+          sellerAccessToken: sellerAccessToken ?? undefined,
         },
         idempotencyKey,
       );
@@ -900,5 +941,42 @@ export class OrderPaymentsService {
   /** Tope de reintentos de una devolución antes de escalarla a mano. */
   static get maxIntentosDeDevolucion(): number {
     return env.REFUND_MAX_ATTEMPTS;
+  }
+  /**
+   * El token del vendedor si conectó su cuenta, o `null`.
+   *
+   * ─── Por qué devuelve `null` en vez de lanzar ───
+   *
+   * Un vendedor sin cuenta conectada tiene que poder cobrar igual durante la
+   * beta: cortarle la venta por una función que todavía no exigimos sería
+   * romperle el negocio por una decisión nuestra.
+   *
+   * Y si el módulo no está configurado —sin credenciales de OAuth en este
+   * servidor— pasa lo mismo: no es un error, es que la función no está
+   * habilitada acá.
+   *
+   * ⛔ El token que devuelve NO se guarda en ningún lado ni se registra.
+   */
+  private async tokenDelVendedor(sellerId: string): Promise<string | null> {
+    if (!this.sellerOAuth.disponible) return null;
+
+    try {
+      return await this.sellerOAuth.accessTokenDe(sellerId);
+    } catch (err) {
+      /**
+       * Que no se pueda leer el token no puede tumbar el cobro.
+       *
+       * Se registra —hay que enterarse de que ese vendedor no está cobrando en
+       * su cuenta— y se sigue con la nuestra. La alternativa es que la persona
+       * que está comprando vea un error por un problema de configuración del
+       * vendedor, que no puede resolver ni entender.
+       */
+      this.logger.warn({
+        msg: 'no se pudo usar la cuenta del vendedor: el cobro va a la cuenta de VendoX',
+        sellerId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
   }
 }

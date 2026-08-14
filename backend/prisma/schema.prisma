@@ -864,6 +864,10 @@ model Seller {
   stores          Store[]
   orders          Order[]
   paymentAccounts SellerPaymentAccount[]
+  oauthStates     OAuthState[]
+  // Una por proveedor. Hoy sólo Mercado Pago, pero el día que haya otro no
+  // hay que migrar la relación.
+  oauthCredentials SellerOAuthCredential[]
   verification    SellerVerification?
   /// Denormalizados. Las restricciones únicas de Follow y Review son lo que
   /// los hace confiables: el incremento va en la MISMA transacción que la
@@ -2441,4 +2445,148 @@ enum ExchangeMode {
 enum ReturnShippingPayer {
   VENDEDOR
   COMPRADOR
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// OAUTH CON MERCADO PAGO
+//
+// ─── Por qué VendoX no cobra en su propia cuenta ───
+//
+// La plata de una venta es del VENDEDOR. Si entrara a una cuenta de VendoX y
+// después se la girásemos, estaríamos operando como entidad de pago —con todo
+// lo que eso implica legalmente— y con el dinero de terceros en nuestro
+// balance.
+//
+// Con el modelo de marketplace de Mercado Pago, el cobro va directo a la
+// cuenta del vendedor y Mercado Pago nos descuenta la comisión en el mismo
+// movimiento. Nunca tocamos la plata de nadie.
+//
+// El precio es esta maquinaria: cada vendedor tiene que conectar su cuenta por
+// OAuth, y hay que guardar sus tokens de forma que un volcado de la base no
+// alcance para cobrar en su nombre.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// El `state` de una autorización OAuth en curso.
+///
+/// ═══════════════════════════════════════════════════════════════════════════
+/// ES LA DEFENSA CONTRA QUE ALGUIEN CONECTE SU CUENTA A OTRO VENDEDOR
+/// ═══════════════════════════════════════════════════════════════════════════
+///
+/// Sin `state`, el callback de OAuth acepta cualquier `code` que llegue. Un
+/// atacante inicia la autorización con SU cuenta de Mercado Pago, se queda con
+/// el `code`, y hace que la víctima —con su sesión de VendoX abierta— visite la
+/// URL del callback. Resultado: la tienda de la víctima queda cobrando a la
+/// cuenta del atacante, y cada venta que haga le deposita a él.
+///
+/// El `state` ata el callback a la petición que lo originó: se genera acá,
+/// viaja a Mercado Pago y vuelve. Si no coincide con una fila viva de este
+/// vendedor, el callback se rechaza.
+///
+/// ─── En la base y no en Redis ───
+///
+/// Es la misma regla del resto del proyecto: Redis es precisión, no una
+/// dependencia. Con el `state` en Redis, un reinicio de Redis a mitad de una
+/// autorización deja al vendedor con un error incomprensible en el navegador,
+/// después de haber puesto su contraseña de Mercado Pago.
+model OAuthState {
+  id       String @id // oas_<ulid>
+  sellerId String @map("seller_id")
+
+  /// El valor que viaja a Mercado Pago y vuelve. Aleatorio de 32 bytes.
+  ///
+  /// Único a nivel global: dos vendedores no pueden compartirlo ni por
+  /// casualidad, y el índice lo garantiza.
+  state String @unique
+
+  provider PaymentProvider @default(MERCADO_PAGO)
+
+  /// Cuándo deja de valer. Diez minutos: es lo que tarda una persona en
+  /// autorizar, y más tiempo sólo agranda la ventana de un ataque.
+  expiresAt DateTime @map("expires_at")
+
+  /// Cuándo se canjeó. Un `state` **se usa una sola vez**.
+  ///
+  /// Sin esto, alguien que capture la URL del callback —del historial del
+  /// navegador, de un log de proxy— puede repetirla. No haría daño hoy, pero
+  /// es exactamente la clase de suposición que deja de ser cierta cuando el
+  /// callback empiece a hacer algo más.
+  usedAt DateTime? @map("used_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  seller Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  /// El barrido que borra los vencidos.
+  @@index([expiresAt])
+  @@map("oauth_states")
+}
+
+/// Los tokens de Mercado Pago de un vendedor, cifrados.
+///
+/// ═══════════════════════════════════════════════════════════════════════════
+/// TABLA APARTE DE `SellerPaymentAccount`. A PROPÓSITO.
+/// ═══════════════════════════════════════════════════════════════════════════
+///
+/// `SellerPaymentAccount` se consulta todo el tiempo: para saber si el vendedor
+/// puede cobrar, para pintar el estado en su panel, para filtrar los que no
+/// conectaron. Nada de eso necesita el token.
+///
+/// Con los tokens en la misma tabla, cualquier `SELECT *` de cualquier consulta
+/// de estado los trae a memoria y los mete en el registro de la consulta lenta,
+/// en el volcado de depuración y en la respuesta de un endpoint al que alguien
+/// se olvidó de ponerle proyección.
+///
+/// Separados, el camino para leerlos es uno solo y explícito.
+///
+/// ─── Cifrado con sobre ───
+///
+/// El texto cifrado vive acá; la llave vive en una variable de entorno del
+/// proceso. Un volcado de la base, por sí solo, no sirve para nada.
+///
+/// No es tan bueno como un gestor de secretos con auditoría y rotación
+/// automática —eso sigue siendo el destino— pero es muchísimo mejor que texto
+/// plano, y no depende de contratar nada. Ver `shared/crypto/secretos.ts`.
+model SellerOAuthCredential {
+  id       String @id // soc_<ulid>
+  sellerId String @map("seller_id")
+
+  provider PaymentProvider @default(MERCADO_PAGO)
+
+  /// El access token, cifrado con AES-256-GCM.
+  accessCiphertext String @map("access_ciphertext")
+  accessIv         String @map("access_iv")
+  accessTag        String @map("access_tag")
+
+  /// El refresh token, cifrado igual.
+  ///
+  /// Vale MÁS que el access token: con él se pueden generar tokens nuevos para
+  /// siempre. Que esté en la misma fila no lo hace menos importante — se cifra
+  /// con su propio IV, nunca compartido.
+  refreshCiphertext String? @map("refresh_ciphertext")
+  refreshIv         String? @map("refresh_iv")
+  refreshTag        String? @map("refresh_tag")
+
+  /// Con qué llave se cifró. Permite rotar sin descifrar todo de una vez.
+  keyVersion Int @default(1) @map("key_version")
+
+  /// Los últimos cuatro caracteres del access token, en claro.
+  ///
+  /// Para que soporte pueda confirmar "sí, es el que termina en a3f9" sin que
+  /// el token completo aparezca en un ticket ni en una captura de pantalla.
+  accessHint String? @map("access_hint")
+
+  /// Cuándo vence el access token. Mercado Pago los da por seis meses.
+  expiresAt DateTime? @map("expires_at")
+
+  /// Cuándo se renovó por última vez, para poder ver si el refresco funciona.
+  refreshedAt DateTime? @map("refreshed_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  seller Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  /// Una credencial por vendedor y proveedor. Reconectar reemplaza, no acumula.
+  @@unique([sellerId, provider])
+  @@map("seller_oauth_credentials")
 }

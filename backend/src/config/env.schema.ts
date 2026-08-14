@@ -1,8 +1,12 @@
 import { config as loadDotenv } from 'dotenv';
 import { z } from 'zod';
 
+import { leerLlave } from '@/shared/crypto/secretos';
 import { PROVEEDORES } from '@/shared/http/deployment-provider';
-import { RUTA_WEBHOOK_MERCADOPAGO } from '@/shared/http/rutas-webhook';
+import {
+  RUTA_OAUTH_MERCADOPAGO,
+  RUTA_WEBHOOK_MERCADOPAGO,
+} from '@/shared/http/rutas-webhook';
 
 /**
  * Carga `.env` en process.env ANTES de validar.
@@ -262,6 +266,54 @@ export const envSchema = z
     // es el túnel de Cloudflare; en staging, el dominio de Fly.
     MP_NOTIFICATION_URL: optionalOrEmpty(z.string().url()),
     MP_API_BASE_URL: z.string().url().default('https://api.mercadopago.com'),
+    /**
+     * Credenciales de la APLICACIÓN de Mercado Pago, para el OAuth de
+     * marketplace.
+     *
+     * ⚠️ Distintas del MP_ACCESS_TOKEN de arriba. Aquél es el token de NUESTRA
+     * cuenta y sirve para cobrar en nombre propio -es lo que usa el spike-.
+     * Estas identifican a VendoX como aplicacion ante Mercado Pago y sirven
+     * para pedirle a cada vendedor permiso de cobrar en la SUYA.
+     *
+     * Se sacan del panel de aplicaciones de Mercado Pago. Sin ellas, el bloque
+     * de conexion responde "no configurado" y el resto del sistema funciona
+     * igual: no se cae nada por no tenerlas.
+     *
+     * ⛔ El secret no se imprime, no se loguea y no viaja a Flutter. Nunca.
+     */
+    MP_CLIENT_ID: optionalOrEmpty(z.string().min(6)),
+    MP_CLIENT_SECRET: optionalOrEmpty(z.string().min(20)),
+
+    /**
+     * A donde redirige Mercado Pago despues de que el vendedor autoriza.
+     *
+     * Apunta a NUESTRO backend, no a la app. El intercambio del codigo por el
+     * token necesita el client_secret, y si lo hiciera la app ese secreto
+     * estaria dentro del APK -que se descompila en dos minutos-.
+     *
+     * Tiene que coincidir EXACTAMENTE con la que este cargada en el panel de
+     * Mercado Pago, incluida la barra final. Una diferencia de un caracter da
+     * un error que no dice cual es el problema.
+     */
+    MP_OAUTH_REDIRECT_URI: optionalOrEmpty(z.string().url()),
+
+    /**
+     * La llave con la que se cifran los tokens de los vendedores.
+     *
+     * 32 bytes en base64. Se genera una sola vez y se guarda como variable de
+     * entorno del servicio:
+     *
+     *     node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+     *
+     * ⛔ Si esta llave se pierde, los tokens guardados son irrecuperables y
+     * todos los vendedores tienen que volver a conectar su cuenta. Si se
+     * filtra, quien la tenga puede descifrar los tokens de un volcado de la
+     * base y cobrar en nombre de cualquier vendedor.
+     *
+     * Ver `shared/crypto/secretos.ts`.
+     */
+    CREDENTIALS_ENCRYPTION_KEY: optionalOrEmpty(z.string().min(40)),
+
     MP_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(60_000).default(10_000),
     PAYMENTS_SPIKE_ENABLED: envBoolean(false),
 
@@ -620,6 +672,93 @@ export const envSchema = z
         '(sin "/api" y sin "/v1"): es la única ruta que el servidor registra. ' +
         'Con otra ruta el cobro funciona igual y la notificación se pierde en un 404.',
       path: ['MP_NOTIFICATION_URL'],
+    },
+  )
+  /**
+   * La URL de redirección tiene que apuntar a la ruta que el servidor registra.
+   *
+   * Es exactamente el mismo problema que con `MP_NOTIFICATION_URL`, que ya nos
+   * costó una tarde: la URL se escribe a mano en un panel externo, y si no
+   * coincide con lo que servimos, Mercado Pago redirige a un 404. El vendedor
+   * pone su contraseña, autoriza, y termina en una página de error sin
+   * entender qué hizo mal.
+   *
+   * Peor que el webhook, incluso: acá el error es visible para el vendedor y
+   * pasa justo en el momento de más confianza del flujo.
+   */
+  .refine(
+    (e) =>
+      !e.MP_OAUTH_REDIRECT_URI ||
+      new URL(e.MP_OAUTH_REDIRECT_URI).pathname === `/${RUTA_OAUTH_MERCADOPAGO}/callback`,
+    {
+      message:
+        `MP_OAUTH_REDIRECT_URI debe terminar exactamente en "/${RUTA_OAUTH_MERCADOPAGO}/callback" ` +
+        '(sin "/api" y sin "/v1"): es la única ruta que el servidor registra.',
+      path: ['MP_OAUTH_REDIRECT_URI'],
+    },
+  )
+  /**
+   * Las credenciales de OAuth van juntas o no van.
+   *
+   * Con el `client_id` cargado y el `secret` vacío, el bloque se declara
+   * disponible, la app le ofrece "conectar Mercado Pago" al vendedor, y el
+   * intercambio falla recién después de que puso su contraseña. Es peor que no
+   * ofrecer la función.
+   */
+  .refine(
+    (e) => {
+      const puestas = [e.MP_CLIENT_ID, e.MP_CLIENT_SECRET, e.MP_OAUTH_REDIRECT_URI].filter(
+        Boolean,
+      ).length;
+      return puestas === 0 || puestas === 3;
+    },
+    {
+      message:
+        'MP_CLIENT_ID, MP_CLIENT_SECRET y MP_OAUTH_REDIRECT_URI van las tres o ninguna. ' +
+        'Con una sola cargada, la app le ofrece conectar al vendedor y falla después de ' +
+        'que puso su contraseña de Mercado Pago.',
+      path: ['MP_CLIENT_SECRET'],
+    },
+  )
+  /**
+   * Sin llave de cifrado no se guarda ningún token.
+   *
+   * La alternativa —guardarlos en texto plano "por ahora"— es exactamente lo
+   * que este bloque existe para evitar. Un access token de Mercado Pago permite
+   * cobrar en nombre del vendedor: en una columna de texto queda en los
+   * respaldos, en las réplicas y en cualquier volcado de depuración.
+   *
+   * Así que si el OAuth está configurado, la llave es obligatoria.
+   */
+  .refine((e) => !e.MP_CLIENT_ID || !!e.CREDENTIALS_ENCRYPTION_KEY, {
+    message:
+      'Con el OAuth de Mercado Pago configurado hace falta CREDENTIALS_ENCRYPTION_KEY. ' +
+      'Generá una con: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'base64\'))"',
+    path: ['CREDENTIALS_ENCRYPTION_KEY'],
+  })
+  /**
+   * Y tiene que ser una llave de verdad, no una cadena cualquiera de 40+
+   * caracteres.
+   *
+   * El esquema de arriba sólo mira el largo. Esto la decodifica y comprueba que
+   * sean 32 bytes y que no sean todos ceros — que es lo que queda cuando
+   * alguien pone `AAAA…` para ver si arranca.
+   */
+  .refine(
+    (e) => {
+      if (!e.CREDENTIALS_ENCRYPTION_KEY) return true;
+      try {
+        leerLlave(e.CREDENTIALS_ENCRYPTION_KEY);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    {
+      message:
+        'CREDENTIALS_ENCRYPTION_KEY tiene que ser 32 bytes en base64. ' +
+        'Generala con: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'base64\'))"',
+      path: ['CREDENTIALS_ENCRYPTION_KEY'],
     },
   )
   /**

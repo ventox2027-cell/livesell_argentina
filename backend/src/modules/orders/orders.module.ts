@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 
 import { CommerceModule } from '@/modules/commerce/commerce.module';
 import { InventoryModule } from '@/modules/inventory/inventory.module';
+import { SellerOAuthModule } from '@/modules/payments/seller-oauth.module';
 import { MercadoPagoService } from '@/modules/payments/mp.client';
 import { AuditService } from '@/shared/audit/audit.service';
 import { DomainEventBus } from '@/shared/events/domain-events';
@@ -37,7 +38,10 @@ import { OrdersWebhookService } from './webhook.service';
  * tiene que poder existir sin que haya ventas.
  */
 @Module({
-  imports: [CommerceModule, InventoryModule],
+  // `SellerOAuthModule` para poder cobrar en la cuenta del vendedor. La
+  // dirección de la flecha importa: órdenes conoce la conexión de pago, nunca
+  // al revés.
+  imports: [CommerceModule, InventoryModule, SellerOAuthModule],
   controllers: [OrdersController, OrdersWebhookController, CheckoutPageController],
   providers: [
     OrdersService,
