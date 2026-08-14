@@ -39,6 +39,13 @@ export const ID_PREFIX = {
   // Inventario
   inventory: 'inv',
   reservation: 'rsv',
+  // Órdenes y pagos
+  orderV2: 'ord',
+  orderItem: 'oit',
+  paymentAttempt: 'pat',
+  refund: 'ref',
+  address: 'adr',
+  sellerPaymentAccount: 'spa',
   auditLog: 'aud',
 } as const;
 

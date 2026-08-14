@@ -108,6 +108,56 @@ export class MetricsService implements OnModuleInit {
     help: 'Conflictos de concurrencia no resueltos al reservar',
   });
 
+  /**
+   * Pagos que se acreditaron después de que venciera su reserva.
+   *
+   * `out_of_stock` es la métrica a vigilar: cada uno es una devolución, un
+   * comprador frustrado y plata que se movió dos veces. Si sube, hay que
+   * mirar el TTL de las reservas o la latencia de confirmación de Mercado
+   * Pago — son las dos causas posibles.
+   */
+  readonly latePaymentStock = new Counter({
+    name: 'late_payment_stock_total',
+    help: 'Recuperación de stock tras un pago tardío',
+    labelNames: ['result'] as const, // reacquired | out_of_stock
+  });
+
+  // ─── Órdenes ───
+
+  readonly orders = new Counter({
+    name: 'orders_total',
+    help: 'Órdenes por desenlace',
+    // created | confirmed | expired | cancelled | refund_required | refunded
+    labelNames: ['result'] as const,
+  });
+
+  readonly paymentAttempts = new Counter({
+    name: 'payment_attempts_total',
+    help: 'Intentos de cobro por desenlace',
+    // created | approved | rejected | unknown | reconciled
+    labelNames: ['result'] as const,
+  });
+
+  /**
+   * Cuánto tarda un cobro de punta a punta.
+   *
+   * Los cubos llegan hasta 30 s porque incluyen la llamada a Mercado Pago, que
+   * es una red externa: la referencia medida en el spike fue 1,8 s de tocar
+   * "Pagar" a orden acreditada.
+   */
+  readonly paymentConfirmation = new Histogram({
+    name: 'payment_confirmation_seconds',
+    help: 'Duración del cobro, de la petición a la respuesta definitiva',
+    labelNames: ['result'] as const,
+    buckets: [0.25, 0.5, 1, 2, 3, 5, 8, 15, 30],
+  });
+
+  readonly refunds = new Counter({
+    name: 'refunds_total',
+    help: 'Devoluciones por desenlace',
+    labelNames: ['result'] as const, // started | completed | failed
+  });
+
   onModuleInit(): void {
     collectDefaultMetrics({ register: this.registry, prefix: 'nodejs_' });
     this.registry.registerMetric(this.httpDuration);
@@ -120,6 +170,11 @@ export class MetricsService implements OnModuleInit {
     this.registry.registerMetric(this.inventoryReservation);
     this.registry.registerMetric(this.inventoryReservationLatency);
     this.registry.registerMetric(this.inventoryConcurrencyConflicts);
+    this.registry.registerMetric(this.latePaymentStock);
+    this.registry.registerMetric(this.orders);
+    this.registry.registerMetric(this.paymentAttempts);
+    this.registry.registerMetric(this.paymentConfirmation);
+    this.registry.registerMetric(this.refunds);
   }
 
   async scrape(): Promise<string> {

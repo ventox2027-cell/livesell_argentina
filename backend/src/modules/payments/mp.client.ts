@@ -60,6 +60,15 @@ export interface MpPayment {
   [key: string]: unknown;
 }
 
+export interface MpRefund {
+  id: number | string;
+  payment_id?: number | string;
+  amount?: number;
+  status?: string;
+  date_created?: string;
+  [key: string]: unknown;
+}
+
 export interface CreatePaymentInput {
   /** Token de tarjeta de un solo uso, generado en el cliente. Nunca se guarda. */
   token: string;
@@ -181,6 +190,35 @@ export class MercadoPagoService {
    * cuando un webhook se pierde: preguntamos "¿hay algún pago para esta orden?"
    * en vez de esperar un aviso que quizá nunca llegue.
    */
+  /**
+   * Devuelve la plata de un cobro.
+   *
+   * ─── Por qué la clave de idempotencia es obligatoria acá ───
+   *
+   * Una devolución reintentada sin clave devuelve la plata DOS veces. Con
+   * clave, Mercado Pago reconoce el reintento y responde lo mismo que la
+   * primera vez.
+   *
+   * Sin `amount` devuelve el total. Devoluciones parciales quedan soportadas
+   * por el parámetro aunque hoy no se usen: el caso que tenemos —pago
+   * acreditado sin stock— siempre devuelve todo.
+   */
+  async refundPayment(
+    mpPaymentId: string | number,
+    idempotencyKey: string,
+    amount?: number,
+  ): Promise<MpRefund> {
+    return this.request<MpRefund>('POST', `/v1/payments/${mpPaymentId}/refunds`, {
+      body: amount === undefined ? {} : { amount },
+      idempotencyKey,
+    });
+  }
+
+  /** Estado de una devolución concreta. Lo usa el conciliador. */
+  async getRefund(mpPaymentId: string | number, refundId: string | number): Promise<MpRefund> {
+    return this.request<MpRefund>('GET', `/v1/payments/${mpPaymentId}/refunds/${refundId}`);
+  }
+
   async searchPaymentsByExternalReference(externalReference: string): Promise<MpPayment[]> {
     const res = await this.request<{ results?: MpPayment[] }>(
       'GET',

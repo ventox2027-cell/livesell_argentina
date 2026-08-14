@@ -9,6 +9,7 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
 import { AuthModule } from '@/modules/auth/auth.module';
 import { CommerceModule } from '@/modules/commerce/commerce.module';
 import { InventoryModule } from '@/modules/inventory/inventory.module';
+import { OrdersModule } from '@/modules/orders/orders.module';
 import { LiveKitModule } from '@/modules/livekit/livekit.module';
 import { PaymentsModule } from '@/modules/payments/payments.module';
 import { SpikeModule } from '@/modules/spike/spike.module';
@@ -48,6 +49,7 @@ function optionalModules(): DynamicModule['imports'] {
     AuthModule,
     CommerceModule,
     InventoryModule,
+    OrdersModule,
     ...(optionalModules() ?? []),
   ],
   providers: [

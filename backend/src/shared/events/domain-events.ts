@@ -71,6 +71,37 @@ export const DomainEvent = {
   reservationExpired: 'reservation.expired',
   reservationCancelled: 'reservation.cancelled',
   reservationConsumed: 'reservation.consumed',
+
+  /// Un pago llegó tarde y se pudo recuperar la unidad igual.
+  inventoryLatePaymentReacquired: 'inventory.late_payment_reacquired',
+  /// Un pago llegó tarde y ya no había. Hay que devolver la plata.
+  inventoryLatePaymentOutOfStock: 'inventory.late_payment_out_of_stock',
+
+  // ─── Órdenes y pagos ───
+  //
+  // Van a alimentar las notificaciones al comprador y al vendedor, el chat del
+  // vivo ("¡se vendió!") y las analíticas. Se emiten ahora aunque no los
+  // escuche nadie: el día que exista el suscriptor, el camino de la venta no
+  // se toca.
+  orderCreated: 'order.created',
+  orderPaymentPending: 'order.payment_pending',
+  orderPaid: 'order.paid',
+  orderConfirmed: 'order.confirmed',
+  orderExpired: 'order.expired',
+  orderCancelled: 'order.cancelled',
+  orderRefundRequired: 'order.refund_required',
+  orderRefunded: 'order.refunded',
+  orderFulfillmentChanged: 'order.fulfillment_changed',
+
+  paymentAttemptCreated: 'payment.attempt_created',
+  paymentApproved: 'payment.approved',
+  paymentRejected: 'payment.rejected',
+  paymentUnknown: 'payment.unknown',
+  paymentReconciled: 'payment.reconciled',
+
+  refundStarted: 'refund.started',
+  refundCompleted: 'refund.completed',
+  refundFailed: 'refund.failed',
 } as const;
 
 export type DomainEventName = (typeof DomainEvent)[keyof typeof DomainEvent];

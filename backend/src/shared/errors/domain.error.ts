@@ -101,6 +101,33 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<string, number>> = {
   /** El producto, la variante, la tienda o el vendedor no admiten venta. */
   NOT_PURCHASABLE: 409,
   QUANTITY_INVALID: 422,
+
+  // ─── Dominio de órdenes y pagos ───
+  ORDER_NOT_FOUND_V2: 404,
+  /** La reserva venció antes de crear la orden. */
+  RESERVATION_EXPIRED: 409,
+  /** Esa reserva ya tiene una orden. */
+  ORDER_ALREADY_EXISTS: 409,
+  /** La orden está en un estado que no admite cobro. */
+  ORDER_NOT_PAYABLE_V2: 409,
+  /** Ya hay un cobro en vuelo. Lanzar otro cobraría dos veces. */
+  PAYMENT_IN_FLIGHT: 409,
+  PAYMENT_ALREADY_APPROVED: 409,
+  /**
+   * No sabemos si el cobro se procesó. 202 y no 4xx/5xx: la petición se
+   * aceptó, el resultado llega después. La app tiene que consultar, no
+   * reintentar a ciegas.
+   */
+  PAYMENT_STATE_UNKNOWN: 202,
+  PAYMENT_REJECTED: 402,
+  /** Se acreditó la plata pero ya no había stock. */
+  LATE_PAYMENT_OUT_OF_STOCK: 409,
+  REFUND_IN_PROGRESS: 409,
+  ADDRESS_REQUIRED: 422,
+  ADDRESS_NOT_FOUND: 404,
+  /** El comprador no puede cambiar estados de preparación. */
+  FULFILLMENT_NOT_ALLOWED: 403,
+  INVALID_TRANSITION: 409,
 };
 
 export class NotFoundError extends DomainError {

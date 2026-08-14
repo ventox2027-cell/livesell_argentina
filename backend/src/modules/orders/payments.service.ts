@@ -1,0 +1,904 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { createHash } from 'node:crypto';
+import { Prisma, type PaymentAttempt, type PaymentAttemptStatus } from '@prisma/client';
+
+import { env } from '@/config/env.schema';
+import { InventoryService } from '@/modules/inventory/inventory.service';
+import { describePaymentOutcome } from '@/modules/payments/payment-messages';
+import { AuditService } from '@/shared/audit/audit.service';
+import { DomainError } from '@/shared/errors/domain.error';
+import { DomainEvent, DomainEventBus } from '@/shared/events/domain-events';
+import { MetricsService } from '@/shared/observability/metrics.service';
+import { PrismaService } from '@/shared/prisma/prisma.service';
+import { newId } from '@/shared/utils/id';
+
+import { admitePago, mapearEstadoMp } from './order-state';
+import {
+  PaymentProvider,
+  ProviderPaymentNotFoundError,
+  ProviderRejectedError,
+  ProviderUnavailableError,
+  type ProviderPayment,
+} from './payment-provider';
+
+/**
+ * Cobros.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * TRES DESENLACES, NO DOS
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Un cobro no termina en "salió" o "no salió". Termina en una de tres:
+ *
+ *   · APPROVED  → hay plata.
+ *   · REJECTED  → la tarjeta dijo que no. Se puede reintentar con otra.
+ *   · UNKNOWN   → **no sabemos**.
+ *
+ * El tercero es el que hace que esto sea difícil y el que hay que respetar. Si
+ * se manda el cobro y se corta la conexión, el pago pudo haberse procesado.
+ * Llamarlo "rechazado" es decirle a alguien que no le cobraron cuando sí, y
+ * dejarlo pagar de nuevo.
+ *
+ * Un error de red **no es un pago fallido**.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * LA MISMA CONFIRMACIÓN LLEGA DOS VECES
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Medido en la primera compra real del spike:
+ *
+ *     07:46:12.307  respuesta directa   PROCESSING → PAID
+ *     07:46:12.988  webhook             PAID       → PAID
+ *
+ * 681 ms de diferencia. Los dos caminos son legítimos y los dos van a seguir
+ * existiendo. Por eso cada transición se hace con la condición de estado
+ * DENTRO del UPDATE: el primero mueve la orden, el segundo afecta cero filas y
+ * no hace nada. Sin `if`, sin lectura previa, sin ventana.
+ */
+
+export class OrderNotPayableError extends DomainError {
+  constructor(status: string) {
+    super('ORDER_NOT_PAYABLE_V2', 'Este pedido no está en condiciones de pagarse', { status });
+  }
+}
+
+export class PaymentInFlightError extends DomainError {
+  constructor() {
+    super(
+      'PAYMENT_IN_FLIGHT',
+      'Ya hay un pago en curso para este pedido. Esperá el resultado.',
+    );
+  }
+}
+
+export class PaymentStateUnknownError extends DomainError {
+  constructor(attemptId: string) {
+    super(
+      'PAYMENT_STATE_UNKNOWN',
+      'Estamos verificando tu pago. No lo intentes de nuevo todavía.',
+      { attemptId },
+    );
+  }
+}
+
+export class PaymentRejectedError extends DomainError {
+  constructor(mensaje: string, code?: string) {
+    super('PAYMENT_REJECTED', mensaje, code ? { code } : undefined);
+  }
+}
+
+export interface CobrarInput {
+  orderId: string;
+  buyerId: string;
+  /** Token de un solo uso. No se guarda, no se registra, no sale de este método. */
+  cardToken: string;
+  installments: number;
+  paymentMethodId: string;
+}
+
+@Injectable()
+export class OrderPaymentsService {
+  private readonly logger = new Logger(OrderPaymentsService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly provider: PaymentProvider,
+    private readonly inventory: InventoryService,
+    private readonly audit: AuditService,
+    private readonly events: DomainEventBus,
+    private readonly metrics: MetricsService,
+  ) {}
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // COBRAR
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /**
+   * Intenta cobrar una orden.
+   *
+   * ─── La clave de idempotencia sale del TOKEN, no de la orden ───
+   *
+   * Es el arreglo de un error real, medido en el spike:
+   *
+   *     08:14:50  tarjeta rechazada  clave pay-ord_X  → pago 1350327873
+   *     08:15:39  otra tarjeta       clave pay-ord_X  → pago 1350327873, el MISMO
+   *
+   * Con una clave por orden, Mercado Pago —haciendo exactamente lo que debe—
+   * devolvía la respuesta guardada del primer intento. El segundo cobro nunca
+   * se procesaba. Una orden rechazada quedaba condenada: ninguna tarjeta podía
+   * pagarla nunca más.
+   *
+   * El token de tarjeta es la unidad correcta: se genera uno nuevo cada vez que
+   * alguien completa el formulario.
+   *
+   *   · Doble toque en "Pagar" → mismo token → misma clave → un solo cobro.
+   *   · Otra tarjeta           → token nuevo → clave nueva → cobro nuevo.
+   *
+   * Se guarda el HASH del token, nunca el token: la clave viaja en cabeceras y
+   * termina en la bitácora, y ahí no puede quedar nada que sirva para cobrar.
+   */
+  async cobrar(input: CobrarInput): Promise<{ attempt: PaymentAttempt; orderStatus: string }> {
+    const inicio = process.hrtime.bigint();
+
+    const orden = await this.prisma.order.findFirst({
+      where: { id: input.orderId, buyerId: input.buyerId },
+      select: {
+        id: true,
+        status: true,
+        grossAmount: true,
+        currency: true,
+        reference: true,
+        buyerSnapshot: true,
+        items: { select: { productNameSnapshot: true }, take: 1 },
+      },
+    });
+    // Ajena o inexistente: indistinguibles desde afuera.
+    if (!orden) throw new DomainError('ORDER_NOT_FOUND_V2', 'Pedido no encontrado');
+
+    const idempotencyKey = this.claveDeCobro(orden.id, input.cardToken);
+
+    /**
+     * La idempotencia se comprueba ANTES que el estado de la orden.
+     *
+     * ─── El caso que obliga a este orden ───
+     *
+     * La persona toca "Pagar", el cobro se aprueba y la orden queda
+     * confirmada — pero la respuesta se pierde en el camino de vuelta. La app
+     * reintenta con el MISMO token.
+     *
+     * Si primero se mirara el estado, ese reintento chocaría contra
+     * "este pedido ya está pago": un error, para alguien que hizo todo bien y
+     * cuya compra salió perfecta. La app tendría que interpretar un 409 como
+     * éxito, que es exactamente el tipo de regla que alguien va a implementar
+     * mal.
+     *
+     * Comprobando la clave primero, el reintento devuelve el mismo intento con
+     * el mismo resultado. Que es lo que significa idempotente.
+     */
+    const previo = await this.prisma.paymentAttempt.findUnique({ where: { idempotencyKey } });
+    if (previo) {
+      this.metrics.paymentAttempts.inc({ result: 'idempotent_replay' });
+      return { attempt: previo, orderStatus: orden.status };
+    }
+
+    // Recién ahora: ¿esta orden admite un cobro NUEVO?
+    if (!admitePago(orden.status)) {
+      if (orden.status === 'PROCESSING_PAYMENT') throw new PaymentInFlightError();
+      if (orden.status === 'PAID' || orden.status === 'CONFIRMED') {
+        throw new DomainError('PAYMENT_ALREADY_APPROVED', 'Este pedido ya está pago');
+      }
+      throw new OrderNotPayableError(orden.status);
+    }
+
+    const attemptId = newId('pat');
+
+    /**
+     * Se crea el intento y se marca la orden en curso ANTES de llamar a
+     * Mercado Pago.
+     *
+     * Si se hiciera al revés y el proceso muriera entre la llamada y la
+     * escritura, habría un cobro real sin ninguna fila que lo mencione:
+     * imposible de conciliar, porque no sabríamos ni que existió.
+     *
+     * El índice único parcial sobre los estados en vuelo hace lo demás: dos
+     * peticiones simultáneas no pueden dejar dos intentos abiertos.
+     */
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.paymentAttempt.create({
+          data: {
+            id: attemptId,
+            orderId: orden.id,
+            provider: this.provider.nombre,
+            status: 'CREATED',
+            amount: orden.grossAmount,
+            currency: orden.currency,
+            idempotencyKey,
+          },
+        });
+
+        const { count } = await tx.order.updateMany({
+          where: { id: orden.id, status: { in: ['PENDING_PAYMENT', 'PAYMENT_FAILED'] } },
+          data: { status: 'PROCESSING_PAYMENT' },
+        });
+        // Alguien más movió la orden en el medio.
+        if (count === 0) throw new PaymentInFlightError();
+      });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        // Índice de "un intento en vuelo por orden", o clave repetida.
+        const existente = await this.prisma.paymentAttempt.findUnique({
+          where: { idempotencyKey },
+        });
+        if (existente) return { attempt: existente, orderStatus: orden.status };
+        throw new PaymentInFlightError();
+      }
+      throw err;
+    }
+
+    this.metrics.paymentAttempts.inc({ result: 'created' });
+    this.events.publish(DomainEvent.paymentAttemptCreated, {
+      entityId: attemptId,
+      actorId: input.buyerId,
+      data: { orderId: orden.id, amount: orden.grossAmount },
+    });
+
+    // ─── La llamada al proveedor ───
+    const comprador = orden.buyerSnapshot as { email?: string } | null;
+
+    let pago: ProviderPayment;
+    try {
+      pago = await this.provider.cobrar(
+        {
+          cardToken: input.cardToken,
+          amount: orden.grossAmount,
+          installments: input.installments,
+          paymentMethodId: input.paymentMethodId,
+          payerEmail: comprador?.email ?? '',
+          description: orden.items[0]?.productNameSnapshot ?? `Pedido ${orden.reference}`,
+          externalReference: orden.id,
+        },
+        idempotencyKey,
+      );
+    } catch (err) {
+      const desenlace = await this.manejarFalloDelProveedor(attemptId, orden.id, err);
+      this.metrics.paymentConfirmation.observe(
+        { result: desenlace },
+        Number(process.hrtime.bigint() - inicio) / 1e9,
+      );
+      throw err instanceof DomainError ? err : this.traducirFallo(err, attemptId);
+    }
+
+    const resultado = await this.aplicarResultado(attemptId, pago, 'direct');
+
+    this.metrics.paymentConfirmation.observe(
+      { result: resultado.attempt.status.toLowerCase() },
+      Number(process.hrtime.bigint() - inicio) / 1e9,
+    );
+
+    if (resultado.attempt.status === 'REJECTED') {
+      throw new PaymentRejectedError(
+        resultado.attempt.failureMessageSafe ?? 'No pudimos procesar el pago',
+        resultado.attempt.failureCode ?? undefined,
+      );
+    }
+
+    return resultado;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // APLICAR UN RESULTADO
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /**
+   * Toma lo que dijo el proveedor y lo aplica a la orden.
+   *
+   * Es el único camino por el que una orden pasa a `PAID`, y lo llaman los
+   * tres orígenes posibles: la respuesta directa, el webhook y el conciliador.
+   * Tener uno solo es lo que hace que la idempotencia se pueda razonar: si
+   * hubiera tres implementaciones, bastaría con que una olvidara la guarda.
+   */
+  async aplicarResultado(
+    attemptId: string,
+    pago: ProviderPayment,
+    origen: 'direct' | 'webhook' | 'reconciler',
+  ): Promise<{ attempt: PaymentAttempt; orderStatus: string }> {
+    const nuevoEstado = mapearEstadoMp(pago.status);
+
+    const intento = await this.prisma.paymentAttempt.findUniqueOrThrow({
+      where: { id: attemptId },
+      select: { id: true, orderId: true, status: true, amount: true },
+    });
+
+    const mensaje =
+      nuevoEstado === 'REJECTED'
+        ? describePaymentOutcome({ statusDetail: pago.statusDetail })
+        : null;
+
+    const actualizado = await this.prisma.paymentAttempt.update({
+      where: { id: attemptId },
+      data: {
+        status: nuevoEstado,
+        providerPaymentId: pago.id,
+        brand: pago.brand,
+        lastFour: pago.lastFour,
+        paymentMethodType: pago.paymentType,
+        processorFeeAmount: pago.feeAmount,
+        approvedAt: nuevoEstado === 'APPROVED' ? new Date(pago.approvedAt ?? Date.now()) : null,
+        failureCode: nuevoEstado === 'REJECTED' ? (pago.statusDetail ?? null) : null,
+        failureMessageSafe: mensaje?.text ?? null,
+        lastCheckedAt: new Date(),
+      },
+    });
+
+    void this.audit.log({
+      action: `payment.${nuevoEstado.toLowerCase()}`,
+      entityType: 'payment_attempt',
+      entityId: attemptId,
+      actorId: null,
+      after: {
+        orderId: intento.orderId,
+        origen,
+        providerPaymentId: pago.id,
+        status: nuevoEstado,
+        // Últimos cuatro y marca. Nada más de la tarjeta llega a la bitácora.
+        brand: pago.brand,
+        lastFour: pago.lastFour,
+      },
+    });
+
+    let orderStatus: string;
+
+    switch (nuevoEstado) {
+      case 'APPROVED':
+        orderStatus = await this.acreditar(intento.orderId, attemptId, pago);
+        break;
+
+      case 'REJECTED': {
+        // La condición va en el WHERE: si el webhook llega después de que otro
+        // intento ya acreditó, esto afecta cero filas y no despaga nada.
+        await this.prisma.order.updateMany({
+          where: { id: intento.orderId, status: 'PROCESSING_PAYMENT' },
+          data: {
+            status: 'PAYMENT_FAILED',
+            statusReason: mensaje?.text ?? 'El pago fue rechazado',
+          },
+        });
+        this.metrics.paymentAttempts.inc({ result: 'rejected' });
+        this.events.publish(DomainEvent.paymentRejected, {
+          entityId: attemptId,
+          data: { orderId: intento.orderId, code: pago.statusDetail },
+        });
+        orderStatus = 'PAYMENT_FAILED';
+        break;
+      }
+
+      default: {
+        // PROCESSING o UNKNOWN: la orden se queda donde está. Un cobro que no
+        // se resolvió no autoriza a moverla ni a permitir otro intento.
+        this.metrics.paymentAttempts.inc({ result: 'unknown' });
+        const actual = await this.prisma.order.findUniqueOrThrow({
+          where: { id: intento.orderId },
+          select: { status: true },
+        });
+        orderStatus = actual.status;
+      }
+    }
+
+    return { attempt: actualizado, orderStatus };
+  }
+
+  /**
+   * Hay plata: `PAID`, y después se intenta confirmar el inventario.
+   *
+   * ─── Los dos pasos son distintos a propósito ───
+   *
+   * Primero se registra que el dinero entró. Recién después se ve si se puede
+   * entregar. Si fueran una sola operación y el inventario fallara, la
+   * transacción se revertiría y **la orden no diría que le cobraron a alguien**
+   * — que es la peor forma posible de manejar este caso.
+   */
+  private async acreditar(
+    orderId: string,
+    attemptId: string,
+    pago: ProviderPayment,
+  ): Promise<string> {
+    /**
+     * La guarda de monotonía, en una sola sentencia.
+     *
+     * `count === 0` significa que otro camino ya la acreditó — típicamente la
+     * respuesta directa, 681 ms antes que el webhook. No es un error: es el
+     * caso normal, y la respuesta correcta es no hacer nada dos veces.
+     */
+    const { count } = await this.prisma.order.updateMany({
+      where: { id: orderId, status: { in: ['PENDING_PAYMENT', 'PROCESSING_PAYMENT'] } },
+      data: {
+        status: 'PAID',
+        paidAt: new Date(),
+        paymentProcessorFeeAmount: pago.feeAmount ?? undefined,
+      },
+    });
+
+    if (count > 0) {
+      this.metrics.paymentAttempts.inc({ result: 'approved' });
+      this.events.publish(DomainEvent.orderPaid, {
+        entityId: orderId,
+        data: { attemptId, providerPaymentId: pago.id },
+      });
+      this.events.publish(DomainEvent.paymentApproved, {
+        entityId: attemptId,
+        data: { orderId },
+      });
+      // El costo real del procesador cambia el neto del vendedor.
+      if (pago.feeAmount !== undefined) await this.recalcularNeto(orderId);
+    }
+
+    return this.confirmarInventario(orderId, attemptId);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // INVENTARIO
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /**
+   * Convierte una orden pagada en una venta confirmada.
+   *
+   * ═══════════════════════════════════════════════════════════════════════
+   * EL CASO DIFÍCIL DE TODO EL MÓDULO
+   * ═══════════════════════════════════════════════════════════════════════
+   *
+   * El camino feliz es corto: la reserva sigue viva, se consume, `CONFIRMED`.
+   *
+   * El otro es el que importa. La persona reservó la última unidad, empezó a
+   * pagar, perdió señal. La reserva venció y el stock se liberó. Cinco minutos
+   * después, Mercado Pago acredita.
+   *
+   * Ahora hay plata de alguien y una unidad que **quizá se llevó otro**.
+   *
+   * ─── Lo que NO se hace ───
+   *
+   * No se revive la reserva vencida. `EXPIRED → CONSUMED` está prohibido y
+   * seguirá estándolo: si en el medio otro comprador reservó esa unidad,
+   * revivir la primera se la robaría a alguien que hizo todo bien.
+   *
+   * ─── Lo que sí ───
+   *
+   * Se intenta tomar stock disponible con una operación atómica que descuenta
+   * de `onHand` sólo si hay. Si hay, la venta se confirma y nadie se entera. Si
+   * no hay, la orden queda en `PAYMENT_REQUIRES_REFUND` y se devuelve la plata.
+   *
+   * ─── El principio ───
+   *
+   * **El dinero acreditado no autoriza a romper las reglas de inventario.**
+   */
+  async confirmarInventario(orderId: string, attemptId: string): Promise<string> {
+    const orden = await this.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+      select: {
+        id: true,
+        status: true,
+        reservationId: true,
+        items: { select: { productVariantId: true, quantity: true }, take: 1 },
+      },
+    });
+
+    // Ya confirmada: webhook duplicado o reintento del conciliador.
+    if (orden.status === 'CONFIRMED') return orden.status;
+    // Todavía no hay plata, o ya se resolvió de otra forma.
+    if (orden.status !== 'PAID') return orden.status;
+
+    // ─── Camino feliz: la reserva sigue viva ───
+    if (orden.reservationId) {
+      const consumo = await this.inventory.consume(orden.reservationId);
+      // `CONSUMED` cubre las dos formas de éxito: la consumió esta llamada, o
+      // ya la había consumido una anterior (webhook duplicado).
+      if (consumo.status === 'CONSUMED') return this.marcarConfirmada(orderId, attemptId);
+    }
+
+    // ─── Pago tardío ───
+    const item = orden.items[0];
+    if (!item) {
+      this.logger.error({ msg: 'orden pagada sin líneas', orderId });
+      return orden.status;
+    }
+
+    const recuperado = await this.inventory.consumeAvailableStockAfterLatePayment({
+      productVariantId: item.productVariantId,
+      quantity: item.quantity,
+      orderId,
+    });
+
+    if (recuperado.ok) return this.marcarConfirmada(orderId, attemptId);
+
+    return this.exigirDevolucion(
+      orderId,
+      attemptId,
+      'LATE_PAYMENT_OUT_OF_STOCK',
+      'Tu pago se acreditó pero el producto se agotó. Te estamos devolviendo el dinero.',
+    );
+  }
+
+  private async marcarConfirmada(orderId: string, attemptId: string): Promise<string> {
+    // La transición ES el candado: sólo la primera llamada afecta una fila.
+    const { count } = await this.prisma.order.updateMany({
+      where: { id: orderId, status: 'PAID' },
+      data: { status: 'CONFIRMED', confirmedAt: new Date() },
+    });
+
+    if (count > 0) {
+      this.metrics.orders.inc({ result: 'confirmed' });
+      this.events.publish(DomainEvent.orderConfirmed, {
+        entityId: orderId,
+        data: { attemptId },
+      });
+      void this.audit.log({
+        action: 'order.confirmed',
+        entityType: 'order',
+        entityId: orderId,
+        actorId: null,
+        after: { attemptId },
+      });
+    }
+
+    return 'CONFIRMED';
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // DEVOLUCIONES
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /**
+   * Hay plata que no corresponde. Se devuelve.
+   *
+   * La orden queda en `PAYMENT_REQUIRES_REFUND` **antes** de llamar al
+   * proveedor. Si el proceso muriera en el medio, el estado ya dice que hay
+   * una devolución pendiente y el conciliador la retoma. Al revés —llamar
+   * primero y registrar después— dejaría plata devuelta sin rastro, o peor,
+   * plata sin devolver sin rastro.
+   */
+  private async exigirDevolucion(
+    orderId: string,
+    attemptId: string,
+    motivo: string,
+    mensajeParaElComprador: string,
+  ): Promise<string> {
+    await this.prisma.order.updateMany({
+      where: { id: orderId, status: 'PAID' },
+      data: { status: 'PAYMENT_REQUIRES_REFUND', statusReason: mensajeParaElComprador },
+    });
+
+    this.metrics.orders.inc({ result: 'refund_required' });
+    this.events.publish(DomainEvent.orderRefundRequired, {
+      entityId: orderId,
+      data: { attemptId, motivo },
+    });
+    void this.audit.log({
+      action: 'order.payment_requires_refund',
+      entityType: 'order',
+      entityId: orderId,
+      actorId: null,
+      after: { attemptId, motivo },
+    });
+
+    await this.iniciarDevolucion(orderId, attemptId, motivo);
+    return 'PAYMENT_REQUIRES_REFUND';
+  }
+
+  /**
+   * Crea la devolución y la ejecuta.
+   *
+   * El índice único parcial sobre las devoluciones vivas de un intento impide
+   * que dos ejecuciones simultáneas devuelvan la plata dos veces.
+   */
+  async iniciarDevolucion(orderId: string, attemptId: string, motivo: string): Promise<void> {
+    const intento = await this.prisma.paymentAttempt.findUniqueOrThrow({
+      where: { id: attemptId },
+      select: { id: true, amount: true, providerPaymentId: true, status: true },
+    });
+
+    if (intento.status !== 'APPROVED' || !intento.providerPaymentId) {
+      this.logger.error({
+        msg: 'se pidió devolver un cobro que no está aprobado',
+        attemptId,
+        status: intento.status,
+      });
+      return;
+    }
+
+    const refundId = newId('ref');
+
+    try {
+      await this.prisma.refund.create({
+        data: {
+          id: refundId,
+          orderId,
+          paymentAttemptId: attemptId,
+          provider: this.provider.nombre,
+          status: 'PENDING',
+          amount: intento.amount,
+          reason: motivo,
+        },
+      });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        // Ya hay una devolución viva para este cobro. No se crea otra.
+        this.logger.log({ msg: 'la devolución ya estaba en curso', attemptId });
+        return;
+      }
+      throw err;
+    }
+
+    this.metrics.refunds.inc({ result: 'started' });
+    this.events.publish(DomainEvent.refundStarted, {
+      entityId: refundId,
+      data: { orderId, attemptId, amount: intento.amount },
+    });
+    void this.audit.log({
+      action: 'refund.started',
+      entityType: 'refund',
+      entityId: refundId,
+      actorId: null,
+      after: { orderId, attemptId, amount: intento.amount, motivo },
+    });
+
+    await this.ejecutarDevolucion(refundId);
+  }
+
+  /**
+   * Le pide la devolución al proveedor.
+   *
+   * Idempotente por la clave: reintentar no devuelve la plata dos veces.
+   * Separado de `iniciarDevolucion` para que el conciliador pueda reintentar
+   * las que fallaron sin volver a crear la fila.
+   */
+  async ejecutarDevolucion(refundId: string): Promise<void> {
+    const devolucion = await this.prisma.refund.findUniqueOrThrow({
+      where: { id: refundId },
+      include: { paymentAttempt: { select: { providerPaymentId: true } } },
+    });
+
+    if (devolucion.status === 'COMPLETED') return;
+
+    const providerPaymentId = devolucion.paymentAttempt.providerPaymentId;
+    if (!providerPaymentId) return;
+
+    await this.prisma.$transaction([
+      this.prisma.refund.update({
+        where: { id: refundId },
+        data: { status: 'PROCESSING', attempts: { increment: 1 } },
+      }),
+      this.prisma.order.updateMany({
+        where: { id: devolucion.orderId, status: 'PAYMENT_REQUIRES_REFUND' },
+        data: { status: 'REFUND_PENDING' },
+      }),
+    ]);
+
+    try {
+      const resultado = await this.provider.devolver(
+        providerPaymentId,
+        // La misma clave siempre para esta devolución: reintentar es seguro.
+        `refund-${refundId}`,
+        devolucion.amount,
+      );
+
+      const aprobada = resultado.status === 'approved' || resultado.status === 'refunded';
+
+      if (!aprobada) {
+        // El proveedor la aceptó pero todavía no la procesó. Queda en curso y
+        // el conciliador vuelve a mirar.
+        await this.prisma.refund.update({
+          where: { id: refundId },
+          data: { providerRefundId: resultado.id },
+        });
+        return;
+      }
+
+      await this.prisma.$transaction([
+        this.prisma.refund.update({
+          where: { id: refundId },
+          data: {
+            status: 'COMPLETED',
+            providerRefundId: resultado.id,
+            completedAt: new Date(),
+            failureMessageSafe: null,
+          },
+        }),
+        this.prisma.paymentAttempt.update({
+          where: { id: devolucion.paymentAttemptId },
+          data: { status: 'REFUNDED' },
+        }),
+        this.prisma.order.updateMany({
+          where: { id: devolucion.orderId, status: { in: ['REFUND_PENDING', 'PAYMENT_REQUIRES_REFUND'] } },
+          data: { status: 'REFUNDED', refundedAt: new Date() },
+        }),
+      ]);
+
+      this.metrics.refunds.inc({ result: 'completed' });
+      this.metrics.orders.inc({ result: 'refunded' });
+      this.events.publish(DomainEvent.refundCompleted, {
+        entityId: refundId,
+        data: { orderId: devolucion.orderId },
+      });
+      this.events.publish(DomainEvent.orderRefunded, {
+        entityId: devolucion.orderId,
+        data: { refundId },
+      });
+      void this.audit.log({
+        action: 'refund.completed',
+        entityType: 'refund',
+        entityId: refundId,
+        actorId: null,
+        after: { orderId: devolucion.orderId, providerRefundId: resultado.id },
+      });
+    } catch (err) {
+      /**
+       * Falló técnicamente. La orden **no** se da por resuelta.
+       *
+       * Se marca la devolución fallida y se vuelve a poner la orden en
+       * `PAYMENT_REQUIRES_REFUND`, que es donde el conciliador la busca. Una
+       * devolución que falla en silencio es plata de alguien que se queda acá
+       * sin que nadie lo sepa.
+       */
+      const mensaje = err instanceof Error ? err.message : String(err);
+
+      await this.prisma.$transaction([
+        this.prisma.refund.update({
+          where: { id: refundId },
+          data: { status: 'FAILED', failureMessageSafe: 'No se pudo procesar la devolución' },
+        }),
+        this.prisma.order.updateMany({
+          where: { id: devolucion.orderId, status: 'REFUND_PENDING' },
+          data: { status: 'PAYMENT_REQUIRES_REFUND' },
+        }),
+      ]);
+
+      this.metrics.refunds.inc({ result: 'failed' });
+      this.events.publish(DomainEvent.refundFailed, {
+        entityId: refundId,
+        data: { orderId: devolucion.orderId },
+      });
+      void this.audit.log({
+        action: 'refund.failed',
+        entityType: 'refund',
+        entityId: refundId,
+        actorId: null,
+        after: { orderId: devolucion.orderId, intentos: devolucion.attempts + 1 },
+      });
+
+      this.logger.error({
+        msg: 'falló la devolución: queda pendiente para el conciliador',
+        refundId,
+        orderId: devolucion.orderId,
+        intentos: devolucion.attempts + 1,
+        error: mensaje,
+      });
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // INTERNOS
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /**
+   * Qué hacer cuando la llamada al proveedor no terminó bien.
+   *
+   * ─── La distinción que evita cobrar dos veces ───
+   *
+   * `ProviderUnavailableError` significa **no sabemos**: el cobro pudo haberse
+   * procesado. El intento queda en `UNKNOWN_PENDING_RECONCILIATION` y la orden
+   * en `PROCESSING_PAYMENT`, que es un estado que NO admite otro intento. El
+   * conciliador va a preguntarle al proveedor.
+   *
+   * `ProviderRejectedError` significa que sí sabemos: no hay nada que
+   * conciliar, y la persona puede probar con otra tarjeta.
+   */
+  private async manejarFalloDelProveedor(
+    attemptId: string,
+    orderId: string,
+    err: unknown,
+  ): Promise<string> {
+    if (err instanceof ProviderRejectedError) {
+      const mensaje = describePaymentOutcome({ errorBody: err.body });
+
+      await this.prisma.$transaction([
+        this.prisma.paymentAttempt.update({
+          where: { id: attemptId },
+          data: {
+            status: 'REJECTED',
+            failureCode: String(err.statusCode),
+            failureMessageSafe: mensaje.text,
+            lastCheckedAt: new Date(),
+          },
+        }),
+        this.prisma.order.updateMany({
+          where: { id: orderId, status: 'PROCESSING_PAYMENT' },
+          data: { status: 'PAYMENT_FAILED', statusReason: mensaje.text },
+        }),
+      ]);
+
+      this.metrics.paymentAttempts.inc({ result: 'rejected' });
+      this.events.publish(DomainEvent.paymentRejected, {
+        entityId: attemptId,
+        data: { orderId },
+      });
+      return 'rejected';
+    }
+
+    // No sabemos. La orden se queda en PROCESSING_PAYMENT.
+    await this.prisma.paymentAttempt.update({
+      where: { id: attemptId },
+      data: { status: 'UNKNOWN_PENDING_RECONCILIATION', lastCheckedAt: new Date() },
+    });
+
+    this.metrics.paymentAttempts.inc({ result: 'unknown' });
+    this.events.publish(DomainEvent.paymentUnknown, {
+      entityId: attemptId,
+      data: { orderId },
+    });
+    void this.audit.log({
+      action: 'payment.unknown',
+      entityType: 'payment_attempt',
+      entityId: attemptId,
+      actorId: null,
+      after: { orderId, motivo: err instanceof Error ? err.message : String(err) },
+    });
+
+    this.logger.warn({
+      msg: 'cobro en estado desconocido: lo resuelve el conciliador',
+      attemptId,
+      orderId,
+    });
+
+    return 'unknown';
+  }
+
+  private traducirFallo(err: unknown, attemptId: string): DomainError {
+    if (err instanceof ProviderUnavailableError) return new PaymentStateUnknownError(attemptId);
+    if (err instanceof ProviderPaymentNotFoundError) {
+      return new DomainError('PAYMENT_STATE_UNKNOWN', 'Estamos verificando tu pago', { attemptId });
+    }
+    return new PaymentStateUnknownError(attemptId);
+  }
+
+  /**
+   * Clave de idempotencia de un cobro. Ver la explicación larga en `cobrar`.
+   *
+   * Se guarda el hash y no el token: esta cadena viaja en cabeceras y termina
+   * en la bitácora, y ahí no puede quedar nada que sirva para cobrar.
+   */
+  private claveDeCobro(orderId: string, cardToken: string): string {
+    const huella = createHash('sha256').update(cardToken).digest('hex').slice(0, 16);
+    return `pay-${orderId}-${huella}`;
+  }
+
+  /** El neto del vendedor cambia cuando se conoce el costo real del procesador. */
+  private async recalcularNeto(orderId: string): Promise<void> {
+    const orden = await this.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+      select: {
+        grossAmount: true,
+        platformFeeAmount: true,
+        paymentProcessorFeeAmount: true,
+      },
+    });
+    if (orden.paymentProcessorFeeAmount == null) return;
+
+    await this.prisma.order.update({
+      where: { id: orderId },
+      data: {
+        sellerNetAmount:
+          orden.grossAmount - orden.platformFeeAmount - orden.paymentProcessorFeeAmount,
+      },
+    });
+  }
+
+  /** Estados que el conciliador tiene que resolver. Expuesto para los tests. */
+  static necesitaConciliacion(status: PaymentAttemptStatus): boolean {
+    return status === 'PROCESSING' || status === 'UNKNOWN_PENDING_RECONCILIATION';
+  }
+
+  /** Tope de reintentos de una devolución antes de escalarla a mano. */
+  static get maxIntentosDeDevolucion(): number {
+    return env.REFUND_MAX_ATTEMPTS;
+  }
+}

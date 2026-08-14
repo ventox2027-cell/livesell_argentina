@@ -467,6 +467,115 @@ export class InventoryService {
   }
 
   /**
+   * Toma stock directamente, para un pago que llegó tarde.
+   *
+   * ═══════════════════════════════════════════════════════════════════════
+   * EL CASO QUE ESTO RESUELVE
+   * ═══════════════════════════════════════════════════════════════════════
+   *
+   * Alguien reserva la última unidad y empieza a pagar. Pierde señal. La
+   * reserva vence y el stock se libera. Cinco minutos después, Mercado Pago
+   * acredita el pago.
+   *
+   * Ahora hay plata de una persona y una unidad que quizá se llevó otra.
+   *
+   * ─── Lo que NO se hace ───
+   *
+   * **No se revive la reserva vencida.** `EXPIRED → CONSUMED` está prohibido y
+   * seguirá estándolo: si en el medio otro comprador reservó esa unidad, revivir
+   * la primera se la robaría a alguien que hizo todo bien.
+   *
+   * **No se crea una reserva nueva de cinco minutos para consumirla después.**
+   * Entre reservar y consumir habría una ventana; y peor, si el consumo
+   * fallara quedaría stock apartado por una orden ya pagada.
+   *
+   * ─── Lo que sí se hace ───
+   *
+   * Una sola sentencia que descuenta de `onHand` **sólo si hay disponible**.
+   * No pasa por `reserved` en ningún momento: no hay estado intermedio, no hay
+   * ventana, no hay nada que limpiar si falla.
+   *
+   *     onHand 3 · reserved 1 · disponibles 2
+   *     recuperar 1
+   *     onHand 2 · reserved 1 · disponibles 1
+   *
+   * Si devuelve cero filas, no había: la orden va a `PAYMENT_REQUIRES_REFUND`
+   * y se devuelve la plata.
+   *
+   * ─── El principio ───
+   *
+   * **El dinero acreditado no autoriza a romper las reglas de inventario.** Es
+   * preferible devolver una venta que entregar una unidad que no existe o
+   * quitársela a quien la reservó bien.
+   */
+  async consumeAvailableStockAfterLatePayment(params: {
+    productVariantId: string;
+    quantity: number;
+    orderId: string;
+  }): Promise<{ ok: true; onHand: number } | { ok: false; disponible: number }> {
+    const { productVariantId, quantity, orderId } = params;
+
+    const filas = await this.prisma.$queryRaw<FilaInventario[]>`
+      UPDATE "inventory"
+         SET "on_hand" = "on_hand" - ${quantity},
+             "updated_at" = now()
+       WHERE "product_variant_id" = ${productVariantId}
+         AND ("on_hand" - "reserved") >= ${quantity}
+      RETURNING "id", "on_hand", "reserved", "low_stock_threshold"
+    `;
+
+    const fila = filas[0];
+
+    if (!fila) {
+      // Se relee para poder decir CUÁNTO había, que es lo que se va a
+      // registrar y lo que va a mirar quien investigue el reembolso.
+      const actual = await this.prisma.inventory.findUnique({
+        where: { productVariantId },
+        select: { onHand: true, reserved: true },
+      });
+      const disponible = actual ? disponibles(actual.onHand, actual.reserved) : 0;
+
+      this.metrics.latePaymentStock.inc({ result: 'out_of_stock' });
+      this.events.publish(DomainEvent.inventoryLatePaymentOutOfStock, {
+        entityId: productVariantId,
+        data: { orderId, quantity, disponible },
+      });
+      await this.audit.log({
+        action: 'inventory.late_payment_out_of_stock',
+        entityType: 'inventory',
+        entityId: productVariantId,
+        actorId: null,
+        after: { orderId, quantity, disponible },
+      });
+
+      this.logger.warn({
+        msg: 'pago tardío sin stock: hay que devolver la plata',
+        orderId,
+        productVariantId,
+        quantity,
+        disponible,
+      });
+
+      return { ok: false, disponible };
+    }
+
+    this.metrics.latePaymentStock.inc({ result: 'reacquired' });
+    this.events.publish(DomainEvent.inventoryLatePaymentReacquired, {
+      entityId: productVariantId,
+      data: { orderId, quantity, onHand: fila.on_hand },
+    });
+    await this.audit.log({
+      action: 'inventory.late_payment_reacquired',
+      entityType: 'inventory',
+      entityId: fila.id,
+      actorId: null,
+      after: { orderId, productVariantId, quantity, onHand: fila.on_hand },
+    });
+
+    return { ok: true, onHand: fila.on_hand };
+  }
+
+  /**
    * Barrido de vencidas. Lo llama el reconciliador.
    *
    * Se procesa una por una y no con un UPDATE masivo a propósito: cada

@@ -219,6 +219,50 @@ export const envSchema = z
     /** Apagable para que los tests controlen el reloj en vez de competir con él. */
     INVENTORY_RECONCILER_ENABLED: envBoolean(true),
 
+    // ─── Órdenes y comisión ─────────────────────────────────────────────────
+
+    /**
+     * Comisión de VendoX, en puntos básicos. 600 = 6,00 %.
+     *
+     * ⚠️ Cambiar esto NO afecta a las órdenes ya creadas. Cada orden guarda
+     * como foto el porcentaje que estaba vigente cuando se creó, así que una
+     * venta de hoy va a seguir diciendo 6 % dentro de dos años aunque el valor
+     * de acá sea otro. Ver `platformFeeBps` en el esquema.
+     *
+     * En puntos básicos y no en porcentaje decimal para poder expresar 6,5 %
+     * sin coma flotante.
+     */
+    VENDOX_PLATFORM_FEE_BPS: z.coerce.number().int().min(0).max(5_000).default(600),
+
+    /**
+     * Cuánto vive una orden sin pagar.
+     *
+     * Alineado con el TTL de la reserva: cuando el stock se libera, la orden
+     * que lo respaldaba deja de tener sentido. Se le da un margen para que el
+     * barrido de órdenes no se adelante al de reservas.
+     */
+    ORDER_EXPIRATION_GRACE_SECONDS: z.coerce.number().int().min(0).max(3_600).default(60),
+
+    /** Cada cuánto corre el conciliador de pagos y el barrido de órdenes. */
+    ORDERS_RECONCILER_INTERVAL_MS: z.coerce
+      .number()
+      .int()
+      .min(5_000)
+      .max(600_000)
+      .default(60_000),
+
+    ORDERS_RECONCILER_ENABLED: envBoolean(true),
+
+    /**
+     * Cuántas veces se reintenta una devolución fallida antes de dejarla
+     * para intervención manual.
+     *
+     * No infinito: si Mercado Pago rechaza la devolución por una razón
+     * estructural, reintentarla para siempre esconde el problema en vez de
+     * escalarlo.
+     */
+    REFUND_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(5),
+
     /**
      * Jobs diferidos para expirar con precisión.
      *

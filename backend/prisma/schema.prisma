@@ -514,6 +514,8 @@ model User {
   devices       Device[]
   refreshTokens RefreshToken[]
   seller        Seller?
+  addresses     UserAddress[]
+  orders        Order[]
 
   @@index([phoneE164])
   @@index([status, createdAt])
@@ -790,8 +792,10 @@ model Seller {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  stores Store[]
+  user            User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  stores          Store[]
+  orders          Order[]
+  paymentAccounts SellerPaymentAccount[]
 
   @@index([status, createdAt])
   @@map("sellers")
@@ -826,6 +830,7 @@ model Store {
   seller   Seller           @relation(fields: [sellerId], references: [id], onDelete: Cascade)
   products Product[]
   variants ProductVariant[]
+  orders   Order[]
 
   @@index([sellerId, status])
   @@map("stores")
@@ -1259,4 +1264,422 @@ enum ReservationStatus {
   EXPIRED
   /// La soltó el comprador. Liberó `reserved` sin tocar `onHand`.
   CANCELLED
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ÓRDENES Y PAGOS DE PRODUCCIÓN
+//
+// ─── El principio ───
+//
+// **Una venta no existe porque el cliente dijo que pagó.** Existe cuando el
+// backend verificó el dinero contra el proveedor Y pudo confirmar el
+// inventario sin romper ninguna invariante.
+//
+// De ahí salen las tres decisiones que estructuran todo lo de abajo:
+//
+//   1. `PAID` y `CONFIRMED` son estados DISTINTOS. Puede haber plata acreditada
+//      sin inventario confirmado, y esconderlo detrás de un solo estado
+//      convierte un problema visible en uno silencioso.
+//   2. Los intentos de cobro son FILAS, no un campo que se sobrescribe. Una
+//      orden puede intentar con Visa, que rechaza, y después con Mastercard.
+//      Son dos hechos distintos y los dos importan.
+//   3. La orden guarda FOTOS de todo lo que puede cambiar. Dentro de dos años
+//      tiene que poder responder qué compró esa persona, a qué precio y a qué
+//      dirección — aunque el producto ya no exista y el precio sea otro.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Una compra a UN vendedor.
+///
+/// ─── Por qué una orden = un vendedor ───
+///
+/// Comprarle a dos vendedores genera dos órdenes. Cada una tiene su envío, su
+/// comisión, su plata que va a una cuenta distinta y su propio estado de
+/// preparación. Meterlas en una sola obligaría a que cada consulta empiece
+/// preguntando de qué vendedor se está hablando.
+///
+/// Si algún día hace falta un carrito que las agrupe, se agrega un
+/// `CheckoutSession` por encima y estas filas no cambian.
+model Order {
+  id String @id // ord_<ulid>
+
+  /// Número corto para hablar con soporte: "mi pedido A4F2K9". Los ULID son
+  /// ilegibles por teléfono y nadie los dicta bien.
+  reference String @unique
+
+  buyerId String @map("buyer_id")
+  storeId String @map("store_id")
+  /// Desnormalizado desde la tienda: el panel del vendedor filtra por acá y
+  /// las tiendas no cambian de dueño.
+  sellerId String @map("seller_id")
+
+  /// La reserva de stock que respalda esta orden.
+  ///
+  /// Único: una reserva no puede respaldar dos órdenes. Sin esta restricción,
+  /// dos peticiones simultáneas con la misma reserva crearían dos órdenes
+  /// compitiendo por las mismas unidades.
+  ///
+  /// Opcional porque una orden pagada sobrevive a su reserva: cuando el
+  /// inventario se consume o se vence, la orden sigue existiendo.
+  reservationId String? @unique @map("reservation_id")
+
+  status OrderStatus @default(PENDING_PAYMENT)
+
+  currency String @default("ARS")
+
+  // ─── Fotos financieras ───
+  //
+  // Todo en centavos enteros, igual que el resto del proyecto. Sin decimales
+  // flotantes en ningún lado: 0.1 + 0.2 no da 0.3, y en dinero eso se nota.
+
+  itemsSubtotal  Int @map("items_subtotal")
+  shippingAmount Int @default(0) @map("shipping_amount")
+  discountAmount Int @default(0) @map("discount_amount")
+  /// Lo que paga el comprador.
+  grossAmount    Int @map("gross_amount")
+
+  /// El porcentaje de comisión VIGENTE AL CREAR LA ORDEN, no el actual.
+  ///
+  /// Si mañana VendoX pasa a cobrar 8 %, esta orden tiene que seguir diciendo
+  /// 6 % para siempre. Leerlo de una variable de entorno al mostrar el detalle
+  /// reescribiría la historia contable de forma retroactiva y silenciosa.
+  ///
+  /// En puntos básicos —600 = 6,00 %— para poder expresar 6,5 % sin decimales.
+  platformFeeBps    Int @map("platform_fee_bps")
+  platformFeeAmount Int @map("platform_fee_amount")
+
+  /// Lo que cobró Mercado Pago. `null` hasta que ELLOS lo informen.
+  ///
+  /// No se estima. Una estimación guardada en la misma columna que un dato
+  /// real es indistinguible de un dato real seis meses después, y la
+  /// diferencia aparece cuando alguien concilia contra el extracto bancario.
+  paymentProcessorFeeAmount Int? @map("payment_processor_fee_amount")
+
+  /// Lo que le queda al vendedor. Se recalcula cuando llega el costo real.
+  sellerNetAmount Int @map("seller_net_amount")
+
+  /// Foto de la dirección. Cambiarla en el perfil no toca las órdenes viejas.
+  shippingAddress Json @map("shipping_address")
+  /// Nombre y contacto del comprador al momento de comprar.
+  buyerSnapshot   Json @map("buyer_snapshot")
+
+  /// Por qué se canceló o por qué hace falta devolver. Se muestra al comprador.
+  statusReason String? @map("status_reason")
+
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  paidAt      DateTime? @map("paid_at")
+  confirmedAt DateTime? @map("confirmed_at")
+  cancelledAt DateTime? @map("cancelled_at")
+  expiredAt   DateTime? @map("expired_at")
+  refundedAt  DateTime? @map("refunded_at")
+
+  buyer    User             @relation(fields: [buyerId], references: [id])
+  store    Store            @relation(fields: [storeId], references: [id])
+  seller   Seller           @relation(fields: [sellerId], references: [id])
+  items    OrderItem[]
+  attempts PaymentAttempt[]
+  refunds  Refund[]
+
+  @@index([buyerId, createdAt])
+  @@index([sellerId, status, createdAt])
+  @@index([storeId, createdAt])
+  /// El barrido de órdenes sin pagar.
+  @@index([status, createdAt])
+  @@map("orders")
+}
+
+/// Una línea de la orden, con todo copiado.
+///
+/// No guarda sólo referencias: si el vendedor archiva el producto, le cambia
+/// el nombre o le sube el precio, el historial del comprador tiene que seguir
+/// mostrando lo que compró y lo que pagó.
+model OrderItem {
+  id      String @id // oit_<ulid>
+  orderId String @map("order_id")
+
+  /// Referencias para trazar. Pueden apuntar a algo borrado lógicamente.
+  productId        String @map("product_id")
+  productVariantId String @map("product_variant_id")
+
+  // ─── Fotos ───
+  productNameSnapshot  String  @map("product_name_snapshot")
+  variantLabelSnapshot String  @map("variant_label_snapshot")
+  skuSnapshot          String? @map("sku_snapshot")
+  imageUrlSnapshot     String? @map("image_url_snapshot")
+
+  quantity  Int
+  unitPrice Int @map("unit_price")
+  subtotal  Int
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([productVariantId])
+  @@map("order_items")
+}
+
+/// Un intento de cobro.
+///
+/// ─── Por qué es una fila y no un campo de la orden ───
+///
+/// Una orden puede intentarse con Visa —rechazada— y después con Mastercard
+/// —aprobada—. Con un solo registro mutable, el primer intento desaparece: se
+/// pierde por qué se rechazó, con qué tarjeta y cuándo. Y esa es exactamente
+/// la información que se necesita cuando alguien reclama.
+model PaymentAttempt {
+  id      String @id // pat_<ulid>
+  orderId String @map("order_id")
+
+  provider PaymentProvider @default(MERCADO_PAGO)
+  /// Id del pago en el proveedor. `null` hasta que responda — y si nunca
+  /// responde, ese `null` es justamente lo que hay que conciliar.
+  providerPaymentId String? @unique @map("provider_payment_id")
+
+  status PaymentAttemptStatus @default(CREATED)
+
+  amount   Int
+  currency String @default("ARS")
+
+  /// Clave de idempotencia, POR INTENTO.
+  ///
+  /// ─── El error que evita, ya cometido y medido ───
+  ///
+  /// La primera versión usaba una clave por ORDEN. En el reintento se mandaba
+  /// la misma y Mercado Pago —haciendo lo correcto— devolvía la respuesta
+  /// guardada del primer intento:
+  ///
+  ///     08:14:50  tarjeta rechazada  clave pay-ord_X  → pago 1350327873
+  ///     08:15:39  otra tarjeta       clave pay-ord_X  → pago 1350327873, el MISMO
+  ///
+  /// El segundo cobro nunca se procesó. Una orden rechazada quedaba condenada:
+  /// ninguna tarjeta podía pagarla nunca más.
+  ///
+  /// La clave identifica UN COBRO. Reintentar por red usa la misma; probar con
+  /// otra tarjeta genera una nueva.
+  idempotencyKey String @unique @map("idempotency_key")
+
+  paymentMethodType String? @map("payment_method_type")
+  brand             String? @map("brand")
+  /// Los últimos cuatro. Es lo ÚNICO de la tarjeta que se guarda, junto con la
+  /// marca. Nunca el PAN, nunca el código de seguridad, nunca el token.
+  lastFour          String? @map("last_four")
+
+  failureCode        String? @map("failure_code")
+  /// Mensaje ya traducido y seguro. Nunca el crudo del proveedor.
+  failureMessageSafe String? @map("failure_message_safe")
+
+  /// Cuánto cobró el proveedor por este cobro, cuando lo informa.
+  processorFeeAmount Int? @map("processor_fee_amount")
+
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+  approvedAt DateTime? @map("approved_at")
+  /// Última vez que se le preguntó al proveedor. Ordena el conciliador.
+  lastCheckedAt DateTime? @map("last_checked_at")
+
+  order   Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  refunds Refund[]
+
+  @@index([orderId, createdAt])
+  /// El barrido del conciliador: intentos en estado incierto.
+  @@index([status, lastCheckedAt])
+  @@map("payment_attempts")
+}
+
+/// Una devolución.
+///
+/// Existe como entidad y no como un par de campos en la orden porque una
+/// devolución puede fallar técnicamente y hay que reintentarla, y porque
+/// cuando alguien pregunta dónde está su plata, la respuesta tiene que estar
+/// en una fila con fechas.
+model Refund {
+  id               String @id // ref_<ulid>
+  orderId          String @map("order_id")
+  paymentAttemptId String @map("payment_attempt_id")
+
+  provider         PaymentProvider @default(MERCADO_PAGO)
+  providerRefundId String?         @map("provider_refund_id")
+
+  status RefundStatus @default(PENDING)
+  amount Int
+
+  /// Por qué se devuelve. `LATE_PAYMENT_OUT_OF_STOCK` es el caso principal.
+  reason String
+
+  failureMessageSafe String? @map("failure_message_safe")
+  /// Cuántas veces se intentó. El conciliador no reintenta para siempre.
+  attempts Int @default(0)
+
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  completedAt DateTime? @map("completed_at")
+
+  order          Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  paymentAttempt PaymentAttempt @relation(fields: [paymentAttemptId], references: [id])
+
+  @@index([status, createdAt])
+  @@index([orderId])
+  @@map("refunds")
+}
+
+/// Dirección de entrega de una persona.
+///
+/// Campos separados y no una línea de texto: el correo argentino necesita
+/// calle, altura, piso y departamento por separado, y una cadena libre obliga
+/// a adivinar dónde termina cada cosa.
+model UserAddress {
+  id     String @id // adr_<ulid>
+  userId String @map("user_id")
+
+  recipientFullName String @map("recipient_full_name")
+  /// DNI o CUIL. Lo pide el correo para entregar y Mercado Pago para facturar.
+  documentType   String @default("DNI") @map("document_type")
+  documentNumber String @map("document_number")
+  phoneE164      String @map("phone_e164")
+
+  street     String
+  number     String
+  floor      String?
+  apartment  String?
+  city       String
+  province   String
+  postalCode String @map("postal_code")
+  /// "Portón negro, timbre 3". Lo que evita que el pedido vuelva al depósito.
+  references String?
+
+  isDefault Boolean @default(false) @map("is_default")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, deletedAt])
+  @@map("user_addresses")
+}
+
+/// Conexión del vendedor con su procesador de pagos.
+///
+/// ─── Por qué existe antes de estar implementada ───
+///
+/// VendoX es un marketplace: la plata de una venta es del VENDEDOR, no de
+/// VendoX. El modelo correcto es que cada vendedor conecte su cuenta de
+/// Mercado Pago por OAuth y que VendoX cobre su comisión sobre esa
+/// transacción.
+///
+/// Diseñar todo como si cobrara una cuenta central de VendoX y arreglarlo
+/// después significa migrar dinero ya movido, que es la peor migración
+/// posible. Así que el modelo está ahora aunque la conexión real dependa de
+/// habilitación de Mercado Pago.
+model SellerPaymentAccount {
+  id       String @id // spa_<ulid>
+  sellerId String @map("seller_id")
+
+  provider PaymentProvider @default(MERCADO_PAGO)
+  /// El `user_id` del vendedor en Mercado Pago. NO es un secreto.
+  providerAccountId String? @map("provider_account_id")
+
+  status SellerPaymentAccountStatus @default(NOT_CONNECTED)
+
+  /// ⚠️ Los tokens NO se guardan acá.
+  ///
+  /// Un access token de OAuth de Mercado Pago permite cobrar en nombre del
+  /// vendedor. En una columna de texto queda en los respaldos, en las réplicas
+  /// y en cualquier volcado que alguien haga para depurar.
+  ///
+  /// Sólo se guarda la REFERENCIA al secreto en el gestor correspondiente. La
+  /// columna con el token no existe a propósito: no se puede filtrar lo que no
+  /// está.
+  credentialRef String?   @map("credential_ref")
+  scopes        String?
+  expiresAt     DateTime? @map("expires_at")
+
+  connectedAt    DateTime? @map("connected_at")
+  disconnectedAt DateTime? @map("disconnected_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  seller Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  @@unique([sellerId, provider])
+  @@map("seller_payment_accounts")
+}
+
+/// Estados de una orden. Las transiciones válidas están en `order-state.ts`.
+enum OrderStatus {
+  /// Creada, esperando que alguien la pague. El stock está apartado.
+  PENDING_PAYMENT
+  /// Hay un cobro en vuelo. No se puede lanzar otro.
+  PROCESSING_PAYMENT
+  /// Mercado Pago acreditó. El inventario TODAVÍA no está confirmado.
+  PAID
+  /// Plata acreditada Y stock consumido. La venta es válida.
+  CONFIRMED
+  /// El cobro se rechazó. Se puede reintentar con otra tarjeta.
+  PAYMENT_FAILED
+  /// Venció sin pagarse.
+  EXPIRED
+  CANCELLED
+
+  /// ⚠️ Plata acreditada y stock imposible de confirmar.
+  ///
+  /// Es el estado que justifica separar PAID de CONFIRMED. Se llega cuando el
+  /// pago se acredita tarde y otro comprador ya se llevó la última unidad. No
+  /// se esconde: se devuelve la plata.
+  PAYMENT_REQUIRES_REFUND
+  REFUND_PENDING
+  REFUNDED
+
+  // ─── Preparación, una vez confirmada ───
+  PREPARING
+  READY_TO_SHIP
+  SHIPPED
+  DELIVERED
+}
+
+enum PaymentAttemptStatus {
+  CREATED
+  /// Mandado al proveedor, sin respuesta definitiva.
+  PROCESSING
+  APPROVED
+  /// Rechazo FINANCIERO: la tarjeta dijo que no.
+  REJECTED
+  CANCELLED
+  REFUNDED
+
+  /// No sabemos qué pasó.
+  ///
+  /// ─── Por qué esto NO es lo mismo que rechazado ───
+  ///
+  /// Si se manda el cobro y se pierde la conexión antes de conocer la
+  /// respuesta, el pago pudo haberse procesado igual. Marcarlo `REJECTED`
+  /// sería decirle a alguien que no le cobraron cuando sí, y dejarlo intentar
+  /// de nuevo — cobrándole dos veces.
+  ///
+  /// Un error de red no es un pago fallido. Es un pago desconocido, y el
+  /// conciliador lo resuelve preguntándole al proveedor.
+  UNKNOWN_PENDING_RECONCILIATION
+}
+
+enum PaymentProvider {
+  MERCADO_PAGO
+}
+
+enum RefundStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  /// Falló técnicamente. La orden NO se da por resuelta: el conciliador vuelve.
+  FAILED
+}
+
+enum SellerPaymentAccountStatus {
+  NOT_CONNECTED
+  CONNECTED
+  EXPIRED
+  REVOKED
 }

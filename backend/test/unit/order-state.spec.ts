@@ -1,204 +1,256 @@
 import { describe, expect, it } from 'vitest';
+import type { OrderStatus, PaymentAttemptStatus } from '@prisma/client';
 
 import {
-  amountToCents,
-  canAttemptPayment,
-  centsToAmount,
-  mapMpStatus,
-  needsReconciliation,
-  nextOrderStatus,
-  paymentIdempotencyKey,
-} from '../../src/modules/payments/order-state';
+  admiteCancelacionDelComprador,
+  admitePago,
+  debeAplicarse,
+  esFinal,
+  esTransicionDelVendedor,
+  estadoDeOrdenPara,
+  intentoResuelto,
+  mapearEstadoMp,
+  necesitaConciliacion,
+  puedeVencer,
+  transicionDeIntentoValida,
+  transicionValida,
+} from '@/modules/orders/order-state';
 
-describe('mapMpStatus', () => {
-  it('traduce los estados conocidos', () => {
-    expect(mapMpStatus('approved')).toBe('APPROVED');
-    expect(mapMpStatus('in_process')).toBe('IN_PROCESS');
-    expect(mapMpStatus('charged_back')).toBe('CHARGED_BACK');
+/**
+ * Las dos máquinas de estados.
+ *
+ * Cada caso de acá se traduce en plata: una transición de más deja a alguien
+ * cobrado sin producto, y una de menos deja una venta trabada para siempre.
+ */
+
+describe('Transiciones de la orden', () => {
+  it('el camino feliz completo', () => {
+    const camino: OrderStatus[] = [
+      'PENDING_PAYMENT',
+      'PROCESSING_PAYMENT',
+      'PAID',
+      'CONFIRMED',
+      'PREPARING',
+      'READY_TO_SHIP',
+      'SHIPPED',
+      'DELIVERED',
+    ];
+
+    for (let i = 0; i < camino.length - 1; i += 1) {
+      expect(
+        transicionValida(camino[i]!, camino[i + 1]!),
+        `${camino[i]} → ${camino[i + 1]}`,
+      ).toBe(true);
+    }
   });
 
-  it('acepta las dos grafías de cancelado', () => {
-    expect(mapMpStatus('cancelled')).toBe('CANCELLED');
-    expect(mapMpStatus('canceled')).toBe('CANCELLED');
+  it('⛔ una orden pagada NO puede volver a fallar', () => {
+    /**
+     * La guarda que evita despagar una orden.
+     *
+     * Los webhooks de Mercado Pago llegan desordenados: puede llegar
+     * `approved` y después `pending` del MISMO pago, porque el reintento del
+     * primero se demoró más que el segundo envío. Sin esto, el segundo aviso
+     * dejaría como impaga una orden que tiene plata.
+     */
+    expect(transicionValida('PAID', 'PAYMENT_FAILED')).toBe(false);
+    expect(transicionValida('PAID', 'PENDING_PAYMENT')).toBe(false);
+    expect(transicionValida('PAID', 'PROCESSING_PAYMENT')).toBe(false);
+    expect(transicionValida('PAID', 'EXPIRED')).toBe(false);
+    expect(transicionValida('CONFIRMED', 'PAID')).toBe(false);
   });
 
-  it('no adivina ante un estado desconocido', () => {
-    // Si Mercado Pago agrega un estado, la orden queda quieta y visible en el
-    // panel. Adivinar sería peor que no hacer nada.
-    expect(mapMpStatus('algo_nuevo')).toBe('UNKNOWN');
-    expect(mapMpStatus(undefined)).toBe('UNKNOWN');
-  });
-});
-
-describe('nextOrderStatus · avance normal', () => {
-  it('pendiente → procesando cuando el pago queda en proceso', () => {
-    const r = nextOrderStatus('PENDING_PAYMENT', 'IN_PROCESS');
-    expect(r).toEqual({ status: 'PROCESSING', changed: true });
-  });
-
-  it('procesando → pagada cuando se aprueba', () => {
-    expect(nextOrderStatus('PROCESSING', 'APPROVED')).toEqual({ status: 'PAID', changed: true });
+  it('⛔ una orden con un cobro en vuelo NO puede vencer', () => {
+    /**
+     * Si ese cobro se aprobó y todavía no nos enteramos, marcarla vencida
+     * sería quedarse con la plata de alguien. El conciliador la resuelve
+     * primero.
+     */
+    expect(transicionValida('PROCESSING_PAYMENT', 'EXPIRED')).toBe(false);
+    expect(puedeVencer('PROCESSING_PAYMENT')).toBe(false);
+    expect(puedeVencer('PAID')).toBe(false);
+    expect(puedeVencer('PENDING_PAYMENT')).toBe(true);
+    expect(puedeVencer('PAYMENT_FAILED')).toBe(true);
   });
 
-  it('pendiente → pagada directo, sin pasar por procesando', () => {
-    // Es el camino real de una tarjeta aprobada al instante.
-    expect(nextOrderStatus('PENDING_PAYMENT', 'APPROVED')).toEqual({
-      status: 'PAID',
-      changed: true,
-    });
+  it('desde PAID sólo hay dos salidas, y las dos son honestas', () => {
+    // O se confirma la venta, o se devuelve la plata. No hay tercera.
+    expect(transicionValida('PAID', 'CONFIRMED')).toBe(true);
+    expect(transicionValida('PAID', 'PAYMENT_REQUIRES_REFUND')).toBe(true);
+    expect(transicionValida('PAID', 'CANCELLED')).toBe(false);
+    expect(transicionValida('PAID', 'REFUNDED')).toBe(false);
   });
 
-  it('procesando → fallida cuando se rechaza', () => {
-    expect(nextOrderStatus('PROCESSING', 'REJECTED')).toEqual({ status: 'FAILED', changed: true });
+  it('el camino de la devolución', () => {
+    expect(transicionValida('PAYMENT_REQUIRES_REFUND', 'REFUND_PENDING')).toBe(true);
+    expect(transicionValida('REFUND_PENDING', 'REFUNDED')).toBe(true);
+    // Si la devolución falla técnicamente, vuelve a pendiente de devolver.
+    expect(transicionValida('REFUND_PENDING', 'PAYMENT_REQUIRES_REFUND')).toBe(true);
   });
 
-  it('permite reintentar con otra tarjeta después de un rechazo', () => {
-    expect(nextOrderStatus('FAILED', 'APPROVED')).toEqual({ status: 'PAID', changed: true });
-  });
-});
-
-describe('nextOrderStatus · monotonía (lo que evita despagar una orden)', () => {
-  it('⛔ una orden pagada NO vuelve a procesando', () => {
-    // Caso real: el reintento del webhook `pending` llega DESPUÉS del
-    // `approved`. Sin esta guarda, la orden se despaga sola.
-    const r = nextOrderStatus('PAID', 'PENDING');
-    expect(r.status).toBe('PAID');
-    expect(r.changed).toBe(false);
-    expect(r.ignoredReason).toBe('MONOTONIC_GUARD');
+  it('un cobro rechazado se puede reintentar', () => {
+    expect(transicionValida('PAYMENT_FAILED', 'PROCESSING_PAYMENT')).toBe(true);
+    expect(admitePago('PAYMENT_FAILED')).toBe(true);
   });
 
-  it('⛔ una orden pagada NO pasa a fallida', () => {
-    const r = nextOrderStatus('PAID', 'REJECTED');
-    expect(r.status).toBe('PAID');
-    expect(r.ignoredReason).toBe('MONOTONIC_GUARD');
+  it('⛔ no se puede pagar una orden con un cobro en vuelo', () => {
+    // Lanzar otro cobro sin saber cómo terminó el primero es cobrar dos veces.
+    expect(admitePago('PROCESSING_PAYMENT')).toBe(false);
+    expect(admitePago('PAID')).toBe(false);
+    expect(admitePago('CONFIRMED')).toBe(false);
+    expect(admitePago('EXPIRED')).toBe(false);
+    expect(admitePago('CANCELLED')).toBe(false);
   });
 
-  it('⛔ una orden pagada NO pasa a cancelada', () => {
-    expect(nextOrderStatus('PAID', 'CANCELLED').status).toBe('PAID');
-  });
-
-  it('una devolución SÍ mueve una orden pagada', () => {
-    expect(nextOrderStatus('PAID', 'REFUNDED')).toEqual({ status: 'REFUNDED', changed: true });
-  });
-
-  it('un contracargo también', () => {
-    expect(nextOrderStatus('PAID', 'CHARGED_BACK')).toEqual({ status: 'REFUNDED', changed: true });
-  });
-
-  it('⛔ una orden devuelta no vuelve a pagada', () => {
-    expect(nextOrderStatus('REFUNDED', 'APPROVED').ignoredReason).toBe('MONOTONIC_GUARD');
-  });
-
-  it('el mismo estado repetido no es un cambio', () => {
-    // Webhook duplicado: cuatro veces `approved`. Una sola acreditación.
-    const r = nextOrderStatus('PAID', 'APPROVED');
-    expect(r.changed).toBe(false);
-    expect(r.ignoredReason).toBe('SAME_STATUS');
-  });
-
-  it('un estado desconocido no toca la orden', () => {
-    const r = nextOrderStatus('PROCESSING', 'UNKNOWN');
-    expect(r).toEqual({ status: 'PROCESSING', changed: false, ignoredReason: 'UNKNOWN_STATUS' });
-  });
-
-  it('aplicar cuatro veces el mismo webhook da el mismo resultado que una', () => {
-    let status = nextOrderStatus('PENDING_PAYMENT', 'APPROVED').status;
-    for (let i = 0; i < 3; i += 1) status = nextOrderStatus(status, 'APPROVED').status;
-    expect(status).toBe('PAID');
-  });
-
-  it('el desorden completo termina igual que el orden correcto', () => {
-    const enOrden = ['PENDING', 'IN_PROCESS', 'APPROVED'] as const;
-    const alReves = ['APPROVED', 'IN_PROCESS', 'PENDING'] as const;
-
-    const aplicar = (secuencia: readonly (typeof enOrden)[number][]) =>
-      secuencia.reduce<ReturnType<typeof nextOrderStatus>['status']>(
-        (acc, s) => nextOrderStatus(acc, s).status,
-        'PENDING_PAYMENT',
-      );
-
-    expect(aplicar(enOrden)).toBe('PAID');
-    expect(aplicar(alReves)).toBe('PAID');
+  it('los estados finales no tienen salida', () => {
+    expect(esFinal('DELIVERED')).toBe(true);
+    expect(esFinal('REFUNDED')).toBe(true);
+    expect(esFinal('EXPIRED')).toBe(true);
+    expect(esFinal('CANCELLED')).toBe(true);
+    expect(esFinal('PENDING_PAYMENT')).toBe(false);
   });
 });
 
-describe('canAttemptPayment', () => {
-  it('permite cobrar sobre una orden nueva o rechazada', () => {
-    expect(canAttemptPayment('PENDING_PAYMENT')).toBe(true);
-    expect(canAttemptPayment('FAILED')).toBe(true);
+describe('Quién puede mover qué', () => {
+  it('el vendedor avanza la preparación', () => {
+    expect(esTransicionDelVendedor('CONFIRMED', 'PREPARING')).toBe(true);
+    expect(esTransicionDelVendedor('PREPARING', 'READY_TO_SHIP')).toBe(true);
+    expect(esTransicionDelVendedor('READY_TO_SHIP', 'SHIPPED')).toBe(true);
   });
 
-  it('⛔ NO permite cobrar sobre una orden con un pago en vuelo', () => {
-    // Es la protección contra el doble cobro cuando no sabemos el resultado
-    // del intento anterior.
-    expect(canAttemptPayment('PROCESSING')).toBe(false);
+  it('⛔ el vendedor NO puede saltarse pasos', () => {
+    expect(esTransicionDelVendedor('CONFIRMED', 'SHIPPED')).toBe(false);
+    expect(esTransicionDelVendedor('CONFIRMED', 'READY_TO_SHIP')).toBe(false);
   });
 
-  it('⛔ NO permite cobrar dos veces una orden paga', () => {
-    expect(canAttemptPayment('PAID')).toBe(false);
-    expect(canAttemptPayment('REFUNDED')).toBe(false);
-  });
-});
-
-describe('needsReconciliation', () => {
-  it('sólo persigue las órdenes atascadas en procesando', () => {
-    expect(needsReconciliation('PROCESSING')).toBe(true);
-    expect(needsReconciliation('PAID')).toBe(false);
-    expect(needsReconciliation('PENDING_PAYMENT')).toBe(false);
-  });
-});
-
-describe('clave de idempotencia del cobro', () => {
-  const ORDEN = 'ord_01ABC';
-
-  it('⛔ un token distinto da una clave distinta', () => {
-    // EL BUG QUE MOTIVÓ ESTA FUNCIÓN. Con la clave por orden, el reintento
-    // mandaba la misma y Mercado Pago devolvía la respuesta guardada del
-    // primer intento: una orden rechazada no podía pagarse nunca más, con
-    // ninguna tarjeta.
-    const primerIntento = paymentIdempotencyKey(ORDEN, 'token-de-la-tarjeta-que-rebotó');
-    const segundoIntento = paymentIdempotencyKey(ORDEN, 'token-de-la-tarjeta-buena');
-    expect(primerIntento).not.toBe(segundoIntento);
+  it('⛔ el vendedor no toca estados de plata', () => {
+    // No puede declarar pagada ni devuelta una orden. Eso lo decide el backend
+    // preguntándole a Mercado Pago.
+    expect(esTransicionDelVendedor('PENDING_PAYMENT', 'PAID')).toBe(false);
+    expect(esTransicionDelVendedor('PAID', 'CONFIRMED')).toBe(false);
+    expect(esTransicionDelVendedor('PAID', 'REFUNDED')).toBe(false);
   });
 
-  it('el mismo token da la misma clave: doble toque = un solo cobro', () => {
-    const a = paymentIdempotencyKey(ORDEN, 'token-abc');
-    const b = paymentIdempotencyKey(ORDEN, 'token-abc');
-    expect(a).toBe(b);
+  it('⛔ no se puede preparar algo que no está confirmado', () => {
+    // Confirmado significa que hay plata Y que el stock se consumió.
+    expect(esTransicionDelVendedor('PAID', 'PREPARING')).toBe(false);
+    expect(esTransicionDelVendedor('PENDING_PAYMENT', 'PREPARING')).toBe(false);
   });
 
-  it('el mismo token en otra orden da otra clave', () => {
-    expect(paymentIdempotencyKey('ord_1', 'tok')).not.toBe(paymentIdempotencyKey('ord_2', 'tok'));
-  });
-
-  it('⛔ la clave NO contiene el token', () => {
-    // Termina en un encabezado HTTP y en la bitácora de auditoría. Ahí no
-    // puede quedar nada que sirva para cobrar.
-    const token = 'token-secreto-de-un-solo-uso';
-    expect(paymentIdempotencyKey(ORDEN, token)).not.toContain(token);
-  });
-
-  it('entra en el límite de longitud de Mercado Pago', () => {
-    expect(paymentIdempotencyKey('ord_01JBQZ9K3M4N5P6Q7R8S9T0V1W', 'tok').length).toBeLessThan(80);
+  it('el comprador cancela sólo antes de pagar', () => {
+    expect(admiteCancelacionDelComprador('PENDING_PAYMENT')).toBe(true);
+    expect(admiteCancelacionDelComprador('PAYMENT_FAILED')).toBe(true);
+    expect(admiteCancelacionDelComprador('PROCESSING_PAYMENT')).toBe(false);
+    expect(admiteCancelacionDelComprador('PAID')).toBe(false);
+    expect(admiteCancelacionDelComprador('CONFIRMED')).toBe(false);
   });
 });
 
-describe('conversión de dinero', () => {
-  it('ida y vuelta sin perder centavos', () => {
-    expect(centsToAmount(150_000)).toBe(1500);
-    expect(amountToCents(1500)).toBe(150_000);
-    expect(amountToCents(centsToAmount(123_456))).toBe(123_456);
+describe('Estados de Mercado Pago', () => {
+  it.each([
+    ['approved', 'APPROVED'],
+    ['rejected', 'REJECTED'],
+    ['cancelled', 'CANCELLED'],
+    ['canceled', 'CANCELLED'],
+    ['refunded', 'REFUNDED'],
+    ['charged_back', 'REFUNDED'],
+    ['pending', 'PROCESSING'],
+    ['in_process', 'PROCESSING'],
+    ['in_mediation', 'PROCESSING'],
+    ['authorized', 'PROCESSING'],
+  ])('%s → %s', (mp, esperado) => {
+    expect(mapearEstadoMp(mp)).toBe(esperado);
   });
 
-  it('sobrevive al error de representación en punto flotante', () => {
-    // 1499.9999999999998 es lo que puede volver de un JSON. Truncar daría
-    // 149999 centavos: un peso menos, para siempre, en cada orden.
-    expect(amountToCents(1499.9999999999998)).toBe(150_000);
-    expect(amountToCents(0.1 + 0.2)).toBe(30);
+  it('⛔ un estado desconocido NO se adivina', () => {
+    /**
+     * La línea más importante del mapeo.
+     *
+     * Mapear lo desconocido a `REJECTED` sería decirle a alguien que no le
+     * cobraron cuando quizá sí, y dejarlo pagar de nuevo. Lo desconocido se
+     * marca para conciliar.
+     */
+    expect(mapearEstadoMp('un_estado_nuevo_de_mp')).toBe('UNKNOWN_PENDING_RECONCILIATION');
+    expect(mapearEstadoMp(undefined)).toBe('UNKNOWN_PENDING_RECONCILIATION');
+    expect(mapearEstadoMp('')).toBe('UNKNOWN_PENDING_RECONCILIATION');
   });
 
-  it('maneja montos con centavos', () => {
-    expect(centsToAmount(1)).toBe(0.01);
-    expect(amountToCents(19.99)).toBe(1999);
+  it('no distingue mayúsculas', () => {
+    expect(mapearEstadoMp('APPROVED')).toBe('APPROVED');
+    expect(mapearEstadoMp('Approved')).toBe('APPROVED');
+  });
+});
+
+describe('Transiciones del intento de cobro', () => {
+  it('⛔ un cobro aprobado no se desaprueba', () => {
+    expect(transicionDeIntentoValida('APPROVED', 'REJECTED')).toBe(false);
+    expect(transicionDeIntentoValida('APPROVED', 'PROCESSING')).toBe(false);
+    // Sólo hacia la devolución.
+    expect(transicionDeIntentoValida('APPROVED', 'REFUNDED')).toBe(true);
+  });
+
+  it('desde "no sabemos" se puede ir a cualquier desenlace', () => {
+    // Cuando el conciliador finalmente pregunta, la respuesta puede ser
+    // cualquiera. Ese es el punto de este estado.
+    expect(transicionDeIntentoValida('UNKNOWN_PENDING_RECONCILIATION', 'APPROVED')).toBe(true);
+    expect(transicionDeIntentoValida('UNKNOWN_PENDING_RECONCILIATION', 'REJECTED')).toBe(true);
+    expect(transicionDeIntentoValida('UNKNOWN_PENDING_RECONCILIATION', 'CANCELLED')).toBe(true);
+  });
+
+  it('un rechazo es definitivo', () => {
+    expect(transicionDeIntentoValida('REJECTED', 'APPROVED')).toBe(false);
+    expect(intentoResuelto('REJECTED')).toBe(true);
+  });
+
+  it('el conciliador mira los inciertos', () => {
+    expect(necesitaConciliacion('PROCESSING')).toBe(true);
+    expect(necesitaConciliacion('UNKNOWN_PENDING_RECONCILIATION')).toBe(true);
+    expect(necesitaConciliacion('APPROVED')).toBe(false);
+    expect(necesitaConciliacion('REJECTED')).toBe(false);
+  });
+});
+
+describe('Del intento a la orden', () => {
+  it.each([
+    ['APPROVED', 'PAID'],
+    ['REJECTED', 'PAYMENT_FAILED'],
+    ['PROCESSING', 'PROCESSING_PAYMENT'],
+    ['CREATED', 'PROCESSING_PAYMENT'],
+    ['CANCELLED', 'CANCELLED'],
+    ['REFUNDED', 'REFUNDED'],
+  ] as [PaymentAttemptStatus, OrderStatus][])('%s → %s', (intento, orden) => {
+    expect(estadoDeOrdenPara(intento)).toBe(orden);
+  });
+
+  it('⛔ un cobro incierto deja la orden trabada, no la libera', () => {
+    /**
+     * `PROCESSING_PAYMENT` es un estado que NO admite otro intento. Es
+     * deliberado: mientras no se sepa si el primer cobro salió, permitir otro
+     * es la forma más directa de cobrar dos veces.
+     */
+    expect(estadoDeOrdenPara('UNKNOWN_PENDING_RECONCILIATION')).toBe('PROCESSING_PAYMENT');
+    expect(admitePago('PROCESSING_PAYMENT')).toBe(false);
+  });
+});
+
+describe('La guarda de monotonía', () => {
+  it('⛔ el segundo aviso del mismo pago no hace nada', () => {
+    /**
+     * Medido en la primera compra real del spike:
+     *
+     *     07:46:12.307  respuesta directa   PROCESSING → PAID
+     *     07:46:12.988  webhook             PAID       → PAID
+     *
+     * 681 ms. Sin esta guarda, dos caminos de confirmación habrían acreditado
+     * el mismo pago dos veces, y habría pasado sin que nadie lo provocara.
+     */
+    expect(debeAplicarse('PAID', 'PAID')).toBe(false);
+    expect(debeAplicarse('CONFIRMED', 'PAID')).toBe(false);
+    expect(debeAplicarse('PAID', 'PAYMENT_FAILED')).toBe(false);
+  });
+
+  it('sí aplica una transición legítima hacia adelante', () => {
+    expect(debeAplicarse('PROCESSING_PAYMENT', 'PAID')).toBe(true);
+    expect(debeAplicarse('PAID', 'CONFIRMED')).toBe(true);
   });
 });
