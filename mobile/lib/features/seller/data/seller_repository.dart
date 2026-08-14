@@ -144,6 +144,35 @@ class SellerRepository {
 
   // ─── Variantes ────────────────────────────────────────────────────────────
 
+  /// Define los ejes de variación de un producto que ya existe.
+  ///
+  /// ─── El hueco que esto cierra ───
+  ///
+  /// El editor mostraba "¿Viene en varios talles o colores?" también al editar,
+  /// y dejaba agregar ejes... que después no se guardaban: sólo `crearProducto`
+  /// los mandaba. El vendedor cargaba Color y Talle en un producto existente,
+  /// tocaba Guardar, veía "Guardado" y no pasaba nada.
+  ///
+  /// Se manda la definición **completa** y el backend genera las combinaciones.
+  /// Las que ya existían conservan su stock: se reconocen por la combinación,
+  /// no por su posición.
+  Future<Producto> definirOpciones(
+    String productId,
+    Map<String, List<String>> opciones,
+  ) async {
+    final res = await _api.put<Map<String, dynamic>>(
+      '/products/$productId/options',
+      data: {
+        'opciones': [
+          for (final e in opciones.entries)
+            if (e.value.isNotEmpty) {'name': e.key, 'values': e.value},
+        ],
+      },
+    );
+    if (res.statusCode != 200) throw _error(res);
+    return Producto.fromJson(res.data!);
+  }
+
   Future<Producto> actualizarVariante(
     String productId,
     String variantId, {

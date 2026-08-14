@@ -105,6 +105,11 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
       return;
     }
 
+    if (_tieneVariantes && _opciones.values.any((v) => v.isEmpty)) {
+      AppSnack.error(context, 'Un eje sin valores no genera nada. Cargale al menos uno.');
+      return;
+    }
+
     setState(() => _guardando = true);
     try {
       final repo = ref.read(sellerRepositoryProvider);
@@ -123,12 +128,30 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
         });
         AppSnack.exito(context, 'Producto creado. Ahora agregale fotos.');
       } else {
-        final actualizado = await repo.actualizarProducto(
+        var actualizado = await repo.actualizarProducto(
           widget.productoId!,
           name: nombre,
           basePriceCents: centavos,
           description: _descripcion.text.trim(),
         );
+
+        /**
+         * Los ejes se guardan aparte, y ANTES no se guardaban.
+         *
+         * El editor mostraba "¿Viene en varios talles o colores?" también al
+         * editar y dejaba cargar ejes que nunca llegaban al backend: sólo el
+         * alta los mandaba. El vendedor tocaba Guardar, leía "Guardado", y su
+         * producto seguía con una sola variante.
+         *
+         * Se manda sólo si cambió algo: reenviar la misma definición no rompe
+         * nada —el backend conserva el stock de las combinaciones que siguen—
+         * pero es una escritura al pedo en cada guardado.
+         */
+        final ejes = _tieneVariantes ? _opciones : <String, List<String>>{};
+        if (!_mismosEjes(ejes, actualizado)) {
+          actualizado = await repo.definirOpciones(widget.productoId!, ejes);
+        }
+
         if (!mounted) return;
         setState(() {
           _producto = actualizado;
@@ -141,6 +164,29 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
     } finally {
       if (mounted) setState(() => _guardando = false);
     }
+  }
+
+  /// ¿Los ejes en pantalla son los mismos que ya tiene el producto?
+  ///
+  /// Compara nombres y valores, no ids: es lo que el vendedor escribió. Sirve
+  /// sólo para no reenviar una definición idéntica en cada guardado — mandarla
+  /// no rompería nada, porque el backend conserva el stock de las
+  /// combinaciones que sobreviven.
+  bool _mismosEjes(Map<String, List<String>> ejes, Producto producto) {
+    if (ejes.length != producto.options.length) return false;
+
+    for (final opcion in producto.options) {
+      final valores = ejes[opcion.name];
+      if (valores == null) return false;
+
+      final actuales = opcion.values.map((v) => v.value).toList();
+      if (valores.length != actuales.length) return false;
+      for (var i = 0; i < valores.length; i++) {
+        if (valores[i] != actuales[i]) return false;
+      }
+    }
+
+    return true;
   }
 
   Future<void> _cambiarEstado(String nuevo) async {

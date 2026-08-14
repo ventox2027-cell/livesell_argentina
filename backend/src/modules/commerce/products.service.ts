@@ -13,6 +13,7 @@ import { slugDisponible } from '@/shared/utils/slug';
 import type {
   CreateProductDto,
   CreateVariantDto,
+  DefinirOpcionesDto,
   PageQueryDto,
   UpdateProductDto,
   UpdateVariantDto,
@@ -105,6 +106,16 @@ const PRODUCT_SELECT = {
   createdAt: true,
   updatedAt: true,
 } satisfies Prisma.ProductSelect;
+
+/**
+ * Tope de combinaciones por producto.
+ *
+ * No es una limitación técnica: es que un producto con más de cien variantes
+ * es casi siempre un error de carga —alguien puso los valores en el eje
+ * equivocado— y generar mil filas de inventario por accidente es peor que
+ * frenarlo con un mensaje claro.
+ */
+const MAX_VARIANTES = 100;
 
 @Injectable()
 export class ProductsService {
@@ -498,6 +509,216 @@ export class ProductsService {
   }
 
   // ─── Variantes ────────────────────────────────────────────────────────────
+
+  /**
+   * Define los ejes de variación del producto y genera sus combinaciones.
+   *
+   * ═══════════════════════════════════════════════════════════════════════════
+   * EL VENDEDOR NO ARMA VARIANTES: ARMA EJES
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * Nadie quiere cargar "Negro / S", "Negro / M", "Negro / L", "Blanco / S"…
+   * a mano. Carga dos listas —Color: Negro, Blanco · Talle: S, M, L— y las seis
+   * combinaciones salen solas. Después ajusta stock y precio de cada una.
+   *
+   * Los ejes son libres: Color, Talle, Capacidad, Sabor, Medida, Material. Nada
+   * acá conoce la ropa.
+   *
+   * ─── Lo que NO se puede romper ───
+   *
+   * **El stock de las combinaciones que sobreviven.** Si el vendedor agrega el
+   * color Rojo a un producto que ya vendía Negro y Blanco, las variantes de
+   * Negro y Blanco tienen que conservar sus unidades: son las mismas variantes.
+   * Se reconocen por `optionsKey`, la huella canónica de la combinación, que es
+   * estable aunque cambie el orden.
+   *
+   * **El historial.** Las variantes que dejan de corresponder NO se borran: se
+   * marcan con `deletedAt`. Una orden vieja apunta a su variante, y borrarla
+   * dejaría un pedido sin poder decir qué se compró.
+   *
+   * ⚠️ El producto cartesiano crece rápido: 5 colores × 6 talles × 4 medidas son
+   * 120 variantes. Hay tope, y la app tiene que mostrar el número **antes** de
+   * confirmar.
+   */
+  async definirOpciones(userId: string, productId: string, dto: DefinirOpcionesDto) {
+    const { product } = await this.ownership.productOf(userId, productId);
+
+    /**
+     * Se cuenta ANTES de tocar nada.
+     *
+     * Los ids de valor todavía no existen, pero la cantidad de combinaciones
+     * sólo depende de cuántos valores tiene cada eje. Contar primero evita
+     * abrir una transacción que va a fallar a mitad de camino.
+     */
+    const cuantas = dto.opciones.reduce((t, o) => t * o.values.length, 1);
+    if (cuantas > MAX_VARIANTES) {
+      throw new InvalidPriceError(
+        `Serían ${cuantas} variantes y el máximo es ${MAX_VARIANTES}. ` +
+          'Probá con menos valores o separá el producto en dos.',
+      );
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      /**
+       * ⚠️ Se REUTILIZAN las opciones y los valores que ya existen.
+       *
+       * La huella de una combinación (`optionsKey`) se arma con los **ids** de
+       * los valores. Borrar las opciones y recrearlas genera ids nuevos, así
+       * que ninguna combinación coincidiría con la anterior: agregar un color
+       * archivaría todas las variantes viejas y crearía otras en cero.
+       *
+       * El vendedor que agrega "Rojo" a un producto que vende Negro y Blanco
+       * perdería el stock de los dos. Se reconocen por nombre —que es lo que él
+       * escribió— y conservan su id.
+       */
+      const existentes = await tx.productOption.findMany({
+        where: { productId: product.id },
+        include: { values: true },
+      });
+
+      const opciones: OpcionConValores[] = [];
+      const optionIdsVigentes: string[] = [];
+
+      for (const [i, opcion] of dto.opciones.entries()) {
+        const previa = existentes.find(
+          (o) => o.name.toLowerCase() === opcion.name.toLowerCase(),
+        );
+
+        const optionId = previa?.id ?? newId('opt');
+        optionIdsVigentes.push(optionId);
+
+        if (previa) {
+          await tx.productOption.update({
+            where: { id: optionId },
+            data: { name: opcion.name, position: i },
+          });
+        } else {
+          await tx.productOption.create({
+            data: { id: optionId, productId: product.id, name: opcion.name, position: i },
+          });
+        }
+
+        const valores: Array<{ id: string; value: string; position: number }> = [];
+        for (const [j, valor] of opcion.values.entries()) {
+          const previoValor = previa?.values.find(
+            (v) => v.value.toLowerCase() === valor.toLowerCase(),
+          );
+          const valueId = previoValor?.id ?? newId('opv');
+
+          if (previoValor) {
+            await tx.productOptionValue.update({
+              where: { id: valueId },
+              data: { value: valor, position: j },
+            });
+          } else {
+            await tx.productOptionValue.create({
+              data: { id: valueId, optionId, value: valor, position: j },
+            });
+          }
+          valores.push({ id: valueId, value: valor, position: j });
+        }
+
+        // Los valores que el vendedor sacó. La cascada se lleva sus uniones con
+        // variantes; las variantes huérfanas se archivan más abajo.
+        await tx.productOptionValue.deleteMany({
+          where: { optionId, id: { notIn: valores.map((v) => v.id) } },
+        });
+
+        opciones.push({ optionId, name: opcion.name, position: i, values: valores });
+      }
+
+      // Ejes que ya no existen.
+      await tx.productOption.deleteMany({
+        where: { productId: product.id, id: { notIn: optionIdsVigentes } },
+      });
+
+      const combinaciones = generarCombinaciones(opciones);
+      const clavesVigentes = new Set(combinaciones.map((c) => c.optionsKey));
+
+      /**
+       * Se miran TAMBIÉN las archivadas.
+       *
+       * El índice `[productId, optionsKey]` no distingue borradas: una variante
+       * archivada sigue ocupando su huella. Crear otra con la misma clave falla
+       * con un error opaco de base de datos.
+       *
+       * Y además es el comportamiento correcto: sacar "Rojo" y volver a
+       * agregarlo tiene que devolver la MISMA variante, con su historial.
+       */
+      const todas = await tx.productVariant.findMany({
+        where: { productId: product.id },
+        select: { id: true, optionsKey: true, deletedAt: true },
+      });
+
+      for (const [i, combo] of combinaciones.entries()) {
+        const previa = todas.find((v) => v.optionsKey === combo.optionsKey);
+        const variantId = previa?.id ?? newId('var');
+
+        if (previa) {
+          await tx.productVariant.update({
+            where: { id: variantId },
+            data: {
+              title: combo.title,
+              position: i,
+              isDefault: combo.optionsKey === KEY_DEFAULT,
+              // Revivir la archivada: es la misma combinación de siempre.
+              deletedAt: null,
+              ...(previa.deletedAt ? { status: 'ACTIVE' as const } : {}),
+            },
+          });
+        } else {
+          await tx.productVariant.create({
+            data: {
+              id: variantId,
+              productId: product.id,
+              storeId: product.storeId,
+              title: combo.title,
+              optionsKey: combo.optionsKey,
+              isDefault: combo.optionsKey === KEY_DEFAULT,
+              position: i,
+            },
+          });
+          // Toda variante nace con su fila de inventario en cero, en la misma
+          // transacción: sin esto habría variantes sin stock consultable.
+          await tx.inventory.create({ data: { id: newId('inv'), productVariantId: variantId } });
+        }
+
+        // Las uniones se rehacen: los valores borrados se llevaron las suyas.
+        await tx.productVariantOption.deleteMany({ where: { variantId } });
+        if (combo.optionValueIds.length > 0) {
+          await tx.productVariantOption.createMany({
+            data: combo.optionValueIds.map((optionValueId) => ({ variantId, optionValueId })),
+          });
+        }
+      }
+
+      /**
+       * Las que ya no corresponden se ARCHIVAN, no se borran.
+       *
+       * Una orden vieja apunta a su variante. Borrarla dejaría un pedido sin
+       * poder decir qué se compró, y el historial se rompería en silencio.
+       */
+      const aArchivar = todas.filter(
+        (v) => !clavesVigentes.has(v.optionsKey) && v.deletedAt === null,
+      );
+      if (aArchivar.length > 0) {
+        await tx.productVariant.updateMany({
+          where: { id: { in: aArchivar.map((v) => v.id) } },
+          data: { deletedAt: new Date(), status: 'INACTIVE' },
+        });
+      }
+    });
+
+    await this.audit.log({
+      action: 'product.options_defined',
+      entityType: 'product',
+      entityId: product.id,
+      actorId: userId,
+      after: { ejes: dto.opciones.map((o) => o.name), variantes: cuantas },
+    });
+
+    return this.cargarDetalle(product.id);
+  }
 
   async createVariant(userId: string, productId: string, dto: CreateVariantDto) {
     const { product } = await this.ownership.productOf(userId, productId, { requireActive: true });

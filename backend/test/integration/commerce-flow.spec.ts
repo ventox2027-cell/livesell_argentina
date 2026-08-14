@@ -1076,3 +1076,233 @@ describe('Auditoría', () => {
     expect(despues.name).toBeUndefined();
   });
 });
+
+/**
+ * Los ejes de variación, editables después de crear el producto.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * EL VENDEDOR NO ARMA VARIANTES: ARMA EJES
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Nadie carga "Negro / S", "Negro / M", "Negro / L", "Blanco / S"… a mano.
+ * Carga dos listas y las seis combinaciones salen solas.
+ *
+ * Lo que estos tests protegen es lo que no se puede romper al reeditarlas: el
+ * stock de las combinaciones que sobreviven, y el historial de las que dejan de
+ * existir.
+ */
+describe('Ejes de variación', () => {
+  async function productoSimple(nombre = 'Remera') {
+    const v = await nuevoVendedor();
+    const p = await call('POST', '/api/v1/products', {
+      token: v.token,
+      body: { name: `${nombre} ${Date.now()}`, basePriceCents: 1_500_000, status: 'ACTIVE' },
+    });
+    expect(p.status, JSON.stringify(p.body)).toBe(201);
+    return { ...v, productId: p.body.id as string };
+  }
+
+  it('define dos ejes y genera el producto cartesiano', async () => {
+    const { token, productId } = await productoSimple();
+
+    const r = await call('PUT', `/api/v1/products/${productId}/options`, {
+      token,
+      body: {
+        opciones: [
+          { name: 'Color', values: ['Negro', 'Blanco'] },
+          { name: 'Talle', values: ['S', 'M', 'L'] },
+        ],
+      },
+    });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+
+    const titulos = (r.body.variants as Array<{ title: string }>).map((v) => v.title);
+    expect(titulos).toHaveLength(6);
+    // El orden importa: agrupadas por el primer eje, como las cargó el vendedor.
+    expect(titulos).toEqual([
+      'Negro / S',
+      'Negro / M',
+      'Negro / L',
+      'Blanco / S',
+      'Blanco / M',
+      'Blanco / L',
+    ]);
+  });
+
+  it('los ejes son libres, no sólo ropa', async () => {
+    const { token, productId } = await productoSimple('Perfume');
+
+    const r = await call('PUT', `/api/v1/products/${productId}/options`, {
+      token,
+      body: { opciones: [{ name: 'Capacidad', values: ['100 ml', '500 ml'] }] },
+    });
+
+    expect(r.status).toBe(200);
+    expect((r.body.variants as Array<{ title: string }>).map((v) => v.title)).toEqual([
+      '100 ml',
+      '500 ml',
+    ]);
+  });
+
+  it('⛔ agregar un eje NO borra el stock de las combinaciones que siguen', async () => {
+    /**
+     * El caso que rompe una tienda: el vendedor vende Negro y Blanco, agrega
+     * Rojo, y se le va el inventario de los otros dos.
+     *
+     * Las variantes se reconocen por la huella de su combinación, no por su
+     * posición en la lista.
+     */
+    const { token, productId } = await productoSimple();
+
+    await call('PUT', `/api/v1/products/${productId}/options`, {
+      token,
+      body: { opciones: [{ name: 'Color', values: ['Negro', 'Blanco'] }] },
+    });
+
+    const antes = await call('GET', `/api/v1/products/${productId}`, { token });
+    const negro = (antes.body.variants as Array<{ id: string; title: string }>).find(
+      (v) => v.title === 'Negro',
+    )!;
+
+    await call('PATCH', `/api/v1/products/${productId}/variants/${negro.id}/inventory`, {
+      token,
+      body: { onHand: 7 },
+    });
+
+    // Se agrega un color.
+    await call('PUT', `/api/v1/products/${productId}/options`, {
+      token,
+      body: { opciones: [{ name: 'Color', values: ['Negro', 'Blanco', 'Rojo'] }] },
+    });
+
+    const despues = await call('GET', `/api/v1/products/${productId}`, { token });
+    const negroDespues = (despues.body.variants as Array<{ id: string; title: string }>).find(
+      (v) => v.title === 'Negro',
+    )!;
+
+    // Misma variante: mismo id.
+    expect(negroDespues.id).toBe(negro.id);
+
+    const inv = await prisma.inventory.findUnique({ where: { productVariantId: negro.id } });
+    expect(inv?.onHand).toBe(7);
+  });
+
+  it('⛔ las combinaciones que desaparecen se ARCHIVAN, no se borran', async () => {
+    /**
+     * Una orden vieja apunta a su variante. Borrarla dejaría un pedido sin
+     * poder decir qué se compró.
+     */
+    const { token, productId } = await productoSimple();
+
+    await call('PUT', `/api/v1/products/${productId}/options`, {
+      token,
+      body: { opciones: [{ name: 'Color', values: ['Negro', 'Blanco'] }] },
+    });
+
+    const antes = await call('GET', `/api/v1/products/${productId}`, { token });
+    const blanco = (antes.body.variants as Array<{ id: string; title: string }>).find(
+      (v) => v.title === 'Blanco',
+    )!;
+
+    await call('PUT', `/api/v1/products/${productId}/options`, {
+      token,
+      body: { opciones: [{ name: 'Color', values: ['Negro'] }] },
+    });
+
+    // Ya no se ofrece...
+    const despues = await call('GET', `/api/v1/products/${productId}`, { token });
+    expect((despues.body.variants as Array<{ title: string }>).map((v) => v.title)).toEqual([
+      'Negro',
+    ]);
+
+    // ...pero la fila sigue existiendo, archivada.
+    const fila = await prisma.productVariant.findUnique({ where: { id: blanco.id } });
+    expect(fila).not.toBeNull();
+    expect(fila?.deletedAt).not.toBeNull();
+    expect(fila?.status).toBe('INACTIVE');
+  });
+
+  it('quitar todos los ejes deja la variante única', async () => {
+    const { token, productId } = await productoSimple();
+
+    await call('PUT', `/api/v1/products/${productId}/options`, {
+      token,
+      body: { opciones: [{ name: 'Color', values: ['Negro', 'Blanco'] }] },
+    });
+
+    const r = await call('PUT', `/api/v1/products/${productId}/options`, {
+      token,
+      body: { opciones: [] },
+    });
+
+    expect(r.status).toBe(200);
+    // Todo producto tiene al menos una variante: es la regla que ordena el
+    // módulo entero de inventario.
+    expect(r.body.variants).toHaveLength(1);
+    expect((r.body.variants as Array<{ isDefault: boolean }>)[0]?.isDefault).toBe(true);
+  });
+
+  it('⛔ el producto cartesiano tiene tope', async () => {
+    const { token, productId } = await productoSimple();
+
+    // 12 × 12 = 144, más que el máximo de 100.
+    const doce = Array.from({ length: 12 }, (_, i) => `v${i}`);
+    const r = await call('PUT', `/api/v1/products/${productId}/options`, {
+      token,
+      body: {
+        opciones: [
+          { name: 'A', values: doce },
+          { name: 'B', values: doce },
+        ],
+      },
+    });
+
+    expect(r.status).toBe(422);
+    // El mensaje dice cuántas serían: es lo que le permite al vendedor entender
+    // que puso los valores en el eje equivocado.
+    expect(JSON.stringify(r.body)).toContain('144');
+  });
+
+  it('⛔ valores repetidos en un eje se rechazan', async () => {
+    const { token, productId } = await productoSimple();
+
+    // Dos "Negro" generarían dos variantes idénticas que el índice UNIQUE
+    // rechazaría con un error opaco.
+    const r = await call('PUT', `/api/v1/products/${productId}/options`, {
+      token,
+      body: { opciones: [{ name: 'Color', values: ['Negro', 'negro'] }] },
+    });
+
+    // 400 y no 422: es un cuerpo mal formado, no una regla de negocio.
+    expect(r.status).toBe(400);
+  });
+
+  it('⛔ el producto de otro vendedor da 404', async () => {
+    const { productId } = await productoSimple();
+    const otro = await nuevoVendedor();
+
+    const r = await call('PUT', `/api/v1/products/${productId}/options`, {
+      token: otro.token,
+      body: { opciones: [{ name: 'Color', values: ['Negro'] }] },
+    });
+
+    expect(r.status).toBe(404);
+  });
+
+  it('cada variante generada nace con su fila de inventario', async () => {
+    const { token, productId } = await productoSimple();
+
+    await call('PUT', `/api/v1/products/${productId}/options`, {
+      token,
+      body: { opciones: [{ name: 'Talle', values: ['S', 'M'] }] },
+    });
+
+    const r = await call('GET', `/api/v1/products/${productId}`, { token });
+    for (const v of r.body.variants as Array<{ id: string }>) {
+      const inv = await prisma.inventory.findUnique({ where: { productVariantId: v.id } });
+      // Sin fila de inventario, la variante no se podría vender ni consultar.
+      expect(inv, `la variante ${v.id} quedó sin inventario`).not.toBeNull();
+    }
+  });
+});

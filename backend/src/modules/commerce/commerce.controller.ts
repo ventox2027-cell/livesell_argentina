@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
   Req,
 } from '@nestjs/common';
@@ -38,6 +39,8 @@ import {
   type UpdateSellerDto,
   type UpdateStoreDto,
   type UpdateVariantDto,
+  DefinirOpcionesSchema,
+  type DefinirOpcionesDto,
 } from './dto/commerce.dto';
 import { ImagesService } from './images.service';
 import { ProductsService } from './products.service';
@@ -196,6 +199,25 @@ export class CommerceController {
   }
 
   // ─── Variantes ────────────────────────────────────────────────────────────
+
+  /**
+   * Define los ejes de variación y genera las combinaciones.
+   *
+   * `PUT` y no `PATCH`: se manda la definición completa y reemplaza. Editar de
+   * a un eje dejaría estados intermedios donde el producto tiene talles pero
+   * todavía no colores, y las variantes generadas en el medio serían basura.
+   *
+   * Las combinaciones que ya existían **conservan su stock**: se reconocen por
+   * la huella de la combinación, no por su posición en la lista.
+   */
+  @Put('products/:productId/options')
+  definirOpciones(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('productId') productId: string,
+    @Body(new ZodValidationPipe(DefinirOpcionesSchema)) dto: DefinirOpcionesDto,
+  ) {
+    return this.products.definirOpciones(user.id, productId, dto);
+  }
 
   @Post('products/:productId/variants')
   createVariant(

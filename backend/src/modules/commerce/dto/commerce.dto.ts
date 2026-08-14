@@ -146,6 +146,39 @@ export type UpdateProductDto = z.infer<typeof UpdateProductSchema>;
 
 // ─── Variantes ──────────────────────────────────────────────────────────────
 
+/**
+ * Los ejes de variación del producto, completos.
+ *
+ * Se manda la definición entera y el backend genera las combinaciones. Editar
+ * de a un eje dejaría estados intermedios donde el producto tiene talles pero
+ * todavía no colores, y las variantes generadas en el medio serían basura.
+ *
+ * Los topes existen para que el producto cartesiano no explote: 4 ejes de 12
+ * valores son 20.736 variantes.
+ */
+export const DefinirOpcionesSchema = z.object({
+  opciones: z
+    .array(
+      z.object({
+        name: z.string().trim().min(1).max(40),
+        values: z
+          .array(z.string().trim().min(1).max(40))
+          .min(1)
+          .max(24)
+          // Dos valores iguales generarían dos variantes idénticas que el
+          // índice UNIQUE va a rechazar con un error opaco. Mejor acá.
+          .refine((v) => new Set(v.map((x) => x.toLowerCase())).size === v.length, {
+            message: 'Hay valores repetidos',
+          }),
+      }),
+    )
+    .max(4)
+    .refine((o) => new Set(o.map((x) => x.name.toLowerCase())).size === o.length, {
+      message: 'Hay ejes repetidos',
+    }),
+});
+export type DefinirOpcionesDto = z.infer<typeof DefinirOpcionesSchema>;
+
 export const CreateVariantSchema = z.object({
   /** Ids de los valores de opción que definen la combinación. */
   optionValueIds: z.array(z.string().max(40)).max(3).default([]),
