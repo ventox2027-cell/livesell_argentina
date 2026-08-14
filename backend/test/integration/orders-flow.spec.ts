@@ -2125,3 +2125,170 @@ describe('Envío y costo del procesador', () => {
     });
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CAMBIOS Y DEVOLUCIONES
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * El piso legal, extremo a extremo.
+ *
+ * El módulo puro ya prueba las reglas. Lo que se prueba acá es que esas reglas
+ * lleguen hasta el HTTP y hasta la base: que el endpoint las rechace, que el
+ * CHECK las rechace, y que el comprador vea el derecho de arrepentimiento antes
+ * de pagar aunque el vendedor no haya elegido nada.
+ */
+describe('Cambios y devoluciones', () => {
+  async function tiendaDe(sellerToken: string) {
+    const r = await call('GET', '/api/v1/stores/me', { token: sellerToken });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    return r.body.id as string;
+  }
+
+  async function definir(sellerToken: string, storeId: string, body: Record<string, unknown>) {
+    return call('PATCH', `/api/v1/stores/${storeId}/exchange-policy`, {
+      token: sellerToken,
+      body,
+    });
+  }
+
+  it('una tienda nueva ya ofrece el mínimo legal, sin configurar nada', async () => {
+    /**
+     * Es lo que evita que exista una tienda publicada sin política. El default
+     * de la columna no es una comodidad: es la diferencia entre "todavía no lo
+     * configuró" y "no ofrece devoluciones", que legalmente no es una opción.
+     */
+    const { sellerToken } = await nuevaVarianteConStock(1);
+    const storeId = await tiendaDe(sellerToken);
+
+    const tienda = await prisma.store.findUniqueOrThrow({ where: { id: storeId } });
+    expect(tienda.exchangeMode).toBe('SOLO_LEGAL');
+    expect(tienda.exchangeWindowDays).toBe(10);
+    expect(tienda.returnShippingPaidBy).toBe('VENDEDOR');
+  });
+
+  it('⛔ el endpoint rechaza menos de diez días', async () => {
+    const { sellerToken } = await nuevaVarianteConStock(1);
+    const storeId = await tiendaDe(sellerToken);
+
+    const r = await definir(sellerToken, storeId, {
+      exchangeMode: 'SOLO_LEGAL',
+      exchangeWindowDays: 3,
+      returnShippingPaidBy: 'VENDEDOR',
+    });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(400);
+  });
+
+  it('⛔ el arrepentimiento puro no puede cobrarle el envío al comprador', async () => {
+    const { sellerToken } = await nuevaVarianteConStock(1);
+    const storeId = await tiendaDe(sellerToken);
+
+    const r = await definir(sellerToken, storeId, {
+      exchangeMode: 'SOLO_LEGAL',
+      exchangeWindowDays: 10,
+      returnShippingPaidBy: 'COMPRADOR',
+    });
+
+    // 422 y no 400: el cuerpo está bien formado, lo que falla es una regla.
+    expect(r.status, JSON.stringify(r.body)).toBe(422);
+    expect(r.body.error.code).toBe('EXCHANGE_POLICY_INVALID');
+  });
+
+  it('⛔ la base tampoco lo deja pasar por afuera del endpoint', async () => {
+    /**
+     * El CHECK cubre un UPDATE escrito a mano en una consola de producción, que
+     * es el camino que ninguna validación de aplicación ve. No es redundancia
+     * por miedo: es la única capa que sigue estando cuando alguien se salta el
+     * backend.
+     */
+    const { sellerToken } = await nuevaVarianteConStock(1);
+    const storeId = await tiendaDe(sellerToken);
+
+    await expect(
+      prisma.store.update({ where: { id: storeId }, data: { exchangeWindowDays: 2 } }),
+    ).rejects.toThrow();
+
+    await expect(
+      prisma.store.update({
+        where: { id: storeId },
+        data: { exchangeMode: 'SOLO_LEGAL', returnShippingPaidBy: 'COMPRADOR' },
+      }),
+    ).rejects.toThrow();
+  });
+
+  it('el vendedor puede ofrecer más', async () => {
+    const { sellerToken } = await nuevaVarianteConStock(1);
+    const storeId = await tiendaDe(sellerToken);
+
+    const r = await definir(sellerToken, storeId, {
+      exchangeMode: 'DEVOLUCION_SIN_CAUSA',
+      exchangeWindowDays: 30,
+      returnShippingPaidBy: 'VENDEDOR',
+      exchangeNote: 'Con la etiqueta puesta y sin uso.',
+    });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.body.exchangeWindowDays).toBe(30);
+    expect(r.body.diasEfectivos).toBe(30);
+    expect(r.body.resumen.lineas.join(' ')).toContain('30 días');
+  });
+
+  it('⛔ no se puede tocar la política de otra tienda', async () => {
+    const propia = await nuevaVarianteConStock(1);
+    const ajena = await nuevaVarianteConStock(1);
+    const storeAjena = await tiendaDe(ajena.sellerToken);
+
+    const r = await definir(propia.sellerToken, storeAjena, {
+      exchangeMode: 'SOLO_LEGAL',
+      exchangeWindowDays: 10,
+      returnShippingPaidBy: 'VENDEDOR',
+    });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(404);
+  });
+
+  it('el comprador ve el derecho de arrepentimiento antes de pagar', async () => {
+    /**
+     * La Resolución 424/2020 pide que el botón de arrepentimiento sea visible y
+     * fácil de encontrar. El texto sale del backend y no de Flutter para que
+     * diga exactamente lo mismo en la app, en el detalle del pedido y en el
+     * mail: tres textos escritos por separado terminan diciendo tres cosas, y
+     * la que vale legalmente es la más favorable al comprador.
+     */
+    const { sellerToken } = await nuevaVarianteConStock(1);
+    const storeId = await tiendaDe(sellerToken);
+    const tienda = await prisma.store.findUniqueOrThrow({ where: { id: storeId } });
+
+    const r = await call('GET', `/api/v1/stores/by-slug/${tienda.slug}`);
+
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.body.cambios.diasEfectivos).toBe(10);
+    expect(r.body.cambios.resumen.derechoDeArrepentimiento).toContain('10 días corridos');
+    expect(r.body.cambios.resumen.derechoDeArrepentimiento).toContain('sin costo');
+  });
+
+  it('cambiar la política queda auditado con el antes y el después', async () => {
+    // Si un comprador reclama que le prometieron treinta días, esto es lo único
+    // que reconstruye qué decía la publicación cuando compró.
+    const { sellerToken } = await nuevaVarianteConStock(1);
+    const storeId = await tiendaDe(sellerToken);
+
+    await definir(sellerToken, storeId, {
+      exchangeMode: 'DEVOLUCION_SIN_CAUSA',
+      exchangeWindowDays: 30,
+      returnShippingPaidBy: 'VENDEDOR',
+    });
+
+    const registro = await prisma.auditLog.findFirst({
+      where: { action: 'store.exchange_policy_updated', entityId: storeId },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    expect(registro).not.toBeNull();
+    const antes = registro?.before as Record<string, unknown>;
+    const despues = registro?.after as Record<string, unknown>;
+    expect(antes.exchangeWindowDays).toBe(10);
+    expect(despues.exchangeWindowDays).toBe(30);
+  });
+});

@@ -930,6 +930,26 @@ model Store {
   // acá: hacerlo sería inventar un número y mostrárselo a alguien como si
   // fuera cierto. Lo que se guarda es quién lo paga.
   processorFeeMode ProcessorFeeMode @default(ABSORBED) @map("processor_fee_mode")
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // CAMBIOS Y DEVOLUCIONES
+  // ═══════════════════════════════════════════════════════════════════════
+  //
+  // El vendedor elige qué ofrece POR ENCIMA del piso legal. El piso —diez
+  // días corridos de arrepentimiento desde la entrega, sin causa y sin costo—
+  // se le muestra al comprador siempre, elija lo que elija el vendedor.
+  //
+  // Ver `modules/commerce/politicas.ts`, que tiene las citas y las reglas.
+  exchangeMode ExchangeMode @default(SOLO_LEGAL) @map("exchange_mode")
+
+  /// Días que ofrece el vendedor. Nunca se aplica menos que el piso legal.
+  exchangeWindowDays Int @default(10) @map("exchange_window_days") @db.SmallInt
+
+  /// Quién paga el envío de vuelta. En arrepentimiento puro, el vendedor.
+  returnShippingPaidBy ReturnShippingPayer @default(VENDEDOR) @map("return_shipping_paid_by")
+
+  /// Condiciones y excepciones, en las palabras del vendedor.
+  exchangeNote String? @map("exchange_note")
   /// Tienda principal del vendedor. Hoy siempre hay exactamente una.
   isPrimary Boolean     @default(true) @map("is_primary")
 
@@ -2405,4 +2425,20 @@ model Notification {
   /// El barrido de envío: sólo las que están esperando su turno.
   @@index([pushStatus, nextAttemptAt])
   @@map("notifications")
+}
+
+/// Qué ofrece el vendedor en cambios y devoluciones.
+///
+/// `SOLO_LEGAL` no significa "nada": significa exactamente lo que la ley
+/// obliga, que ya es un derecho de arrepentimiento de diez días corridos.
+enum ExchangeMode {
+  SOLO_LEGAL
+  CAMBIO_SIN_CAUSA
+  DEVOLUCION_SIN_CAUSA
+}
+
+/// Quién paga el envío de la devolución.
+enum ReturnShippingPayer {
+  VENDEDOR
+  COMPRADOR
 }

@@ -27,6 +27,7 @@ import {
   ReorderImagesSchema,
   UpdateProductSchema,
   UpdateSellerSchema,
+  UpdateExchangePolicySchema,
   UpdateShippingPolicySchema,
   UpdateStoreSchema,
   UpdateVariantSchema,
@@ -38,6 +39,7 @@ import {
   type ReorderImagesDto,
   type UpdateProductDto,
   type UpdateSellerDto,
+  type UpdateExchangePolicyDto,
   type UpdateShippingPolicyDto,
   type UpdateStoreDto,
   type UpdateVariantDto,
@@ -144,6 +146,21 @@ export class CommerceController {
     @Body(new ZodValidationPipe(UpdateShippingPolicySchema)) dto: UpdateShippingPolicyDto,
   ) {
     return this.sellers.updateShippingPolicy(user.id, id, dto);
+  }
+
+  /**
+   * Endpoint aparte: define obligaciones frente a compradores reales.
+   *
+   * El piso legal —diez días de arrepentimiento— se aplica igual. Ver
+   * `politicas.ts`.
+   */
+  @Patch('stores/:id/exchange-policy')
+  updateExchangePolicy(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(UpdateExchangePolicySchema)) dto: UpdateExchangePolicyDto,
+  ) {
+    return this.sellers.updateExchangePolicy(user.id, id, dto);
   }
 
   @Public()

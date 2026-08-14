@@ -116,6 +116,32 @@ export const UpdateShippingPolicySchema = z
   );
 export type UpdateShippingPolicyDto = z.infer<typeof UpdateShippingPolicySchema>;
 
+/**
+ * Cambios y devoluciones.
+ *
+ * Endpoint aparte por el mismo motivo que el envío: define obligaciones que
+ * el vendedor asume frente a compradores reales, y algunas de ellas se las
+ * impone la ley aunque él no las elija.
+ *
+ * ⚠️ El piso legal NO se valida sólo acá. Está también en un CHECK de la base
+ * y en `politicas.ts`. Una cláusula nula publicada como si valiera nos hace
+ * responsables a nosotros también, así que no puede depender de una sola capa.
+ */
+export const UpdateExchangePolicySchema = z.object({
+  exchangeMode: z.enum(['SOLO_LEGAL', 'CAMBIO_SIN_CAUSA', 'DEVOLUCION_SIN_CAUSA']),
+  /**
+   * Días que ofrece el vendedor.
+   *
+   * El mínimo de 10 es el derecho de arrepentimiento de la ley 24.240 y no es
+   * negociable. El máximo de 365 no es legal: es que un número más grande casi
+   * siempre es un cero de más en un formulario.
+   */
+  exchangeWindowDays: z.coerce.number().int().min(10).max(365).default(10),
+  returnShippingPaidBy: z.enum(['VENDEDOR', 'COMPRADOR']),
+  exchangeNote: z.string().trim().max(1000).nullable().optional(),
+});
+export type UpdateExchangePolicyDto = z.infer<typeof UpdateExchangePolicySchema>;
+
 // ─── Productos ──────────────────────────────────────────────────────────────
 
 /**

@@ -1,7 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import {
   Prisma,
+  type ExchangeMode,
   type ProcessorFeeMode,
+  type ReturnShippingPayer,
   type Seller,
   type ShippingMode,
   type Store,
@@ -23,11 +25,17 @@ import { slugDisponible } from '@/shared/utils/slug';
 import type {
   CreateSellerDto,
   ChangeStoreSlugDto,
+  UpdateExchangePolicyDto,
   UpdateSellerDto,
   UpdateShippingPolicyDto,
   UpdateStoreDto,
 } from './dto/commerce.dto';
 import { OwnershipService } from './ownership.service';
+import {
+  diasEfectivos,
+  resumenParaElComprador,
+  validarPolitica,
+} from './politicas';
 
 /**
  * Vendedores y tiendas.
@@ -331,6 +339,115 @@ export class SellersService {
     };
   }
 
+
+  /**
+   * Define qué ofrece la tienda en cambios y devoluciones.
+   *
+   * ─── El piso legal se valida tres veces, y está bien ───
+   *
+   * En el esquema de Zod, acá con `validarPolitica`, y en un CHECK de la base.
+   * No es redundancia por miedo: cada capa cubre un camino distinto. Zod cubre
+   * el endpoint, esto cubre cualquier otro llamador dentro del backend, y el
+   * CHECK cubre un UPDATE escrito a mano en una consola de producción.
+   *
+   * Lo que está en juego no es un dato mal cargado: una tienda que publica
+   * "no se aceptan devoluciones" está publicando una cláusula nula, y quien
+   * aloja esa publicación responde junto con ella.
+   *
+   * ─── No afecta a los pedidos ya hechos ───
+   *
+   * Cada orden se rige por la política vigente cuando se compró. Endurecerla
+   * hoy no le saca el derecho a nadie que ya compró — y ampliarla tampoco se lo
+   * agrega, porque el vendedor no se comprometió a eso cuando vendió.
+   */
+  async updateExchangePolicy(userId: string, storeId: string, dto: UpdateExchangePolicyDto) {
+    const { store } = await this.ownership.storeOf(userId, storeId, { requireActive: true });
+
+    const propuesta = {
+      modo: dto.exchangeMode,
+      diasParaCambiar: dto.exchangeWindowDays,
+      quienPagaElEnvio: dto.returnShippingPaidBy,
+      nota: dto.exchangeNote ?? null,
+    };
+
+    const veredicto = validarPolitica(propuesta);
+    if (!veredicto.ok) {
+      throw new DomainError('EXCHANGE_POLICY_INVALID', veredicto.motivo);
+    }
+
+    const actualizada = await this.prisma.store.update({
+      where: { id: store.id },
+      data: {
+        exchangeMode: dto.exchangeMode,
+        exchangeWindowDays: dto.exchangeWindowDays,
+        returnShippingPaidBy: dto.returnShippingPaidBy,
+        ...(dto.exchangeNote !== undefined ? { exchangeNote: dto.exchangeNote } : {}),
+      },
+    });
+
+    /**
+     * Se audita entero.
+     *
+     * Es el registro de "en esta fecha esta tienda pasó a ofrecer sólo el
+     * mínimo legal". Si un comprador reclama que le prometieron treinta días,
+     * esta es la única forma de reconstruir qué decía la publicación cuando
+     * compró.
+     */
+    await this.audit.logDiff({
+      action: 'store.exchange_policy_updated',
+      entityType: 'store',
+      entityId: store.id,
+      actorId: userId,
+      before: {
+        exchangeMode: store.exchangeMode,
+        exchangeWindowDays: store.exchangeWindowDays,
+        returnShippingPaidBy: store.returnShippingPaidBy,
+        exchangeNote: store.exchangeNote,
+      },
+      after: {
+        exchangeMode: actualizada.exchangeMode,
+        exchangeWindowDays: actualizada.exchangeWindowDays,
+        returnShippingPaidBy: actualizada.returnShippingPaidBy,
+        exchangeNote: actualizada.exchangeNote,
+      },
+    });
+
+    return this.politicaDeCambios(actualizada);
+  }
+
+  /**
+   * La política tal como la ve el vendedor y tal como la ve quien compra.
+   *
+   * El texto se arma acá y no en Flutter para que diga exactamente lo mismo en
+   * la app, en el detalle del pedido y en el mail. Tres textos escritos por
+   * separado terminan diciendo tres cosas distintas, y la que vale legalmente
+   * es la más favorable al comprador — o sea, siempre perdemos.
+   */
+  private politicaDeCambios(store: {
+    exchangeMode: ExchangeMode;
+    exchangeWindowDays: number;
+    returnShippingPaidBy: ReturnShippingPayer;
+    exchangeNote: string | null;
+  }) {
+    const politica = {
+      modo: store.exchangeMode,
+      diasParaCambiar: store.exchangeWindowDays,
+      quienPagaElEnvio: store.returnShippingPaidBy,
+      nota: store.exchangeNote,
+    };
+
+    return {
+      exchangeMode: store.exchangeMode,
+      exchangeWindowDays: store.exchangeWindowDays,
+      returnShippingPaidBy: store.returnShippingPaidBy,
+      exchangeNote: store.exchangeNote,
+      /** Los días que valen de verdad, con el piso legal aplicado. */
+      diasEfectivos: diasEfectivos(store.exchangeWindowDays),
+      /** El texto ya armado, para mostrar sin reescribirlo. */
+      resumen: resumenParaElComprador(politica),
+    };
+  }
+
   /**
    * Cambia el slug de la tienda.
    *
@@ -386,6 +503,9 @@ export class SellersService {
       // llegar al checkout. Enterarse del costo con la tarjeta en la mano es la
       // razón número uno por la que alguien abandona una compra.
       envio: this.politicaDeEnvio(store),
+      // Cambios y devoluciones antes de comprar. El derecho de arrepentimiento
+      // va SIEMPRE, elija lo que elija el vendedor.
+      cambios: this.politicaDeCambios(store),
     };
   }
 

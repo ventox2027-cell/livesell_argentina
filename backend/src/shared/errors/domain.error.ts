@@ -40,6 +40,12 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<string, number>> = {
   ORDER_NOT_PAYABLE: 409,
   PAYMENTS_DISABLED: 404,
 
+  // 422 y no 400: el cuerpo está bien formado y los tipos son correctos. Lo
+  // que falla es una regla: la política que el vendedor quiere publicar deja
+  // al comprador por debajo del piso que le da la ley. El cliente no tiene que
+  // corregir el JSON sino mostrarle el motivo a la persona.
+  EXCHANGE_POLICY_INVALID: 422,
+
   // Dominio de autenticación
   INVALID_TOKEN: 401,
   // 401 y no 403: la sesión se puede recuperar reiniciándola, y el cliente
