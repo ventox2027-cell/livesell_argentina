@@ -27,6 +27,14 @@ ENV NODE_ENV=production
 ENV PORT=3000
 ENV TZ=UTC
 
+# Qué commit está corriendo.
+#
+# Lo expone /health, y el despliegue lo comprueba: sin esto, un despliegue que
+# falló en silencio y dejó arriba la versión anterior pasaría como exitoso.
+# También es lo primero que se mira cuando algo se rompe en staging.
+ARG GIT_SHA=unknown
+ENV GIT_SHA=$GIT_SHA
+
 # Usuario sin privilegios: si alguien logra ejecutar código, no es root.
 RUN addgroup -S app && adduser -S app -G app
 

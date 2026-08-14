@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/design/tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../auth/state/auth_providers.dart';
+import '../../orders/presentation/seller_orders_screen.dart';
 import '../data/seller_repository.dart';
 import '../domain/seller_models.dart';
 import 'product_editor_screen.dart';
@@ -186,6 +187,37 @@ class _Panel extends ConsumerWidget {
           ],
 
           _Encabezado(perfil: perfil),
+          const SizedBox(height: Gap.lg),
+
+          // Las ventas primero: es lo que un vendedor abre a mirar cuando algo
+          // se vendió, y esperar a que baje hasta el final sería absurdo.
+          InkWell(
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const SellerOrdersScreen()),
+            ),
+            borderRadius: BorderRadius.circular(Redondeo.lg),
+            child: Container(
+              padding: const EdgeInsets.all(Gap.lg),
+              decoration: BoxDecoration(
+                color: AppColor.superficie,
+                borderRadius: BorderRadius.circular(Redondeo.lg),
+                border: Border.all(color: AppColor.borde),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.point_of_sale_rounded, size: 20, color: AppColor.exito),
+                  SizedBox(width: Gap.md),
+                  Expanded(
+                    child: Text(
+                      'Mis ventas',
+                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  Icon(Icons.chevron_right_rounded, color: AppColor.textoDebil),
+                ],
+              ),
+            ),
+          ),
           const SizedBox(height: Gap.xl),
 
           const _Titulo('Mis productos'),

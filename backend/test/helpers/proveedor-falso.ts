@@ -46,6 +46,21 @@ export class ProveedorFalso extends PaymentProvider {
 
   /** Qué va a pasar en el próximo `cobrar()`. */
   proximo: Guion = { status: 'approved' };
+
+  /**
+   * Guion POR TOKEN de tarjeta.
+   *
+   * ─── Por qué hace falta además de `proximo` ───
+   *
+   * `proximo` es un campo compartido: con trescientos cobros concurrentes,
+   * todos leen el último valor escrito y el escenario que cada uno quería
+   * probar se pierde. Es un defecto sutil, y engañoso: la prueba de estrés
+   * decía "70 % aprobados, 20 % rechazados" y en realidad daba 100 % de lo
+   * que hubiera puesto la última petición en llegar.
+   *
+   * Con el guion atado al token, cada cobro concurrente obtiene el suyo.
+   */
+  readonly porToken = new Map<string, Guion>();
   /** Qué va a devolver `consultar()`. Lo usa el conciliador y el webhook. */
   alConsultar: Guion | null = null;
   /** Qué va a devolver `buscarPorReferencia()`. */
@@ -70,6 +85,7 @@ export class ProveedorFalso extends PaymentProvider {
     this.llamadasAConsultar = 0;
     this.llamadasADevolver = 0;
     this.cobrados.clear();
+    this.porToken.clear();
   }
 
   get clavePublica(): string {
@@ -84,7 +100,9 @@ export class ProveedorFalso extends PaymentProvider {
     this.llamadasACobrar += 1;
     await Promise.resolve();
 
-    const guion = this.proximo;
+    // El guion del token gana sobre el compartido: es el que sobrevive a la
+    // concurrencia.
+    const guion = this.porToken.get(input.cardToken) ?? this.proximo;
 
     if ('fallo' in guion) {
       /**

@@ -41,7 +41,7 @@ Tres principios que atraviesan todo:
 · Redis 7 · Zod · Vitest. Móvil: Flutter 3 · Riverpod · Dio · LiveKit.
 
 **Repositorio:** `github.com/ventox2027-cell/livesell_argentina` (privado).
-Último commit: `ba6bcdf`.
+Último commit: `623edc8`.
 
 ---
 
@@ -54,13 +54,13 @@ Tres principios que atraviesan todo:
 | Auth | ✅ funcionando con Google real |
 | Sellers / Stores / Products / Variantes / Imágenes | ✅ funcionando |
 | **Inventory / Reservation** | ✅ funcionando |
+| **Orders / Payments / Refunds** | ✅ funcionando |
 | Feed (descubrimiento) | 🟡 productos y stock reales, falta el video |
-| **Orders / Payments producción** | ⛔ **siguiente** |
-| Live Sessions / Realtime | ⛔ |
+| **Live Sessions / Realtime** | ⛔ **siguiente** |
 | Search / Notifications | ⛔ |
 | Admin Lite | ⛔ **requisito previo al lanzamiento** |
 
-**370 tests** de backend contra PostgreSQL real y **17 de contrato** en la app.
+**449 tests** de backend contra PostgreSQL real y **33 de contrato** en la app.
 Lint, typecheck y `flutter analyze` en verde.
 
 ---

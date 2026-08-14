@@ -29,7 +29,8 @@
     "test:db:create": "docker exec livesell-postgres psql -U livesell -d postgres -c \"CREATE DATABASE livesell_test OWNER livesell;\"",
     "test:db:migrate": "tsx scripts/migrate-test-db.ts",
     "spike:report": "tsx scripts/spike-report.ts",
-    "stress:inventory": "vitest run --config vitest.stress.config.ts"
+    "stress:inventory": "vitest run --config vitest.stress.config.ts test/stress/inventory.stress.ts",
+    "stress:orders": "vitest run --config vitest.stress.config.ts test/stress/orders.stress.ts"
   },
   "dependencies": {
     "@fastify/multipart": "^10.1.0",

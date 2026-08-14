@@ -34,8 +34,8 @@ Tres principios que atraviesan todas las decisiones:
 | **Sellers / Stores / Products / Variantes / Imágenes** | ✅ funcionando | Backend + Flutter. Catálogo real de punta a punta |
 | **Inventory / Reservation** | ✅ funcionando | Sobreventa imposible por construcción. 1000 compradores → 5 reservas exactas |
 | Feed (descubrimiento) | 🟡 parcial | Productos y stock reales. Falta el video: llega con Live Sessions |
-| Orders / Payments (producción) | ⛔ no empezado | **Siguiente.** El spike ya validó el camino e `InventoryService.consume()` está listo esperándolo |
-| Live Sessions / Realtime | ⛔ no empezado | |
+| **Orders / Payments (producción)** | ✅ funcionando | Cadena completa: reserva → orden → cobro → inventario → confirmación. Con devolución automática si el pago llega tarde y no hay stock |
+| Live Sessions / Realtime | ⛔ no empezado | **Siguiente** |
 | Search / Notifications | ⛔ no empezado | |
 | Admin Lite | ⛔ no empezado | **Requisito previo al lanzamiento** |
 
@@ -563,6 +563,227 @@ dejar de vender, la herramienta es pausar la variante.
 
 ---
 
+## 5d · Órdenes, cobros y devoluciones
+
+### El principio
+
+> **Una venta no existe porque el cliente dijo que pagó. Existe cuando el
+> backend verificó el dinero contra el proveedor y pudo confirmar el inventario
+> sin romper ninguna invariante.**
+
+### `PAID` y `CONFIRMED` son estados distintos
+
+Es la decisión que estructura todo el módulo.
+
+| | |
+|---|---|
+| `PAID` | Mercado Pago acreditó el dinero |
+| `CONFIRMED` | además el stock quedó consumido y la venta es válida |
+
+Entre los dos hay una realidad incómoda: **puede haber plata acreditada sin
+inventario disponible**. Pasa cuando el pago se aprueba tarde —el comprador
+perdió señal, el webhook llegó demorado— y para entonces otro ya se llevó la
+última unidad.
+
+Con un solo estado "pagado", ese caso se resuelve de una de dos maneras, las
+dos malas: o se le roba la unidad al segundo comprador, o se marca la orden
+completa y se manda un paquete que no existe.
+
+Separarlos hace el problema **visible**: la orden queda en
+`PAYMENT_REQUIRES_REFUND` y se devuelve la plata.
+
+### Máquina de estados
+
+```
+PENDING_PAYMENT ──┬─→ PROCESSING_PAYMENT ──┬─→ PAID ──┬─→ CONFIRMED ──→ PREPARING
+                  │                        │          │                     ↓
+                  │                        │          │              READY_TO_SHIP
+                  │                        │          │                     ↓
+                  │                        │          │                  SHIPPED
+                  │                        │          │                     ↓
+                  │                        │          │                 DELIVERED
+                  │                        │          │
+                  │                        │          └─→ PAYMENT_REQUIRES_REFUND
+                  │                        │                       ↓
+                  │                        └─→ PAYMENT_FAILED  REFUND_PENDING
+                  │                                 │                ↓
+                  ├─→ EXPIRED                       │            REFUNDED
+                  └─→ CANCELLED ←───────────────────┘
+```
+
+Dos ausencias deliberadas:
+
+- **`PAID → PAYMENT_FAILED` no existe.** Una orden con plata no se despaga. Los
+  webhooks llegan desordenados: puede llegar `approved` y después `pending` del
+  mismo pago porque el reintento del primero se demoró más que el segundo
+  envío.
+- **`PROCESSING_PAYMENT → EXPIRED` no existe.** Si ese cobro se aprobó y todavía
+  no nos enteramos, marcarla vencida sería quedarse con la plata de alguien. El
+  conciliador la resuelve primero.
+
+### Los intentos de cobro son filas, no un campo
+
+Una orden puede intentarse con Visa —rechazada— y después con Mastercard. Con
+un registro mutable el primer intento desaparece: se pierde por qué se rechazó,
+con qué tarjeta y cuándo. Y esa es exactamente la información que se necesita
+cuando alguien reclama.
+
+```
+CREATED ──→ PROCESSING ──┬─→ APPROVED ──→ REFUNDED
+                         ├─→ REJECTED
+                         └─→ UNKNOWN_PENDING_RECONCILIATION
+```
+
+### Un error de red no es un pago fallido
+
+**Es la regla que evita cobrar dos veces.**
+
+Si se manda el cobro y se corta la conexión, el pago pudo haberse procesado
+perfectamente. Marcarlo `REJECTED` sería decirle a alguien que no le cobraron
+—y dejarlo pagar de nuevo— cuando quizá ya le cobraron.
+
+`UNKNOWN_PENDING_RECONCILIATION` deja la orden en `PROCESSING_PAYMENT`, que es
+un estado que **no admite otro intento**. El conciliador le pregunta al
+proveedor y resuelve.
+
+El `default` del mapeo de estados hace lo mismo: un estado que Mercado Pago
+agregue mañana se marca para conciliar, no se adivina.
+
+### La clave de idempotencia sale del token, no de la orden
+
+Arreglo de un error real, medido en el spike:
+
+```
+08:14:50  tarjeta rechazada  clave pay-ord_X  → pago 1350327873
+08:15:39  otra tarjeta       clave pay-ord_X  → pago 1350327873, el MISMO
+```
+
+Con una clave por orden, Mercado Pago —haciendo lo correcto— devolvía la
+respuesta guardada del primer intento. El segundo cobro nunca se procesaba: una
+orden rechazada quedaba condenada, ninguna tarjeta podía pagarla nunca más.
+
+El token de tarjeta es la unidad correcta. Doble toque → mismo token → un solo
+cobro. Otra tarjeta → token nuevo → cobro nuevo. Se guarda el hash, nunca el
+token.
+
+### El pago tardío
+
+El caso difícil, y el que justifica todo lo anterior.
+
+1. `PaymentAttempt` → `APPROVED`, orden → `PAID`.
+2. Se intenta consumir la reserva. Si sigue viva: `CONFIRMED`, listo.
+3. Si venció: **no se revive**. `EXPIRED → CONSUMED` está prohibido, porque
+   revivirla le robaría la unidad a quien reservó bien.
+4. Se intenta tomar stock disponible con una operación atómica:
+
+```sql
+UPDATE inventory
+   SET on_hand = on_hand - $qty
+ WHERE product_variant_id = $id AND (on_hand - reserved) >= $qty
+```
+
+   Una sola sentencia, sin pasar por `reserved`: no hay estado intermedio, no
+   hay ventana, no hay nada que limpiar si falla.
+
+5. Si hay stock → `CONFIRMED`. Si no → `PAYMENT_REQUIRES_REFUND` y se devuelve.
+
+> **El dinero acreditado no autoriza a romper las reglas de inventario.**
+
+### Comisión
+
+**6 % sobre el subtotal de productos**, no sobre el envío: ese dinero no es
+ganancia del vendedor, es el costo de mandar el paquete, y cobrarle comisión
+sería cobrarle por gastar.
+
+El porcentaje se guarda como **foto** en cada orden (`platform_fee_bps`). Si
+mañana pasa a 8 %, las órdenes de hoy siguen diciendo 6 % para siempre. Leerlo
+de una variable de entorno al mostrar el detalle reescribiría la historia
+contable de forma retroactiva y silenciosa.
+
+Aritmética con enteros puros, sin coma flotante en ningún paso:
+
+```
+porcentajeDe(monto, bps) = floor((monto × bps + 5000) / 10000)
+```
+
+La comisión de Mercado Pago es un costo **distinto**, lo informa el proveedor
+después del cobro, hoy lo absorbe el vendedor y se guarda aparte cuando llega.
+**No se estima**: una estimación en la misma columna que un dato real es
+indistinguible de un dato real seis meses después.
+
+### Restricciones que impone la base
+
+```
+orden_total_coherente          gross = subtotal + envío − descuento
+orden_comision_no_supera_bruto platform_fee <= gross
+orden_comision_razonable       0 <= bps <= 5000
+orden_marcas_de_tiempo         CONFIRMED ⇒ confirmed_at Y paid_at
+item_subtotal_coherente        subtotal = unit_price × quantity
+intento_aprobado_completo      APPROVED ⇒ approved_at Y provider_payment_id
+
+UNIQUE parcial  un solo intento en vuelo por orden
+UNIQUE parcial  una sola devolución viva por intento
+UNIQUE          una reserva no puede respaldar dos órdenes
+UNIQUE parcial  una sola dirección principal por persona
+```
+
+### El conciliador
+
+Dejó de ser un botón. Corre cada 60 s y resuelve tres cosas que **sólo se
+arreglan ahí**:
+
+1. **Cobros en estado desconocido.** Sin esto la orden queda trabada para
+   siempre y el comprador no puede reintentar ni le devolvemos nada.
+2. **Devoluciones fallidas.** Sin reintento, la plata se queda acá y nadie se
+   entera. Con tope de intentos: después escala a intervención manual.
+3. **Órdenes sin pagar**, para que el panel del vendedor no se llene de
+   carritos abandonados.
+
+Cuando ni siquiera se guardó el `providerPaymentId` —la red se cortó antes—
+busca por `external_reference`, que es nuestro id de orden y viaja en cada
+cobro justamente para esto.
+
+### Endpoints
+
+```
+POST   /orders                                Idempotency-Key obligatoria
+GET    /orders
+GET    /orders/:id                            ajena → 404
+DELETE /orders/:id                            cancelar antes de pagar
+
+POST   /orders/:id/payment-attempts           el cobro
+GET    /orders/:id/payment-attempts
+
+GET    /checkout/config                       clave pública del proveedor
+GET    /api/checkout/card                     el CardForm, para el WebView
+
+POST   /webhooks/orders/mercadopago           firmado, fuera del versionado
+
+GET    /addresses · POST · PATCH /:id · DELETE /:id
+
+GET    /seller/orders                         las ventas
+PATCH  /seller/orders/:id/fulfillment         preparación
+```
+
+**No existe `POST /orders/:id/mark-paid`, y no va a existir.** Un endpoint que
+deje al cliente declarar un pago es un endpoint donde cualquiera se lleva lo
+que quiera gratis. Y aparece de la forma más inocente: "para poder probar sin
+tarjeta".
+
+### Si Redis se cae
+
+Se sigue vendiendo. Reservar, crear la orden, cobrar y confirmar no dependen de
+Redis en ningún paso. Se pierde la precisión al segundo de los vencimientos y
+el límite de peticiones —que falla abierto a propósito—.
+
+Por eso `/ready` reporta Redis como `degraded` y **no** devuelve 503: sacar la
+API de servicio convertiría una degradación en una caída total.
+
+Con PostgreSQL caído es al revés: 503. Es preferible no vender durante veinte
+segundos a vender unidades inexistentes.
+
+---
+
 ## 6 · Los defectos que encontró probar en campo
 
 Ninguno lo hubiera encontrado un test. **Cinco habrían llegado a producción.**
@@ -636,7 +857,7 @@ asumir que el camino feliz es el único que termina.
 | Compra completa | — | — | **1,8 s** ✅ |
 | Chat de extremo a extremo | ≤ 300 ms | 800 ms | sin medir |
 
-**Tests:** 370 en backend + 17 de contrato en la app (unitarios + integración contra PostgreSQL real).
+**Tests:** 449 en backend + 33 de contrato en la app (unitarios + integración contra PostgreSQL real).
 Typecheck, lint y `flutter analyze` en verde.
 
 ---
@@ -721,6 +942,33 @@ Typecheck, lint y `flutter analyze` en verde.
     intervalo actual podría acumular atraso. El número está donde se cambia y el
     caso está lejos, pero conviene vigilarlo cuando haya tráfico.
 
+**De órdenes y pagos:**
+
+21. **Staging escrito pero NO desplegado.** El Dockerfile, el `fly.toml`, los
+    dos flujos de CI/CD y el runbook completo están en el repositorio. Falta
+    crear las cuentas de Fly, Neon y Upstash y cargar los secretos: son pasos
+    que necesitan tarjeta y correo, no código. Ver `docs/RUNBOOK-staging.md`.
+22. **El marketplace está modelado pero no conectado.** `SellerPaymentAccount`
+    existe con su estado y su referencia a credenciales, pero el OAuth real con
+    Mercado Pago depende de habilitación de ellos. Hoy el cobro va a una sola
+    cuenta. La arquitectura no obliga a migrar dinero ya movido cuando se
+    active — que era el punto de modelarlo ahora.
+23. **La comisión de Mercado Pago la absorbe el vendedor.** Es una decisión de
+    negocio para V1, no una limitación técnica: la columna está y se llena con
+    el valor real cuando el proveedor lo informa.
+24. **Una orden = un vendedor.** Comprarle a dos genera dos órdenes. La
+    arquitectura admite agruparlas después bajo un `CheckoutSession`; no está
+    implementado y no hace falta todavía.
+25. **`DELIVERED` no lo pone nadie.** El vendedor llega hasta `SHIPPED`.
+    Dejarle marcar "entregado" a quien cobra por entregar no comprueba nada:
+    llega con logística.
+26. **La compra en dos clics con tarjeta guardada sigue bloqueada** por el
+    `internal_error` de Mercado Pago documentado en el Sprint 0B.
+27. **El módulo del Sprint 0B sigue montado.** `/api/v1/payments/*` y
+    `/webhooks/mercadopago` conviven con los de producción para poder
+    diagnosticar contra Mercado Pago. Habría que retirarlo cuando deje de
+    hacer falta: dos caminos de cobro es uno de más.
+
 ### Riesgos no técnicos, sin respuesta
 - **R3 · Mercado de dos lados vacío.** Sin vendedores no hay compradores. No se
   responde midiendo: se responde lanzando.
@@ -738,16 +986,17 @@ backend/
     auth/             ✅ implementado
     commerce/         ✅ sellers, stores, products, variantes, imágenes
     inventory/        ✅ stock y reservas · sobreventa imposible por construcción
+    orders/           ✅ órdenes, cobros, devoluciones y conciliador
     livekit/          tokens y webhooks
     spike/            Sprint 0A · se borra al cerrar el sprint
     payments/         Sprint 0B · mp-signature, order-state y el saneado
                       sobreviven al spike
   src/shared/         errores, guards, observabilidad, Prisma, Redis
   prisma/schema.prisma
-  test/               370 tests · test/stress/ prueba de 1000 compradores
+  test/               449 tests · test/stress/ prueba de 1000 compradores
 mobile/
   lib/core/           design, auth, network, config
-  lib/features/       auth, feed, seller, inventory, profile, search, lives, orders, spike
+  lib/features/       auth, feed, seller, inventory, orders, profile, search, lives, spike
 db/                   esquema completo de referencia (se incorpora por módulo)
 docs/sprint-0/        RUNBOOKs y RESULTS con la evidencia medida
 tools/                reloj glass-to-glass, servidor de APK

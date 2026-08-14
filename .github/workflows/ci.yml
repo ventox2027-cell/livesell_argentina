@@ -1,0 +1,129 @@
+# Verificación de cada cambio.
+#
+# ─── Qué corre acá y qué no ───
+#
+# Corre todo lo que puede fallar en silencio: lint, tipos, los 449 tests de
+# backend contra un PostgreSQL de verdad, y los tests de contrato de la app.
+#
+# NO corre la prueba de estrés. Mil peticiones tardan, y una verificación que
+# demora quince minutos se empieza a saltear. El estrés se ejecuta a mano
+# cuando se toca el camino de reserva o de cobro, y antes de cada despliegue.
+#
+# ─── Por qué PostgreSQL real y no simulado ───
+#
+# Lo que estos tests prueban son invariantes que vive la BASE: índices únicos
+# parciales, restricciones CHECK, y que el motor serialice cien escrituras
+# sobre una fila y sólo dos pasen. Con una base simulada pasarían igual con el
+# código más roto imaginable.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master, staging]
+
+# Un push nuevo cancela la corrida anterior de la misma rama: no tiene sentido
+# gastar minutos verificando un commit que ya quedó atrás.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: livesell
+          POSTGRES_PASSWORD: livesell
+          POSTGRES_DB: livesell_test
+        ports: ['5433:5432']
+        # Sin esto, los tests arrancan antes de que la base acepte conexiones.
+        options: >-
+          --health-cmd "pg_isready -U livesell"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports: ['6380:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://livesell:livesell@localhost:5433/livesell_test
+      REDIS_URL: redis://localhost:6380/1
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: backend/pnpm-lock.yaml
+
+      - name: Instalar
+        run: pnpm install --frozen-lockfile
+
+      - name: Generar el cliente de Prisma
+        run: pnpm prisma generate
+
+      # Se aplican las migraciones REALES, no un `db push`. Es la misma
+      # secuencia que corre en staging: si una migración está rota, se
+      # descubre acá y no en el despliegue.
+      - name: Migrar la base de prueba
+        run: pnpm prisma migrate deploy
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Tipos
+        run: pnpm typecheck
+
+      - name: Tests
+        run: pnpm test
+
+  mobile:
+    name: App
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: mobile
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Instalar
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze --no-pub
+
+      # Los tests de contrato: parsean respuestas reales del backend con los
+      # modelos de la app. Cubren la costura donde ya se escondieron dos
+      # defectos que las dos mitades, probadas por separado, no vieron.
+      - name: Tests
+        run: flutter test

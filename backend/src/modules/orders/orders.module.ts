@@ -7,6 +7,7 @@ import { AuditService } from '@/shared/audit/audit.service';
 import { DomainEventBus } from '@/shared/events/domain-events';
 
 import { AddressesService } from './addresses.service';
+import { CheckoutPageController } from './checkout-page.controller';
 import { MercadoPagoPaymentProvider } from './mercadopago.provider';
 import { OrdersController, OrdersWebhookController } from './orders.controller';
 import { OrdersService } from './orders.service';
@@ -37,7 +38,7 @@ import { OrdersWebhookService } from './webhook.service';
  */
 @Module({
   imports: [CommerceModule, InventoryModule],
-  controllers: [OrdersController, OrdersWebhookController],
+  controllers: [OrdersController, OrdersWebhookController, CheckoutPageController],
   providers: [
     OrdersService,
     OrderPaymentsService,

@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/design/tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
+import '../../orders/presentation/checkout_sheet.dart';
 import '../data/inventory_repository.dart';
 import '../domain/inventory_models.dart';
 
@@ -187,6 +188,29 @@ class _ReserveSheetState extends ConsumerState<ReserveSheet> with WidgetsBinding
     }
   }
 
+  /// De la reserva al checkout.
+  ///
+  /// Se cierra esta hoja y se abre la del pago con la misma reserva: el
+  /// backend la va a convertir en pedido. Si la compra sale, la reserva queda
+  /// consumida y esta pantalla ya no tiene nada que mostrar.
+  Future<void> _irAPagar() async {
+    final r = _reserva;
+    if (r == null) return;
+
+    final pedido = await CheckoutSheet.mostrar(
+      context,
+      reservationId: r.reservationId,
+      nombreProducto: widget.nombreProducto,
+      precio: widget.precio,
+    );
+
+    if (!mounted) return;
+    ref.invalidate(disponibilidadProvider(widget.productVariantId));
+
+    // Con el pedido resuelto, la hoja de reserva ya cumplió su función.
+    if (pedido != null) Navigator.of(context).pop(r);
+  }
+
   Future<void> _cancelar() async {
     final r = _reserva;
     if (r == null) return;
@@ -267,6 +291,7 @@ class _ReserveSheetState extends ConsumerState<ReserveSheet> with WidgetsBinding
             _Reservada(
               restantes: _restantes,
               cantidad: _reserva!.quantity,
+              onPagar: _irAPagar,
               onCancelar: _reservando ? null : _cancelar,
             )
           else ...[
@@ -373,11 +398,13 @@ class _Reservada extends StatelessWidget {
   const _Reservada({
     required this.restantes,
     required this.cantidad,
+    required this.onPagar,
     this.onCancelar,
   });
 
   final int restantes;
   final int cantidad;
+  final VoidCallback onPagar;
   final VoidCallback? onCancelar;
 
   @override
@@ -427,12 +454,7 @@ class _Reservada extends StatelessWidget {
         const SizedBox(height: Gap.lg),
 
         FilledButton(
-          // El pago llega con Órdenes. Se deja el botón para que el recorrido
-          // se entienda completo al probarlo.
-          onPressed: () => AppSnack.info(
-            context,
-            'El pago llega con el módulo de Órdenes. Tu reserva ya está hecha.',
-          ),
+          onPressed: onPagar,
           style: FilledButton.styleFrom(minimumSize: const Size(0, 52)),
           child: const Text(
             'Ir a pagar',

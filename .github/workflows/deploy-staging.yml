@@ -1,0 +1,120 @@
+# Despliegue a staging.
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# UNA MIGRACIÓN QUE FALLA DETIENE EL DESPLIEGUE
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# El orden es: verificar → migrar → desplegar → comprobar que está sano.
+#
+# Migrar ANTES de desplegar y no después es lo que evita el peor escenario:
+# código nuevo corriendo contra un esquema viejo. Si la migración falla, el
+# código nuevo nunca llega a producción y el que está sirviendo sigue siendo
+# el que funcionaba.
+#
+# Y si el chequeo de salud no pasa, el despliegue NO se declara exitoso —
+# aunque Fly diga que la máquina arrancó.
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# PRODUCCIÓN NO ESTÁ ACÁ, Y ES A PROPÓSITO
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Este flujo llega hasta staging. Desplegar a producción automáticamente
+# requiere confianza que todavía no tenemos: no hay vuelta atrás automática, no
+# hay alertas, y no hay nadie mirando a las tres de la mañana.
+#
+# Producción se despliega a mano, mirando, hasta que eso exista.
+
+name: Deploy staging
+
+on:
+  push:
+    branches: [staging]
+  # También a mano, para poder reintentar sin inventar un commit.
+  workflow_dispatch:
+
+# Dos despliegues simultáneos migrando la misma base es cómo se rompe una base.
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+jobs:
+  verificar:
+    name: Verificar
+    uses: ./.github/workflows/ci.yml
+
+  desplegar:
+    name: Desplegar
+    needs: verificar
+    runs-on: ubuntu-latest
+    environment: staging
+
+    defaults:
+      run:
+        working-directory: backend
+
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: backend/pnpm-lock.yaml
+
+      - name: Instalar
+        run: pnpm install --frozen-lockfile
+
+      # ─── Migrar PRIMERO ───
+      #
+      # Contra Neon, con la URL DIRECTA y no la del pooler: `migrate deploy`
+      # necesita sesiones con estado y pgbouncer en modo transacción se las
+      # rompe a la mitad.
+      - name: Migrar la base de staging
+        env:
+          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL_DIRECT }}
+        run: pnpm prisma migrate deploy
+
+      - name: Desplegar
+        run: |
+          flyctl deploy --remote-only --wait-timeout 300 \
+            --build-arg GIT_SHA="${GITHUB_SHA::7}"
+
+      # ─── Comprobar que está sano DE VERDAD ───
+      #
+      # Fly considera exitoso un despliegue cuando la máquina arranca. Eso no
+      # es lo mismo que "la aplicación funciona": puede estar arriba y sin
+      # poder hablar con la base.
+      - name: Comprobar salud
+        run: |
+          URL="https://livesell-api-staging.fly.dev"
+
+          echo "── /health ──"
+          curl --fail --silent --show-error --max-time 10 "$URL/health" | tee /tmp/health.json
+          echo
+
+          echo "── /ready ──"
+          # 200 con estado ok o degraded. Un 503 significa que PostgreSQL no
+          # responde, y ahí el despliegue no está sano aunque la máquina viva.
+          curl --fail --silent --show-error --max-time 10 "$URL/ready" | tee /tmp/ready.json
+          echo
+
+          # Que la versión desplegada sea la de ESTE commit. Sin esto, un
+          # despliegue que falló en silencio y dejó la versión anterior
+          # arriba pasaría como exitoso.
+          DESPLEGADO=$(node -e "console.log(JSON.parse(require('fs').readFileSync('/tmp/health.json','utf8')).version ?? '')")
+          echo "versión desplegada: $DESPLEGADO"
+          echo "commit esperado:    ${GITHUB_SHA::7}"
+
+          case "$DESPLEGADO" in
+            "${GITHUB_SHA::7}"*|"$GITHUB_SHA"*) echo "✓ versión correcta" ;;
+            *) echo "✗ la versión desplegada no es la de este commit"; exit 1 ;;
+          esac

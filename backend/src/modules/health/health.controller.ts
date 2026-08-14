@@ -51,18 +51,45 @@ export class HealthController {
   /**
    * Readiness. El balanceador saca la instancia de rotación si devuelve 503.
    *
-   * Solo Postgres y Redis pueden provocar el 503: son las dependencias sin las
-   * cuales no podemos servir nada. LiveKit `degraded` no saca la instancia —
-   * el resto de la API sigue siendo útil aunque no se puedan emitir tokens.
+   * ═══════════════════════════════════════════════════════════════════════
+   * SÓLO POSTGRESQL SACA LA INSTANCIA DE SERVICIO
+   * ═══════════════════════════════════════════════════════════════════════
+   *
+   * Redis caído es `degraded`, no `error`. **No** devuelve 503.
+   *
+   * Suena raro hasta que se mira qué pasa de verdad cuando Redis se cae:
+   *
+   *   · Reservar stock: funciona. `expires_at` vive en PostgreSQL y el
+   *     reconciliador vence las reservas sin tocar ninguna cola.
+   *   · Crear una orden y cobrar: funcionan. No dependen de Redis en ningún
+   *     paso.
+   *   · Confirmar un pago: funciona. Los webhooks van directo a la base.
+   *   · Lo que se pierde: la precisión al segundo de los vencimientos y el
+   *     límite de peticiones —que además falla abierto a propósito—.
+   *
+   * O sea: con Redis caído se puede seguir vendiendo, y sacar la API de
+   * servicio convertiría una degradación en una caída total. Eso sería
+   * exactamente el error que el diseño tolerante a Redis existe para evitar.
+   *
+   * Con PostgreSQL caído es al revés: no se puede confirmar ninguna operación
+   * sin mentir. Es preferible no vender durante veinte segundos a vender
+   * unidades inexistentes.
    */
   @Get('ready')
   async ready(@Res({ passthrough: true }) reply: FastifyReply) {
-    const [database, redis] = await Promise.all([this.check(() => this.prisma.ping()), this.check(() => this.redis.ping())]);
+    const [database, redisCheck] = await Promise.all([
+      this.check(() => this.prisma.ping()),
+      this.check(() => this.redis.ping()),
+    ]);
 
-    const critical: Check[] = [database, redis];
-    const status: CheckState = critical.some((c) => c.status === 'error') ? 'error' : 'ok';
+    // Redis nunca es `error` de cara al balanceador: como mucho, degradado.
+    const redis: Check =
+      redisCheck.status === 'error' ? { ...redisCheck, status: 'degraded' } : redisCheck;
 
-    reply.status(status === 'ok' ? 200 : 503);
+    const status: CheckState =
+      database.status === 'error' ? 'error' : redis.status === 'degraded' ? 'degraded' : 'ok';
+
+    reply.status(status === 'error' ? 503 : 200);
     return { status, version: env.GIT_SHA, checks: { database, redis } };
   }
 
