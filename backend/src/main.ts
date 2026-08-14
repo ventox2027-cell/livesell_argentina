@@ -3,28 +3,19 @@ import 'reflect-metadata';
 import { RequestMethod, VersioningType } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import fastifyStatic from '@fastify/static';
-import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
+import { type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Logger } from 'nestjs-pino';
 
 import { AppModule } from './app.module';
 import { env, isLocalEnv } from './config/env.schema';
-import { configurarAdaptador, registrarMultipart } from './http-setup';
-
-const SHUTDOWN_LB_DRAIN_MS = 5_000;
+import { crearAdaptador, registrarMultipart } from './http-setup';
+import { resolverDeIp } from './shared/http/client-ip';
+import { registrarApagadoOrdenado } from './shutdown';
 
 async function bootstrap(): Promise<void> {
-  const adapter = new FastifyAdapter({
-    trustProxy: true, // detrás de Cloudflare y del proxy de Fly
-    bodyLimit: 2 * 1024 * 1024,
-    // Fastify genera su propio requestId; el logger lo sustituye por el
-    // x-request-id entrante si viene de la app.
-    genReqId: () => crypto.randomUUID(),
-  });
-
-  // Hooks, parsers de contenido y todo lo que cambie el comportamiento del
-  // servidor viven en http-setup.ts, que también usan los tests. Ver ahí por
-  // qué no puede haber dos lugares.
-  configurarAdaptador(adapter);
+  // Opciones, hooks y parsers viven en http-setup.ts, que también usan los
+  // tests. Ver ahí por qué no puede haber dos lugares.
+  const adapter = crearAdaptador();
 
   const app = await NestFactory.create<NestFastifyApplication>(AppModule, adapter, {
     bufferLogs: true,
@@ -85,38 +76,61 @@ async function bootstrap(): Promise<void> {
     allowedHeaders: ['content-type', 'authorization', 'x-spike-key', 'x-request-id'],
   });
 
-  app.enableShutdownHooks();
-
+  /**
+   * ⚠️ SIN `app.enableShutdownHooks()`. A propósito.
+   *
+   * Ese método hace dos cosas y sólo una es la que se quiere: registra
+   * manejadores propios de SIGTERM/SIGINT, y esos llaman a `app.close()`
+   * **inmediatamente**.
+   *
+   * Con nuestro manejador puesto además, pasaba esto en cada despliegue:
+   *
+   *     t=0.00s  SIGTERM. Nest cierra TODO: Prisma, Redis, los temporizadores.
+   *     t=0.00s  nuestro manejador empieza a drenar 5 segundos.
+   *     t=0-5s   llegan peticiones del balanceador contra una app ya cerrada.
+   *     t=5.00s  nuestro `app.close()` corre sobre lo que ya estaba cerrado
+   *              y revienta: `Error: Connection is closed` desde ioredis.
+   *
+   * O sea: el drenaje no drenaba nada —su único efecto era retrasar cinco
+   * segundos un cierre que ya había ocurrido— y encima el proceso terminaba
+   * con código 1, que la plataforma registra como apagado fallido.
+   *
+   * Se descubrió midiendo el apagado del contenedor, no leyendo el código:
+   * los dos manejadores son correctos por separado.
+   *
+   * `app.close()` dispara `onModuleDestroy` igual, sin necesidad de esto. Lo
+   * único que se pierde es que `onApplicationShutdown` reciba el nombre de la
+   * señal, que no usamos en ningún lado.
+   */
   const logger = app.get(Logger);
 
-  // Apagado ordenado. Sin esto, cada deploy corta peticiones a la mitad.
-  // Fly.io concede 30 s antes del SIGKILL; el presupuesto entra con margen.
-  let shuttingDown = false;
-  const shutdown = async (signal: string) => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    logger.log(`${signal} recibido — apagado ordenado`);
+  registrarApagadoOrdenado(app, logger, {
+    drenajeMs: env.SHUTDOWN_DRAIN_MS,
+    topeMs: env.SHUTDOWN_TIMEOUT_MS,
+  });
 
-    // 1) Dar tiempo a que el balanceador nos saque de rotación tras el 503 de /ready.
-    await new Promise((r) => setTimeout(r, SHUTDOWN_LB_DRAIN_MS));
-    // 2) Cerrar: Nest dispara onModuleDestroy (Prisma y Redis se desconectan).
-    await app.close();
-    logger.log('apagado completo');
-    process.exit(0);
-  };
-
-  process.on('SIGTERM', () => void shutdown('SIGTERM'));
-  process.on('SIGINT', () => void shutdown('SIGINT'));
-
+  /**
+   * `0.0.0.0` y no `localhost`.
+   *
+   * Dentro de un contenedor, escuchar en `localhost` ata el socket a la interfaz
+   * de loopback del contenedor: el proceso arranca, el puerto figura abierto
+   * desde adentro, y ninguna petición de afuera llega nunca. La plataforma
+   * sondea, no obtiene respuesta y reinicia en bucle sin decir por qué.
+   *
+   * El puerto lo elige la plataforma, no nosotros. Ver `PORT` en la
+   * configuración.
+   */
   await app.listen(env.PORT, '0.0.0.0');
 
   logger.log(
     {
+      rol: env.APP_ROLE,
+      proveedor: env.DEPLOYMENT_PROVIDER,
+      ipDelCliente: resolverDeIp().descripcion,
       port: env.PORT,
       env: env.NODE_ENV,
       version: env.GIT_SHA,
       spikeEnabled: env.SPIKE_ENABLED,
-      livekitWsUrl: env.LIVEKIT_WS_URL,
     },
     'API escuchando',
   );

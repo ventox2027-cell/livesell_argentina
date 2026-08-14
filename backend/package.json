@@ -30,7 +30,13 @@
     "test:db:migrate": "tsx scripts/migrate-test-db.ts",
     "spike:report": "tsx scripts/spike-report.ts",
     "stress:inventory": "vitest run --config vitest.stress.config.ts test/stress/inventory.stress.ts",
-    "stress:orders": "vitest run --config vitest.stress.config.ts test/stress/orders.stress.ts"
+    "stress:orders": "vitest run --config vitest.stress.config.ts test/stress/orders.stress.ts",
+    "check:conexiones": "tsx scripts/verificar-conexiones.ts",
+    "start:web": "node dist/main.js",
+    "start:worker": "node dist/main-worker.js",
+    "jobs:una-vez": "node dist/jobs-once.js",
+    "dev:worker": "nest start --watch --entryFile main-worker",
+    "migrate:deploy": "prisma migrate deploy"
   },
   "dependencies": {
     "@fastify/multipart": "^10.1.0",
@@ -76,5 +82,6 @@
     "typescript-eslint": "8.67.0",
     "unplugin-swc": "1.5.10",
     "vitest": "2.1.9"
-  }
+  },
+  "packageManager": "pnpm@10.17.1"
 }

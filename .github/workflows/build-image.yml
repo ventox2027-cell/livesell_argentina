@@ -1,0 +1,206 @@
+# Construir y verificar la imagen del backend.
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# ESTE FLUJO NO DESPLIEGA A NINGÚN LADO
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Construye la imagen, la arranca y comprueba que responda. Nada más. No
+# publica en ningún registro y no toca ninguna infraestructura, porque el
+# proveedor de compute todavía no está decidido.
+#
+# ─── Por qué existe igual ───
+#
+# Porque el modo más caro de descubrir que la imagen no arranca es intentando
+# desplegarla. La compilación de TypeScript pasa en CI, los tests pasan en CI, y
+# la imagen igual puede estar rota: falta un archivo que el runtime necesita,
+# `prisma generate` no corrió, el `CMD` apunta a un `dist/` que no existe, el
+# usuario sin privilegios no puede leer lo que copiamos. Todo eso sólo se ve
+# ejecutando el contenedor.
+#
+# Y como el objetivo del bloque de portabilidad era que la imagen corra en
+# cualquier runtime de contenedores, tiene que haber algo que lo compruebe
+# **sin** un proveedor de por medio. Esto es eso: arranca la imagen contra un
+# PostgreSQL y un Redis de servicio, sin una sola variable propia de nadie.
+#
+# Cuando se elija proveedor, se le agrega un job de publicación y despliegue
+# detrás de este. Hasta entonces, el flujo termina acá a propósito.
+
+name: Imagen del backend
+
+on:
+  push:
+    branches: [master, staging]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/build-image.yml'
+  pull_request:
+    paths:
+      - 'backend/**'
+  workflow_dispatch:
+
+jobs:
+  construir:
+    name: Construir y arrancar
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: vendox
+          POSTGRES_PASSWORD: vendox
+          POSTGRES_DB: vendox
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U vendox"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Construir
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          push: false
+          load: true
+          tags: vendox-api:ci
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ─── Que no haya secretos adentro ───
+      #
+      # El Dockerfile hace `COPY . .`, así que sin `.dockerignore` el `.env` con
+      # los secretos reales entraría en una capa. No llega a la imagen final,
+      # pero las capas intermedias se conservan en la caché y se pueden leer con
+      # `docker history`. Esto lo detecta si alguien borra o rompe el
+      # `.dockerignore`.
+      - name: Verificar que no haya .env en la imagen
+        run: |
+          if docker run --rm --entrypoint sh vendox-api:ci -c 'ls -a /app | grep -q "^\.env"'; then
+            echo "✗ hay un .env dentro de la imagen"
+            docker run --rm --entrypoint sh vendox-api:ci -c 'ls -a /app'
+            exit 1
+          fi
+          echo "✓ sin archivos .env en la imagen"
+
+      - name: Verificar que no corre como root
+        run: |
+          USUARIO=$(docker run --rm --entrypoint sh vendox-api:ci -c 'id -un')
+          echo "usuario: $USUARIO"
+          [ "$USUARIO" != "root" ] || { echo "✗ corre como root"; exit 1; }
+
+      # ─── Migrar y arrancar ───
+      #
+      # Con un puerto NO estándar a propósito: si el proceso ignorara `PORT` y
+      # escuchara en uno fijo, esto fallaría. Es exactamente el fallo que en una
+      # plataforma real se ve como un contenedor que arranca, no recibe tráfico
+      # y se reinicia en bucle sin decir por qué.
+      - name: Migrar
+        run: |
+          docker run --rm --network host \
+            -e DATABASE_URL="postgresql://vendox:vendox@localhost:5432/vendox" \
+            -e DIRECT_URL="postgresql://vendox:vendox@localhost:5432/vendox" \
+            --entrypoint sh vendox-api:ci \
+            -c 'node node_modules/prisma/build/index.js migrate deploy'
+
+      - name: Arrancar la imagen sin ninguna variable de un proveedor
+        run: |
+          docker run -d --name api --network host \
+            -e NODE_ENV=staging \
+            -e PORT=7431 \
+            -e DEPLOYMENT_PROVIDER=ibm_code_engine \
+            -e TRUSTED_PROXY_HOPS=1 \
+            -e APP_ROLE=web \
+            -e DATABASE_URL="postgresql://vendox:vendox@localhost:5432/vendox?sslmode=require" \
+            -e DIRECT_URL="postgresql://vendox:vendox@localhost:5432/vendox?sslmode=require" \
+            -e REDIS_URL="rediss://localhost:6379" \
+            -e JWT_SECRET="$(openssl rand -base64 48)" \
+            -e METRICS_TOKEN="$(openssl rand -hex 32)" \
+            -e LIVEKIT_API_KEY="ci" \
+            -e LIVEKIT_API_SECRET="un-secreto-de-al-menos-16" \
+            -e LIVEKIT_WS_URL="wss://ci.livekit.cloud" \
+            -e LIVEKIT_HTTP_URL="https://ci.livekit.cloud" \
+            vendox-api:ci
+
+      - name: Esperar a que responda
+        run: |
+          for i in $(seq 1 40); do
+            if curl -sf "http://localhost:7431/health" >/dev/null 2>&1; then
+              echo "arriba tras ${i}s"; exit 0
+            fi
+            sleep 1
+          done
+          echo "✗ no respondió en 40s"
+          docker logs api
+          exit 1
+
+      - name: /health y /ready
+        run: |
+          echo "── /health ──"
+          curl -sf "http://localhost:7431/health" | tee /tmp/health.json; echo
+
+          echo "── /ready ──"
+          curl -sf "http://localhost:7431/ready" | tee /tmp/ready.json; echo
+
+          VERSION=$(node -p "JSON.parse(require('fs').readFileSync('/tmp/health.json','utf8')).version")
+          [ "$VERSION" = "${{ github.sha }}" ] || { echo "✗ GIT_SHA no llegó a la imagen"; exit 1; }
+          echo "✓ versión correcta"
+
+      - name: /metrics tiene que pedir token
+        run: |
+          CODIGO=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:7431/metrics")
+          echo "sin token: $CODIGO"
+          [ "$CODIGO" = "401" ] || { echo "✗ /metrics quedó abierto"; exit 1; }
+
+      # ─── Que el SIGTERM se atienda ───
+      #
+      # `docker stop` manda SIGTERM y espera. Si el proceso lo ignorara —lo que
+      # pasa cuando el CMD está en forma shell y un /bin/sh queda de PID 1—,
+      # Docker esperaría los 30 s completos y mataría con SIGKILL. Medir cuánto
+      # tarda es cómo se detecta eso.
+      - name: Apagado ordenado
+        run: |
+          INICIO=$(date +%s)
+          docker stop --time 30 api >/dev/null
+          TARDO=$(( $(date +%s) - INICIO ))
+          echo "el apagado tardó ${TARDO}s"
+
+          docker logs api 2>&1 | tail -20
+
+          docker logs api 2>&1 | grep -q "apagado ordenado iniciado" \
+            || { echo "✗ no se atendió el SIGTERM"; exit 1; }
+          docker logs api 2>&1 | grep -q "apagado completo" \
+            || { echo "✗ no terminó de cerrar"; exit 1; }
+
+          [ "$TARDO" -lt 25 ] || { echo "✗ tardó demasiado: ¿lo mató el SIGKILL?"; exit 1; }
+          echo "✓ SIGTERM atendido y cierre completo"
+
+      - name: El worker arranca con la misma imagen
+        run: |
+          docker run --rm --network host \
+            -e NODE_ENV=staging -e PORT=7432 \
+            -e DEPLOYMENT_PROVIDER=ibm_code_engine -e TRUSTED_PROXY_HOPS=1 \
+            -e APP_ROLE=web \
+            -e DATABASE_URL="postgresql://vendox:vendox@localhost:5432/vendox?sslmode=require" \
+            -e DIRECT_URL="postgresql://vendox:vendox@localhost:5432/vendox?sslmode=require" \
+            -e REDIS_URL="rediss://localhost:6379" \
+            -e JWT_SECRET="$(openssl rand -base64 48)" \
+            -e METRICS_TOKEN="$(openssl rand -hex 32)" \
+            -e LIVEKIT_API_KEY="ci" \
+            -e LIVEKIT_API_SECRET="un-secreto-de-al-menos-16" \
+            -e LIVEKIT_WS_URL="wss://ci.livekit.cloud" \
+            -e LIVEKIT_HTTP_URL="https://ci.livekit.cloud" \
+            --entrypoint node vendox-api:ci dist/jobs-once.js
+          echo "✓ el barrido corrió y salió con 0"

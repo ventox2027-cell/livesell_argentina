@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 
 import { env } from '@/config/env.schema';
+import { corresTareasPeriodicas } from '@/shared/app-role';
 
 import { InventoryService } from './inventory.service';
 
@@ -47,6 +48,18 @@ export class InventoryReconciler implements OnModuleInit, OnModuleDestroy {
   onModuleInit(): void {
     if (!env.INVENTORY_RECONCILER_ENABLED) {
       this.logger.warn('reconciliador de inventario apagado');
+      return;
+    }
+
+    /**
+     * En un proceso `web` no se arranca el temporizador: lo corre el worker.
+     *
+     * Con escalado a cero, un `setInterval` acá deja de ejecutarse justo cuando
+     * más falta hace —de madrugada, sin tráfico, con reservas venciendo— y sin
+     * dar ningún error. Ver `shared/app-role.ts`.
+     */
+    if (!corresTareasPeriodicas()) {
+      this.logger.log('rol web: el barrido de reservas lo corre el worker');
       return;
     }
 

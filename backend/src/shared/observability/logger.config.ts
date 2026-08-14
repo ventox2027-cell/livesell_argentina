@@ -81,12 +81,57 @@ export const loggerConfig: Params = {
       res: (res: { statusCode?: number }) => ({ statusCode: res.statusCode }),
     },
 
-    transport:
-      env.NODE_ENV === 'development'
-        ? {
-            target: 'pino-pretty',
-            options: { colorize: true, singleLine: false, translateTime: 'HH:MM:ss.l' },
-          }
-        : undefined,
+    transport: transporteDeDesarrollo(),
   },
 };
+
+/**
+ * Salida legible en desarrollo — sólo si `pino-pretty` realmente está.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * POR QUÉ SE COMPRUEBA EN VEZ DE DARLO POR HECHO
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Antes esto miraba únicamente `NODE_ENV === 'development'`. El problema es que
+ * eso y la presencia del paquete son **dos cosas independientes**:
+ *
+ *   · `NODE_ENV` es una variable de entorno, la pone quien arranca el proceso.
+ *   · `pino-pretty` es una dependencia de DESARROLLO, y la imagen de producción
+ *     corre `pnpm prune --prod`, que la borra.
+ *
+ * Cuando no coinciden —arrancar la imagen de producción con
+ * `NODE_ENV=development`, que es exactamente lo que uno hace para probarla
+ * contra una base local— el proceso **muere al arrancar**:
+ *
+ *     Error: unable to determine transport target for "pino-pretty"
+ *
+ * Un mensaje que no menciona dependencias, ni `prune`, ni `NODE_ENV`. Cuesta
+ * un rato largo llegar a que falta un paquete de desarrollo en una imagen que
+ * no los tiene por diseño.
+ *
+ * Con `require.resolve` la pregunta pasa a ser la correcta: no "¿en qué entorno
+ * creo que estoy?" sino "¿está el paquete?". Si no está, se cae a JSON, que es
+ * menos cómodo de leer y funciona siempre.
+ */
+function transporteDeDesarrollo():
+  | { target: string; options: Record<string, unknown> }
+  | undefined {
+  if (env.NODE_ENV !== 'development') return undefined;
+
+  try {
+    require.resolve('pino-pretty');
+  } catch {
+    // Por stderr y no por el logger: el logger es justo lo que se está
+    // construyendo cuando corre esto.
+    console.error(
+      '[logger] pino-pretty no está instalado (imagen de producción con NODE_ENV=development): ' +
+        'los logs salen en JSON.',
+    );
+    return undefined;
+  }
+
+  return {
+    target: 'pino-pretty',
+    options: { colorize: true, singleLine: false, translateTime: 'HH:MM:ss.l' },
+  };
+}

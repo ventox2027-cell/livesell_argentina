@@ -1,4 +1,25 @@
-# Despliegue a staging.
+# Despliegue a staging EN FLY.IO.
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# ⚠️ ESTE FLUJO ESTÁ EN PAUSA
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Fly quedó bloqueado porque la cuenta exige tarjeta de crédito. El proveedor
+# de compute todavía no está decidido: el candidato es IBM Cloud Code Engine en
+# `br-sao`, que es el único de los evaluados con región en Sudamérica —Render
+# sólo tiene EE.UU., Europa y Asia, lo que dejaría la API lejos de Neon y
+# Upstash—.
+#
+# El flujo se conserva, y no por nostalgia: la aplicación quedó neutral
+# respecto del proveedor, así que si aparece la tarjeta esto vuelve a servir
+# sin tocar nada. Lo que cambia entre proveedores son tres variables de
+# entorno, no el código.
+#
+# Sólo corre a mano (`workflow_dispatch`). El disparador por push está
+# desactivado para que nadie despliegue a una app que hoy no existe.
+#
+# Para construir y verificar la imagen sin desplegar a ningún lado, está
+# `build-image.yml`, que es el que corre en cada push.
 #
 # ═══════════════════════════════════════════════════════════════════════════
 # UNA MIGRACIÓN QUE FALLA DETIENE EL DESPLIEGUE
@@ -60,9 +81,9 @@ jobs:
 
       - uses: superfly/flyctl-actions/setup-flyctl@master
 
+      # Sin `version:`: sale del campo `packageManager` de package.json, igual
+      # que en el CI y que dentro del Dockerfile. Ver la nota en ci.yml.
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
 
       - uses: actions/setup-node@v4
         with:

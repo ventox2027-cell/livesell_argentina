@@ -7,6 +7,7 @@ import type { FastifyRequest } from 'fastify';
 // `jwt.service.ts` no conoce nada de `shared/http`.
 import { JwtService } from '@/modules/auth/jwt.service';
 import { DomainError } from '@/shared/errors/domain.error';
+import { ipDelCliente } from '@/shared/http/client-ip';
 import { RedisService } from '@/shared/redis/redis.service';
 
 /**
@@ -150,7 +151,9 @@ export class RateLimitGuard implements CanActivate {
   ): Promise<string> {
     const ambito = o.bucket ?? req.routeOptions?.url ?? req.url;
     const userId = req.user?.id ?? (await this.usuarioDelToken(req));
-    const sujeto = userId ? `u:${userId}` : `ip:${req.ip}`;
+    // `ipDelCliente` y no `req.ip`: detrás de un proxy mal configurado, `req.ip`
+    // es el valor que eligió quien llama. Ver `shared/http/client-ip.ts`.
+    const sujeto = userId ? `u:${userId}` : `ip:${ipDelCliente(req)}`;
     return `rl:${ambito}:${sujeto}`;
   }
 

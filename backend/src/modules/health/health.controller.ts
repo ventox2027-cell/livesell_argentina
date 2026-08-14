@@ -1,4 +1,6 @@
-import { Controller, Get, Header, HttpCode, Res, VERSION_NEUTRAL } from '@nestjs/common';
+import { timingSafeEqual } from 'node:crypto';
+
+import { Controller, Get, Header, Headers, HttpCode, Res, VERSION_NEUTRAL } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
 
 import { Public } from '@/modules/auth/auth.guard';
@@ -16,6 +18,24 @@ interface Check {
 }
 
 const startedAt = Date.now();
+
+/**
+ * Compara dos tokens sin filtrar por dónde difieren.
+ *
+ * `a === b` sobre strings corta en el primer byte distinto. Esa diferencia de
+ * tiempo se mide desde afuera, y con suficientes intentos se adivina el token
+ * carácter por carácter en vez de tener que probar todas las combinaciones.
+ *
+ * `timingSafeEqual` exige buffers del mismo largo, así que la comparación de
+ * longitud va antes y sí es corta. No importa: la longitud del token no es el
+ * secreto.
+ */
+function tokenValido(recibido: string, esperado: string): boolean {
+  const a = Buffer.from(recibido, 'utf8');
+  const b = Buffer.from(esperado, 'utf8');
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
 
 // VERSION_NEUTRAL: /health y no /v1/health. La URL que consulta el
 // balanceador de Fly.io no puede cambiar nunca.
@@ -93,9 +113,46 @@ export class HealthController {
     return { status, version: env.GIT_SHA, checks: { database, redis } };
   }
 
+  /**
+   * Métricas en formato Prometheus.
+   *
+   * ─── Por qué está protegido ───
+   *
+   * `/metrics` no expone datos personales, pero sí el estado del negocio:
+   * cuántas órdenes se crean por minuto, qué proporción de pagos se rechaza,
+   * cuántas devoluciones hay, cuánto stock se agota. Publicarlo es publicar la
+   * facturación aproximada de cada vendedor a cualquiera que sepa la URL.
+   *
+   * Además da reconocimiento gratis: los contadores por ruta dibujan el mapa
+   * completo de la API, incluidos los endpoints que no están documentados.
+   *
+   * Sin `METRICS_TOKEN` configurado queda abierto, que es lo cómodo en local.
+   * En staging y producción se configura y entonces exige la cabecera.
+   *
+   * ─── Comparación en tiempo constante ───
+   *
+   * `===` sobre strings corta en el primer byte distinto, y ese tiempo se mide.
+   * Con suficientes intentos se adivina el token carácter por carácter. Cuesta
+   * lo mismo hacerlo bien.
+   */
   @Get('metrics')
   @Header('Content-Type', 'text/plain; version=0.0.4')
-  async prometheus(): Promise<string> {
+  async prometheus(
+    @Headers('authorization') authorization: string | undefined,
+    @Res({ passthrough: true }) reply: FastifyReply,
+  ): Promise<string> {
+    const esperado = env.METRICS_TOKEN;
+
+    if (esperado) {
+      const recibido = authorization?.startsWith('Bearer ') ? authorization.slice(7) : '';
+      if (!tokenValido(recibido, esperado)) {
+        reply.status(401);
+        // Sin cuerpo útil: un mensaje distinto según el motivo confirmaría al
+        // que prueba si el endpoint existe y está protegido o no.
+        return '';
+      }
+    }
+
     return this.metrics.scrape();
   }
 

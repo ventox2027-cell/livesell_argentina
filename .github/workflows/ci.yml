@@ -69,9 +69,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Sin `version:`. La toma del campo `packageManager` de
+      # backend/package.json, que es la MISMA que usa corepack dentro del
+      # Dockerfile.
+      #
+      # ⚠️ Fijar el número acá fue un bug real y silencioso: el lockfile es v9
+      # y el CI pedía la 10, que ya no lee `pnpm.overrides` de package.json.
+      # El resultado es que `--frozen-lockfile` fallaba por un desajuste de
+      # overrides que no existía — y la misma diferencia rompía el build de la
+      # imagen. Una sola fuente para la versión, o vuelve a pasar.
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
 
       - uses: actions/setup-node@v4
         with:

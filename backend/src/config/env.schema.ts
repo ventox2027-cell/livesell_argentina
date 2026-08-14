@@ -1,6 +1,8 @@
 import { config as loadDotenv } from 'dotenv';
 import { z } from 'zod';
 
+import { PROVEEDORES } from '@/shared/http/deployment-provider';
+
 /**
  * Carga `.env` en process.env ANTES de validar.
  *
@@ -32,6 +34,21 @@ loadDotenv({ override: false });
  */
 function optionalOrEmpty<T extends z.ZodTypeAny>(schema: T) {
   return z.preprocess((v) => (v === '' ? undefined : v), schema.optional());
+}
+
+/**
+ * Igual que `isLocalEnv`, pero sobre `string` en vez de sobre `Env['NODE_ENV']`.
+ *
+ * Existe por una restricción del compilador, no por diseño: las validaciones de
+ * abajo necesitan saber si el entorno es local, y `Env` se infiere del propio
+ * esquema. Si el esquema llamara a una función tipada con `Env`, el tipo se
+ * referenciaría a sí mismo y TypeScript no puede resolverlo.
+ *
+ * `isLocalEnv` sigue siendo la de uso público y delega acá, así que la regla
+ * está escrita una sola vez.
+ */
+function esEntornoLocal(nodeEnv: string): boolean {
+  return nodeEnv === 'development' || nodeEnv === 'test';
 }
 
 /**
@@ -85,12 +102,89 @@ export const envSchema = z
     // 'test' está porque Vitest fuerza NODE_ENV=test y no podemos (ni queremos)
     // pisarlo: varias librerías cambian de comportamiento según ese valor.
     NODE_ENV: z.enum(['development', 'test', 'staging', 'production']).default('development'),
-    PORT: z.coerce.number().int().min(1).max(65535).default(3000),
+
+    /**
+     * Puerto de escucha. **Lo dicta la plataforma, no nosotros.**
+     *
+     * Code Engine, Render y Fly inyectan `PORT` y esperan que el proceso
+     * escuche exactamente ahí. Un valor fijo en el código hace que el contenedor
+     * arranque bien y no reciba una sola petición: el proveedor sondea el puerto
+     * que él eligió, no encuentra nada, y reinicia en bucle sin un error claro.
+     *
+     * Sin default en el esquema: se exige explícito fuera de local, y recién
+     * después se rellena con 3000 para desarrollo. Un `.default()` acá haría
+     * imposible distinguir "no lo mandaron" de "mandaron 3000", que es
+     * justamente lo que hay que detectar.
+     */
+    PORT: z.coerce.number().int().min(1).max(65535).optional(),
+
+    /**
+     * Dónde corre el contenedor.
+     *
+     * Determina de qué cabecera sale la IP del cliente. Se DECLARA y no se
+     * detecta: deducirlo mirando cabeceras significaría confiar en algo que,
+     * fuera de ese proveedor, escribe cualquiera. Ver
+     * `shared/http/client-ip.ts`.
+     */
+    DEPLOYMENT_PROVIDER: z.enum(PROVEEDORES).default('local'),
+
+    /**
+     * Qué hace este proceso.
+     *
+     *   · `all`    → API y tareas periódicas en el mismo proceso. Es lo que
+     *                corre en local y en un contenedor único.
+     *   · `web`    → sólo la API. Sin reconciliadores ni cola.
+     *   · `worker` → sólo las tareas periódicas. Sin servidor HTTP.
+     *
+     * Existe por el escalado a cero. En una plataforma que apaga el contenedor
+     * cuando no hay tráfico, un `setInterval` dentro del proceso web deja de
+     * ejecutarse justo cuando más falta hace: de noche, sin visitas, con
+     * reservas venciendo y pagos en estado desconocido.
+     *
+     * No parte el sistema en microservicios: es el mismo código y la misma
+     * imagen, arrancada por otro punto de entrada.
+     */
+    APP_ROLE: z.enum(['all', 'web', 'worker']).default('all'),
+
     LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
     GIT_SHA: z.string().default('unknown'),
 
+    /**
+     * Cuánto esperar, tras recibir SIGTERM, antes de empezar a cerrar.
+     *
+     * El balanceador tarda en enterarse de que esta instancia se está yendo, y
+     * durante esos segundos sigue mandándole tráfico. Cerrar de inmediato
+     * convierte cada petición de esa ventana en un error de red — y si esa
+     * petición era un cobro, en un pago de resultado indeterminado.
+     *
+     * Se ajusta por plataforma: hay que entrar cómodo dentro del plazo que da
+     * cada una antes del SIGKILL.
+     */
+    SHUTDOWN_DRAIN_MS: z.coerce.number().int().min(0).max(60_000).default(5_000),
+
+    /**
+     * Tope del apagado completo, drenaje incluido.
+     *
+     * Si algo se cuelga cerrando —una consulta eterna, un socket que no
+     * responde— es preferible salir por las nuestras que esperar el SIGKILL,
+     * que no ejecuta ningún cierre y deja todo colgado del otro lado.
+     */
+    SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(120_000).default(25_000),
+
     // ─── PostgreSQL ─────────────────────────────────────────────────────────
+    /** La que usa la aplicación. En Neon, la del pooler. */
     DATABASE_URL: z.string().url().startsWith('postgres'),
+
+    /**
+     * La conexión DIRECTA, sin pooler. La usan sólo las migraciones.
+     *
+     * `prisma migrate deploy` toma un lock de sesión y ejecuta DDL. PgBouncer en
+     * modo transacción no sostiene ninguna de las dos cosas: la migración se
+     * cuelga, o peor, queda aplicada a medias.
+     *
+     * Opcional porque en local no hay pooler y `DATABASE_URL` ya es directa.
+     */
+    DIRECT_URL: optionalOrEmpty(z.string().url().startsWith('postgres')),
 
     // ─── Redis ──────────────────────────────────────────────────────────────
     REDIS_URL: z.string().url(),
@@ -272,6 +366,41 @@ export const envSchema = z
      */
     INVENTORY_EXPIRATION_QUEUE_ENABLED: envBoolean(true),
 
+    /**
+     * Cuántos proxies NUESTROS hay delante de la aplicación.
+     *
+     * ⚠️ **Nunca poner esto en `true`.** Antes estaba así y era una
+     * vulnerabilidad: Fastify tomaba la entrada más a la izquierda de
+     * `X-Forwarded-For`, que la escribe quien llama. Con
+     * `curl -H "X-Forwarded-For: 1.2.3.4"` cualquiera elegía su propia IP y
+     * el límite de peticiones de los endpoints de autenticación dejaba de
+     * existir.
+     *
+     * Con un número, Fastify cuenta saltos DESDE LA DERECHA y se queda con la
+     * entrada que escribió nuestro proxy. Lo que venga de afuera queda a la
+     * izquierda y se ignora.
+     *
+     *   · 0 → local, sin proxy.
+     *   · 1 → un proxy administrado delante (Fly, Render, Code Engine).
+     *   · 2 → un CDN propio delante de ese proxy (Cloudflare, por ejemplo).
+     *
+     * Es la capa que sostiene la seguridad cuando el proveedor NO tiene
+     * cabecera propietaria — que hoy son todos menos Fly.
+     */
+    TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
+
+    /**
+     * Clave para leer `/metrics`.
+     *
+     * Las métricas cuentan cuántas ventas hay, cuántos pagos se rechazan y
+     * cuántas devoluciones se hacen. Publicarlas es publicar el estado del
+     * negocio, y además dan una superficie de reconocimiento gratuita.
+     *
+     * Vacía = abierto, que es lo razonable en local. En staging y producción
+     * se configura.
+     */
+    METRICS_TOKEN: optionalOrEmpty(z.string().min(16)),
+
     // ─── Observabilidad ─────────────────────────────────────────────────────
     SENTRY_DSN: z.string().url().optional().or(z.literal('')),
     SENTRY_TRACES_SAMPLE_RATE: z.coerce.number().min(0).max(1).default(0.1),
@@ -340,7 +469,168 @@ export const envSchema = z
         'Con un token productivo, cada spike cobra dinero real.',
       path: ['MP_ACCESS_TOKEN'],
     },
-  );
+  )
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * LA TRAMPA DEL POOLER DE NEON
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * Neon da DOS cadenas de conexión y se parecen tanto que se confunden:
+   *
+   *   · `...-pooler.sa-east-1.aws.neon.tech`  → PgBouncer, modo transacción
+   *   · `...sa-east-1.aws.neon.tech`          → conexión directa
+   *
+   * Para la aplicación hay que usar el pooler. Sin él, cada instancia abre
+   * conexiones directas y Neon las corta: en el plan gratuito el techo se toca
+   * enseguida, y el síntoma es "too many connections" bajo carga — justo cuando
+   * se está midiendo capacidad y uno cree que encontró el límite real.
+   *
+   * Pero Prisma necesita saber que hay un PgBouncer del otro lado. En modo
+   * transacción no hay sesión persistente, así que los *prepared statements*
+   * que Prisma crea por omisión desaparecen entre consultas y aparece
+   * `prepared statement "s0" already exists`. Se apagan con `pgbouncer=true`.
+   *
+   * ─── Y las migraciones van al revés ───
+   *
+   * `prisma migrate deploy` toma un lock de sesión y ejecuta DDL. Contra el
+   * pooler eso se cuelga o falla a la mitad, con la migración parcialmente
+   * aplicada. Las migraciones usan la URL DIRECTA, que en el flujo de despliegue
+   * es `STAGING_DATABASE_URL_DIRECT`.
+   *
+   * Esta comprobación existe porque los dos errores son de configuración, se
+   * ven idénticos a un problema de código, y aparecen bajo carga y no al
+   * arrancar. Es preferible no arrancar.
+   */
+  .refine(
+    (e) =>
+      esEntornoLocal(e.NODE_ENV) ||
+      !e.DATABASE_URL.includes('-pooler.') ||
+      /[?&]pgbouncer=true/.test(e.DATABASE_URL),
+    {
+      message:
+        'La DATABASE_URL apunta al pooler de Neon pero le falta `pgbouncer=true`. ' +
+        'Sin eso Prisma usa prepared statements que PgBouncer no puede sostener en modo ' +
+        'transacción, y las consultas fallan con `prepared statement "s0" already exists` ' +
+        'de forma intermitente. Agregar `?pgbouncer=true&connection_limit=5`.',
+      path: ['DATABASE_URL'],
+    },
+  )
+  /**
+   * Fuera de local, la conexión a la base va cifrada.
+   *
+   * Neon lo exige y rechaza lo demás, así que en la práctica esto atrapa el
+   * caso de haber apuntado sin querer a otra base —una de pruebas, la de otro
+   * proyecto— que sí acepte texto plano.
+   */
+  .refine(
+    (e) => esEntornoLocal(e.NODE_ENV) || /sslmode=(require|verify-full)/.test(e.DATABASE_URL),
+    {
+      message: 'Fuera de local la DATABASE_URL debe llevar `sslmode=require`.',
+      path: ['DATABASE_URL'],
+    },
+  )
+  /**
+   * Redis cifrado fuera de local.
+   *
+   * Upstash entrega la URL con `rediss://` (dos eses) e ioredis activa TLS solo
+   * por ese esquema. Copiar la variante `redis://` manda el token de
+   * autenticación de Upstash en texto plano por internet abierto, y no falla:
+   * funciona igual, sin ninguna señal de que algo anda mal. Por eso se
+   * comprueba acá.
+   */
+  .refine((e) => esEntornoLocal(e.NODE_ENV) || e.REDIS_URL.startsWith('rediss://'), {
+    message:
+      'Fuera de local la REDIS_URL debe usar `rediss://` (con dos eses) para ir por TLS. ' +
+      'Con `redis://` el token de Upstash viaja en texto plano y no hay ningún error visible.',
+    path: ['REDIS_URL'],
+  })
+  /**
+   * En staging y producción hay proxy delante. Con 0 saltos, `req.ip` sería la
+   * IP del proxy: todo el tráfico compartiría un único contador de límite de
+   * peticiones y bastaría una persona para dejar afuera a las demás.
+   */
+  .refine((e) => esEntornoLocal(e.NODE_ENV) || e.TRUSTED_PROXY_HOPS >= 1, {
+    message:
+      'Fuera de local hay un proxy delante: TRUSTED_PROXY_HOPS debe ser al menos 1 ' +
+      '(1 con el proxy del proveedor, 2 si además hay un CDN propio). Con 0, todas las ' +
+      'peticiones comparten el contador del límite y una sola persona deja afuera al resto.',
+    path: ['TRUSTED_PROXY_HOPS'],
+  })
+  /**
+   * El proveedor tiene que estar declarado fuera de local.
+   *
+   * Quedar en `local` en un despliegue real significa que la IP saldría del
+   * socket TCP, que detrás de un proxy es SIEMPRE la del proxy: todo el tráfico
+   * en un solo contador de límite de peticiones, y una persona dejando afuera a
+   * todas las demás.
+   */
+  .refine((e) => esEntornoLocal(e.NODE_ENV) || e.DEPLOYMENT_PROVIDER !== 'local', {
+    message:
+      'Fuera de local hay que declarar DEPLOYMENT_PROVIDER (fly | render | ibm_code_engine). ' +
+      'Con "local" la IP sale del socket, que detrás de un proxy es siempre la misma.',
+    path: ['DEPLOYMENT_PROVIDER'],
+  })
+  /**
+   * `PORT` explícito fuera de local.
+   *
+   * Las tres plataformas lo inyectan y sondean ese puerto exacto. Si el proceso
+   * escucha en otro, el contenedor arranca, no recibe una sola petición y el
+   * proveedor lo reinicia en bucle sin decir por qué. Es un fallo caro de
+   * diagnosticar y trivial de prevenir.
+   */
+  .refine((e) => esEntornoLocal(e.NODE_ENV) || e.PORT !== undefined, {
+    message:
+      'Fuera de local, PORT tiene que venir del entorno: la plataforma elige el puerto y ' +
+      'sondea ése. Escuchar en otro hace que el contenedor arranque y nunca reciba tráfico.',
+    path: ['PORT'],
+  })
+  /**
+   * Con pooler hace falta la conexión directa para migrar.
+   *
+   * Sin `DIRECT_URL`, el comando de migración cae en `DATABASE_URL`, que apunta
+   * al pooler. Ahí el lock de sesión no existe y la migración se cuelga o queda
+   * a medio aplicar — que es peor que no haberla corrido.
+   */
+  .refine((e) => !e.DATABASE_URL.includes('-pooler.') || !!e.DIRECT_URL, {
+    message:
+      'DATABASE_URL apunta al pooler, así que hace falta DIRECT_URL (la conexión sin ' +
+      '`-pooler` en el host) para las migraciones. Contra el pooler, `migrate deploy` se ' +
+      'cuelga o deja la migración a medias.',
+    path: ['DIRECT_URL'],
+  })
+  /**
+   * Y la directa no puede ser la del pooler disfrazada.
+   *
+   * Pegar la misma cadena en las dos variables es el error natural cuando se
+   * copian del mismo panel, y anula por completo la razón de que exista la
+   * segunda.
+   */
+  .refine((e) => !e.DIRECT_URL?.includes('-pooler.'), {
+    message:
+      'DIRECT_URL apunta al pooler. Tiene que ser la conexión directa: en Neon, la misma ' +
+      'cadena con el selector "Pooled connection" DESACTIVADO (sin `-pooler` en el host).',
+    path: ['DIRECT_URL'],
+  })
+  /**
+   * Las métricas dicen cuánto se vende y cuántos pagos se rechazan. Abiertas en
+   * staging es publicar el estado del negocio a quien pruebe la URL.
+   */
+  .refine((e) => esEntornoLocal(e.NODE_ENV) || !!e.METRICS_TOKEN, {
+    message:
+      'Fuera de local hace falta METRICS_TOKEN: /metrics expone volumen de ventas, ' +
+      'tasa de rechazo de pagos y el mapa completo de rutas. Generar con: openssl rand -hex 32',
+    path: ['METRICS_TOKEN'],
+  })
+  /**
+   * El default de desarrollo, aplicado DESPUÉS de validar.
+   *
+   * Va acá y no como `.default()` en el campo porque las dos cosas no son
+   * compatibles: con un default, el esquema no puede distinguir "no lo
+   * mandaron" de "mandaron 3000", y la comprobación de arriba —que fuera de
+   * local el puerto lo tiene que elegir la plataforma— no tendría nada que
+   * mirar.
+   */
+  .transform((e) => ({ ...e, PORT: e.PORT ?? 3000 }));
 
 export type Env = z.infer<typeof envSchema>;
 

@@ -1,5 +1,7 @@
 import multipart from '@fastify/multipart';
-import type { NestFastifyApplication, FastifyAdapter } from '@nestjs/platform-fastify';
+import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
+
+import { env } from '@/config/env.schema';
 
 /**
  * Configuración del servidor HTTP, en un solo lugar.
@@ -27,6 +29,46 @@ import type { NestFastifyApplication, FastifyAdapter } from '@nestjs/platform-fa
  * lo que cambie el comportamiento del servidor va acá, y tanto `main.ts` como
  * los tests lo llaman.
  */
+
+/**
+ * El adaptador de Fastify, ya construido y configurado.
+ *
+ * ─── Por qué las OPCIONES también viven acá ───
+ *
+ * Estaban en `main.ts`, y el helper de tests hacía `new FastifyAdapter()` a
+ * secas. O sea: la tercera repetición del mismo error que este archivo existe
+ * para no volver a cometer, y la más silenciosa de las tres, porque `trustProxy`
+ * no rompe nada — cambia de dónde sale `request.ip`.
+ *
+ * El efecto concreto: cualquier test sobre el límite de peticiones por IP
+ * pasaba en un servidor donde `X-Forwarded-For` no se lee, mientras en
+ * producción sí se leía. Un test verde sobre exactamente lo contrario de lo que
+ * corre.
+ */
+export function crearAdaptador(): FastifyAdapter {
+  const adapter = new FastifyAdapter({
+    /**
+     * ⚠️ El NÚMERO de proxies nuestros. Nunca `true`.
+     *
+     * Con `true`, Fastify toma la entrada más a la izquierda de
+     * `X-Forwarded-For`, que la escribe quien llama. Mandando
+     * `X-Forwarded-For: 1.2.3.4` cualquiera elegía su propia IP, y el límite de
+     * peticiones de los endpoints de autenticación —los únicos que se limitan
+     * por IP, porque todavía no hay usuario— dejaba de existir.
+     *
+     * Con un número, Fastify cuenta saltos desde la derecha y se queda con la
+     * entrada que escribió nuestro proxy. Ver `shared/http/client-ip.ts`.
+     */
+    trustProxy: env.TRUSTED_PROXY_HOPS,
+    bodyLimit: 2 * 1024 * 1024,
+    // Fastify genera su propio requestId; el logger lo sustituye por el
+    // x-request-id entrante si viene de la app.
+    genReqId: () => crypto.randomUUID(),
+  });
+
+  configurarAdaptador(adapter);
+  return adapter;
+}
 
 /**
  * Se aplica ANTES de `NestFactory.create`, sobre la instancia de Fastify.

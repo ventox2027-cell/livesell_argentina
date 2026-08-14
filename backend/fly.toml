@@ -23,6 +23,19 @@ primary_region = "gru"
   SPIKE_ENABLED = "false"
   PAYMENTS_SPIKE_ENABLED = "false"
 
+  # Cuántos proxies hay delante. UNO: el borde de Fly.
+  #
+  # ⚠️ Este número no es cosmético. Fastify cuenta esa cantidad de saltos desde
+  # la derecha de `X-Forwarded-For` para decidir la IP de origen. Antes acá
+  # había un `trustProxy: true` en el código, que toma la entrada de MÁS A LA
+  # IZQUIERDA — la que escribe quien llama. Cualquiera podía elegir su propia IP
+  # y el límite de peticiones de los endpoints de login dejaba de existir.
+  #
+  # Si algún día se pone Cloudflare delante de Fly, esto pasa a "2". Con el
+  # número corto, Cloudflare queda tomada como el cliente; con el número largo,
+  # se vuelve a confiar en lo que mandó el cliente.
+  TRUSTED_PROXY_HOPS = "1"
+
 [http_service]
   internal_port = 3000
   force_https = true

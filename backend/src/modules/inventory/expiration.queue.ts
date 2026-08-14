@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/commo
 import { Queue, Worker, type JobsOptions } from 'bullmq';
 
 import { env } from '@/config/env.schema';
+import { corresTareasPeriodicas } from '@/shared/app-role';
 
 import { InventoryService } from './inventory.service';
 
@@ -85,24 +86,50 @@ export class ExpirationQueue implements OnModuleInit, OnModuleDestroy {
       },
     });
 
-    this.worker = new Worker<DatosDeJob>(
-      COLA,
-      async (job) => {
-        // La verdad está en PostgreSQL. El job sólo dice "andá a fijarte": si
-        // la reserva ya se consumió, se canceló o alguien la venció antes,
-        // `expireIfDue` no hace nada y devuelve false.
-        const vencida = await this.inventory.expireIfDue(job.data.reservationId);
-        return { vencida };
-      },
-      { connection: conexion, concurrency: 8 },
-    );
-
-    // Un fallo de la cola no puede tumbar el proceso. Se registra y se sigue:
-    // el reconciliador cubre lo que la cola no pudo.
-    this.worker.on('error', (err) => this.logger.error({ err }, 'error del worker de expiración'));
     this.queue.on('error', (err) => this.logger.error({ err }, 'error de la cola de expiración'));
 
-    this.logger.log('cola de expiración de reservas lista');
+    /**
+     * El CONSUMIDOR sólo se enciende donde corren las tareas periódicas.
+     *
+     * ─── Por qué el productor sí y el consumidor no ───
+     *
+     * La cola tiene dos mitades con necesidades opuestas:
+     *
+     *   · **Producir** es parte de reservar. Ocurre dentro de la petición del
+     *     comprador, así que el proceso web la necesita siempre.
+     *   · **Consumir** es una espera bloqueante contra Redis. En un proceso
+     *     que escala a cero eso no tiene sentido: mientras hay tráfico, el
+     *     worker impide que el contenedor se duerma; cuando no lo hay, se
+     *     apaga con los jobs pendientes sin procesar.
+     *
+     * Con los roles separados, el web produce y el worker consume. Y si nadie
+     * consume —porque se desplegó sólo el web, o el worker está caído— **no se
+     * pierde ninguna reserva**: el reconciliador barre por `expires_at` en
+     * PostgreSQL. La cola da precisión al segundo; la garantía la da la base.
+     */
+    if (corresTareasPeriodicas()) {
+      this.worker = new Worker<DatosDeJob>(
+        COLA,
+        async (job) => {
+          // La verdad está en PostgreSQL. El job sólo dice "andá a fijarte": si
+          // la reserva ya se consumió, se canceló o alguien la venció antes,
+          // `expireIfDue` no hace nada y devuelve false.
+          const vencida = await this.inventory.expireIfDue(job.data.reservationId);
+          return { vencida };
+        },
+        { connection: conexion, concurrency: 8 },
+      );
+
+      // Un fallo de la cola no puede tumbar el proceso. Se registra y se sigue:
+      // el reconciliador cubre lo que la cola no pudo.
+      this.worker.on('error', (err) =>
+        this.logger.error({ err }, 'error del worker de expiración'),
+      );
+
+      this.logger.log('cola de expiración: productor y consumidor listos');
+    } else {
+      this.logger.log('cola de expiración: sólo productor (el consumidor corre en el worker)');
+    }
   }
 
   async onModuleDestroy(): Promise<void> {

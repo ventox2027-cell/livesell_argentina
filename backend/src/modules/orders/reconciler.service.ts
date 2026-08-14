@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 
 import { env } from '@/config/env.schema';
+import { corresTareasPeriodicas } from '@/shared/app-role';
 
 import { OrdersService } from './orders.service';
 import { OrderPaymentsService } from './payments.service';
@@ -54,6 +55,19 @@ export class OrdersReconciler implements OnModuleInit, OnModuleDestroy {
   onModuleInit(): void {
     if (!env.ORDERS_RECONCILER_ENABLED) {
       this.logger.warn('conciliador de órdenes apagado');
+      return;
+    }
+
+    /**
+     * En un proceso `web` no se arranca el temporizador: lo corre el worker.
+     *
+     * Acá importa más que en inventario. Lo que este barrido resuelve es plata
+     * de gente real en estado indeterminado, y con escalado a cero un
+     * `setInterval` en el proceso web se apaga de madrugada — que es justo
+     * cuando nadie va a notar que dejó de correr. Ver `shared/app-role.ts`.
+     */
+    if (!corresTareasPeriodicas()) {
+      this.logger.log('rol web: la conciliación de pagos la corre el worker');
       return;
     }
 

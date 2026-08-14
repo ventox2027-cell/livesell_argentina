@@ -13,6 +13,28 @@ const VALID = {
   JWT_SECRET: 'una-clave-de-firma-de-al-menos-32-caracteres',
 };
 
+/**
+ * Base para los casos de `staging` y `production`.
+ *
+ * Fuera de local el esquema exige cosas que en desarrollo no tienen sentido:
+ * TLS en las dos conexiones, el `pgbouncer=true` del pooler de Neon, el número
+ * de proxies delante y la clave de `/metrics`. Están todas acá para que los
+ * tests de otras reglas no fallen por una que no están probando.
+ */
+const VALID_STAGING = {
+  ...VALID,
+  NODE_ENV: 'staging',
+  DATABASE_URL:
+    'postgresql://u:p@ep-x-pooler.sa-east-1.aws.neon.tech/vendox?sslmode=require&pgbouncer=true&connection_limit=5',
+  DIRECT_URL: 'postgresql://u:p@ep-x.sa-east-1.aws.neon.tech/vendox?sslmode=require',
+  REDIS_URL: 'rediss://default:tok@sa-east-1.upstash.io:6379',
+  TRUSTED_PROXY_HOPS: '1',
+  METRICS_TOKEN: 'f'.repeat(64),
+  // Los dos que la plataforma decide y nosotros sólo leemos.
+  DEPLOYMENT_PROVIDER: 'ibm_code_engine',
+  PORT: '8080',
+};
+
 describe('envSchema', () => {
   it('acepta una configuración válida y aplica los valores por defecto', () => {
     const env = envSchema.parse(VALID);
@@ -77,12 +99,171 @@ describe('envSchema', () => {
 
   it('acepta SPIKE_ENABLED con clave fuera de production', () => {
     const r = envSchema.safeParse({
-      ...VALID,
-      NODE_ENV: 'staging',
+      ...VALID_STAGING,
       SPIKE_ENABLED: 'true',
       SPIKE_API_KEY: 'una-clave-larga-y-suficiente',
     });
     expect(r.success).toBe(true);
+  });
+
+  // ─── Conexiones reales: staging y producción ──────────────────────────────
+  //
+  // Todas estas reglas comparten un rasgo: el error que evitan NO se ve al
+  // arrancar. Aparece bajo carga, o no aparece nunca y simplemente el tráfico
+  // viaja sin cifrar. Por eso se comprueban al iniciar el proceso, que es el
+  // único momento en que fallar sale barato.
+
+  it('acepta la configuración de staging completa', () => {
+    const r = envSchema.safeParse(VALID_STAGING);
+    if (!r.success) {
+      // Si esto falla, el mensaje importa más que el booleano: dice qué regla
+      // nueva quedó imposible de satisfacer.
+      throw new Error(r.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('\n'));
+    }
+    expect(r.success).toBe(true);
+  });
+
+  it('⛔ rechaza el pooler de Neon sin pgbouncer=true', () => {
+    /**
+     * Sin ese parámetro, Prisma usa prepared statements que PgBouncer no puede
+     * sostener en modo transacción. El síntoma es
+     * `prepared statement "s0" already exists`, intermitente y sólo bajo
+     * concurrencia: parece un bug de la aplicación y no lo es.
+     */
+    const r = envSchema.safeParse({
+      ...VALID_STAGING,
+      DATABASE_URL:
+        'postgresql://u:p@ep-x-pooler.sa-east-1.aws.neon.tech/vendox?sslmode=require',
+    });
+    expect(r.success).toBe(false);
+    expect(r.error?.issues.some((i) => i.path.includes('DATABASE_URL'))).toBe(true);
+  });
+
+  it('acepta que DATABASE_URL sea directa (despliegue sin pooler)', () => {
+    const r = envSchema.safeParse({
+      ...VALID_STAGING,
+      DATABASE_URL: 'postgresql://u:p@ep-x.sa-east-1.aws.neon.tech/vendox?sslmode=require',
+    });
+    expect(r.success).toBe(true);
+  });
+
+  // ─── Portabilidad entre proveedores de compute ────────────────────────────
+
+  it('⛔ rechaza el pooler sin DIRECT_URL para migrar', () => {
+    // `migrate deploy` toma un lock de sesión. Contra PgBouncer en modo
+    // transacción se cuelga o deja la migración a medias.
+    const { DIRECT_URL: _, ...sinDirecta } = VALID_STAGING;
+    const r = envSchema.safeParse(sinDirecta);
+    expect(r.success).toBe(false);
+    expect(r.error?.issues.some((i) => i.path.includes('DIRECT_URL'))).toBe(true);
+  });
+
+  it('⛔ rechaza que DIRECT_URL sea el pooler disfrazado', () => {
+    // El error natural al copiar las dos cadenas del mismo panel, y anula por
+    // completo la razón de que exista la segunda.
+    const r = envSchema.safeParse({ ...VALID_STAGING, DIRECT_URL: VALID_STAGING.DATABASE_URL });
+    expect(r.success).toBe(false);
+    expect(r.error?.issues.some((i) => i.path.includes('DIRECT_URL'))).toBe(true);
+  });
+
+  it('⛔ rechaza DEPLOYMENT_PROVIDER=local fuera de local', () => {
+    // Con `local`, la IP sale del socket, que detrás de un proxy es siempre la
+    // del proxy: todo el tráfico en un solo contador de límite.
+    const r = envSchema.safeParse({ ...VALID_STAGING, DEPLOYMENT_PROVIDER: 'local' });
+    expect(r.success).toBe(false);
+  });
+
+  it('⛔ rechaza un proveedor que no está en la lista', () => {
+    // La lista es cerrada: agregar uno es agregar código que documente qué hace
+    // su borde con las cabeceras.
+    expect(envSchema.safeParse({ ...VALID_STAGING, DEPLOYMENT_PROVIDER: 'heroku' }).success).toBe(
+      false,
+    );
+  });
+
+  it('acepta los tres proveedores de compute soportados', () => {
+    for (const proveedor of ['fly', 'render', 'ibm_code_engine']) {
+      const r = envSchema.safeParse({ ...VALID_STAGING, DEPLOYMENT_PROVIDER: proveedor });
+      expect(r.success, `falló con ${proveedor}`).toBe(true);
+    }
+  });
+
+  it('⛔ rechaza PORT ausente fuera de local', () => {
+    /**
+     * La plataforma elige el puerto y sondea ése. Si el proceso escucha en
+     * otro, el contenedor arranca, no recibe una sola petición y se reinicia en
+     * bucle sin un error que lo explique.
+     */
+    const { PORT: _, ...sinPuerto } = VALID_STAGING;
+    const r = envSchema.safeParse(sinPuerto);
+    expect(r.success).toBe(false);
+    expect(r.error?.issues.some((i) => i.path.includes('PORT'))).toBe(true);
+  });
+
+  it('en local, PORT ausente cae en 3000', () => {
+    const r = envSchema.parse(VALID);
+    expect(r.PORT).toBe(3000);
+  });
+
+  it('respeta el PORT que manda la plataforma', () => {
+    // 8080 es el que inyecta Code Engine.
+    expect(envSchema.parse({ ...VALID_STAGING, PORT: '8080' }).PORT).toBe(8080);
+  });
+
+  it('APP_ROLE por defecto es `all`, y acepta web y worker', () => {
+    expect(envSchema.parse(VALID).APP_ROLE).toBe('all');
+    for (const rol of ['web', 'worker', 'all']) {
+      expect(envSchema.safeParse({ ...VALID_STAGING, APP_ROLE: rol }).success).toBe(true);
+    }
+    expect(envSchema.safeParse({ ...VALID_STAGING, APP_ROLE: 'cron' }).success).toBe(false);
+  });
+
+  it('⛔ rechaza la base sin sslmode fuera de local', () => {
+    const r = envSchema.safeParse({
+      ...VALID_STAGING,
+      DATABASE_URL: 'postgresql://u:p@host.neon.tech/vendox',
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it('⛔ rechaza Redis sin TLS fuera de local', () => {
+    /**
+     * `redis://` en vez de `rediss://` manda el token de Upstash en texto plano
+     * por internet abierto. Y funciona: no hay error, no hay aviso, nada que
+     * delate que las credenciales viajan a la vista.
+     */
+    const r = envSchema.safeParse({
+      ...VALID_STAGING,
+      REDIS_URL: 'redis://default:tok@sa-east-1.upstash.io:6379',
+    });
+    expect(r.success).toBe(false);
+    expect(r.error?.issues.some((i) => i.path.includes('REDIS_URL'))).toBe(true);
+  });
+
+  it('⛔ rechaza TRUSTED_PROXY_HOPS en 0 fuera de local', () => {
+    // Con 0 saltos detrás de Fly, `req.ip` es la IP del proxy: todo el tráfico
+    // comparte un contador de límite y una sola persona deja afuera al resto.
+    const r = envSchema.safeParse({ ...VALID_STAGING, TRUSTED_PROXY_HOPS: '0' });
+    expect(r.success).toBe(false);
+  });
+
+  it('⛔ nunca acepta trustProxy como booleano', () => {
+    // La configuración vieja, la que dejaba elegir la IP a quien llamaba. Ahora
+    // ni siquiera es un valor representable.
+    expect(envSchema.safeParse({ ...VALID_STAGING, TRUSTED_PROXY_HOPS: 'true' }).success).toBe(
+      false,
+    );
+  });
+
+  it('⛔ rechaza /metrics sin token fuera de local', () => {
+    const r = envSchema.safeParse({ ...VALID_STAGING, METRICS_TOKEN: '' });
+    expect(r.success).toBe(false);
+  });
+
+  it('deja todo esto pasar en desarrollo', () => {
+    // Exigir TLS y pooler en local sería pedir una infraestructura que no
+    // existe en una notebook. La regla vale donde hay internet de por medio.
+    expect(envSchema.safeParse(VALID).success).toBe(true);
   });
 
   // ─── Mercado Pago ─────────────────────────────────────────────────────────

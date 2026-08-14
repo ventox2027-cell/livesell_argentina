@@ -1,0 +1,60 @@
+# Qué NO entra al contexto de construcción.
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# POR QUÉ ESTE ARCHIVO NO ES UNA OPTIMIZACIÓN
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# El Dockerfile hace `COPY . .` en la etapa de compilación. Sin este archivo,
+# eso incluye **`.env` con los secretos reales**: la clave de firma de los
+# tokens, el token de Mercado Pago, la contraseña de la base.
+#
+# No llegan a la imagen final —la etapa de runtime copia sólo `dist`,
+# `node_modules`, `prisma` y `package.json`— pero sí quedan en una capa
+# intermedia. Y las capas intermedias no son privadas: se conservan en la caché
+# del constructor, se suben cuando alguien usa `--target build` o exporta la
+# caché a un registro, y cualquiera con acceso a ese registro las puede leer con
+# `docker history`.
+#
+# La regla es simple: **un secreto que estuvo en una capa hay que rotarlo**. Sin
+# este archivo, cada build era una copia más para rotar.
+#
+# Lo segundo, ya sí una optimización pero importante: `node_modules` local y
+# `dist/` pesan cientos de megas que se mandaban enteros al demonio de Docker en
+# cada build, para después ser pisados por lo que se instala adentro.
+
+# ─── Secretos ────────────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+!.env.staging.example
+*.pem
+*.key
+*.p12
+*.keystore
+
+# ─── Lo que se genera adentro ────────────────────────────────────────────────
+node_modules
+dist
+coverage
+.turbo
+
+# ─── Control de versiones y herramientas ─────────────────────────────────────
+.git
+.gitignore
+.github
+.vscode
+.idea
+
+# ─── Cosas que no hacen falta para construir ─────────────────────────────────
+test
+*.spec.ts
+*.test.ts
+vitest.config.ts
+vitest.stress.config.ts
+storage
+tmp
+*.log
+
+# ─── Configuración específica de un proveedor ────────────────────────────────
+# La imagen es neutral: lo que sabe de Fly no tiene por qué viajar adentro.
+fly.toml

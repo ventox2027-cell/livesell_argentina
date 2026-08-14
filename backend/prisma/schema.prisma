@@ -17,7 +17,25 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
+
+  // La que usa la aplicación. Con Neon, la del pooler.
+  url = env("DATABASE_URL")
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // La conexión DIRECTA, que usan sólo las migraciones.
+  //
+  // `prisma migrate deploy` toma un lock de sesión y ejecuta DDL. PgBouncer en
+  // modo transacción no sostiene ninguna de las dos cosas: no hay sesión que
+  // persista entre sentencias. La migración se cuelga esperando el lock, o —
+  // peor— queda aplicada a medias, que es un estado del que no se sale solo.
+  //
+  // Prisma sabe usar ésta para migrar y la otra para consultar. Sin declararlo
+  // acá, migrar contra el pooler es el comportamiento por omisión.
+  //
+  // En local no hay pooler y `DIRECT_URL` no está definida; el `.env` la deja
+  // apuntando a la misma base y no cambia nada.
+  // ───────────────────────────────────────────────────────────────────────────
+  directUrl = env("DIRECT_URL")
 }
 
 enum SpikeRole {
