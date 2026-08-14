@@ -350,6 +350,10 @@ export class OrdersService {
          */
         deliveryCode: true,
         deliveryCodeIssuedAt: true,
+        // Para que la app sepa si ya opinó, sin pedir otra ruta. Sin esto
+        // mostraría 'Calificar compra' sobre algo ya calificado y el backend
+        // lo rechazaría con un error que la persona no entiende.
+        review: { select: { id: true, rating: true, createdAt: true } },
         items: true,
         attempts: {
           orderBy: { createdAt: 'desc' },

@@ -165,6 +165,7 @@ class Pedido {
     this.codigoDeEntrega,
     this.despachadoEl,
     this.entregadoEl,
+    this.calificacion,
   });
 
   factory Pedido.fromJson(Map<String, dynamic> j) {
@@ -196,6 +197,9 @@ class Pedido {
       codigoDeEntrega: j['deliveryCode'] as String?,
       despachadoEl: DateTime.tryParse(j['shippedAt'] as String? ?? ''),
       entregadoEl: DateTime.tryParse(j['deliveredAt'] as String? ?? ''),
+      calificacion: (j['review'] as Map<String, dynamic>?) == null
+          ? null
+          : ((j['review']! as Map<String, dynamic>)['rating'] as num?)?.toInt(),
     );
   }
 
@@ -225,6 +229,15 @@ class Pedido {
   /// Llega recién cuando el pedido se despacha, y sólo en el detalle propio.
   /// Es lo que impide que el vendedor marque entregado algo que no entregó.
   final String? codigoDeEntrega;
+
+  /// Las estrellas que ya puso, o null si todavía no calificó.
+  final int? calificacion;
+
+  /// ¿Se puede calificar esta compra?
+  ///
+  /// Sólo una vez, y sólo sobre algo entregado: opinar sobre un pedido que
+  /// todavía no llegó mide la expectativa, no la experiencia.
+  bool get sePuedeCalificar => entregadoEl != null && calificacion == null;
 
   /// ¿Hay que mostrar el código?
   bool get esperaEntrega => codigoDeEntrega != null && entregadoEl == null;

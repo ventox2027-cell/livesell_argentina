@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,6 +10,7 @@ import '../../seller/domain/seller_models.dart';
 import '../data/orders_repository.dart';
 import '../domain/order_models.dart';
 import 'widgets/codigo_de_entrega.dart';
+import 'widgets/resena_sheet.dart';
 
 /// Mis pedidos.
 ///
@@ -206,6 +209,44 @@ class OrderDetailScreen extends ConsumerWidget {
                     ],
                   ),
                 ),
+
+              // Calificar va abajo de todo: se ofrece cuando el pedido ya
+              // llego, y para entonces la persona abre esta pantalla justamente
+              // a eso.
+              if (p.sePuedeCalificar) ...[
+                const SizedBox(height: Gap.md),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () => unawaited(
+                      ResenaSheet.mostrar(
+                        context,
+                        orderId: p.id,
+                        tienda: p.tienda ?? "la tienda",
+                      ),
+                    ),
+                    icon: const Icon(Icons.star_outline_rounded, size: 19),
+                    label: const Text("Calificar compra"),
+                  ),
+                ),
+              ] else if (p.calificacion != null) ...[
+                const SizedBox(height: Gap.md),
+                Row(
+                  children: [
+                    for (var i = 1; i <= 5; i++)
+                      Icon(
+                        i <= p.calificacion! ? Icons.star_rounded : Icons.star_outline_rounded,
+                        size: 16,
+                        color: i <= p.calificacion! ? AppColor.alerta : AppColor.textoDebil,
+                      ),
+                    const SizedBox(width: Gap.sm),
+                    const Text(
+                      "Ya calificaste esta compra",
+                      style: TextStyle(fontSize: 12.5, color: AppColor.textoSuave),
+                    ),
+                  ],
+                ),
+              ],
 
               // El codigo va ANTES del total: cuando el pedido esta en la puerta,
               // es lo unico que la persona necesita de esta pantalla.

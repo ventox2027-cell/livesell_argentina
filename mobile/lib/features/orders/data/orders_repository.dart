@@ -148,6 +148,26 @@ class OrdersRepository {
   /// Es el UNICO camino a DELIVERED: avanzarVenta no lo acepta. "Entregado"
   /// es una afirmacion sobre el mundo fisico y no puede hacerla solo quien
   /// tiene interes en que sea cierta.
+  /// Califica una compra.
+  ///
+  /// El backend valida que sea una compra propia y concretada, y que no haya
+  /// otra resena de esa misma orden: un indice unico sobre orderId lo
+  /// garantiza, asi que dos toques seguidos no crean dos.
+  Future<void> resenar(
+    String orderId, {
+    required int rating,
+    String comentario = "",
+  }) async {
+    final res = await _api.post<Map<String, dynamic>>(
+      "/orders/$orderId/review",
+      data: {
+        "rating": rating,
+        if (comentario.isNotEmpty) "comment": comentario,
+      },
+    );
+    if (res.statusCode != 201 && res.statusCode != 200) throw _error(res);
+  }
+
   Future<void> confirmarEntrega(String orderId, String codigo) async {
     final res = await _api.post<Map<String, dynamic>>(
       "/seller/orders/$orderId/delivery-confirmation",
