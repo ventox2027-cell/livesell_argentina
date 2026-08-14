@@ -2,8 +2,10 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../../../core/design/tokens.dart';
+import '../../social/data/social_api.dart';
 import '../../auth/state/auth_providers.dart';
 import '../data/live_api.dart';
 import '../data/live_realtime.dart';
@@ -269,6 +271,22 @@ class _LiveViewerScreenState extends ConsumerState<LiveViewerScreen> {
     if (productId != null && mounted) await _comprar(productId);
   }
 
+  /// Comparte el vivo por la hoja nativa del sistema.
+  ///
+  /// El texto y la URL los arma el BACKEND. Acá sólo se muestran: un enlace
+  /// compartido sobrevive a la versión de la app que lo generó, y si cada
+  /// versión tuviera su propia idea del formato, cambiarlo rompería los que ya
+  /// están dando vueltas en los chats.
+  Future<void> _compartir(String liveId) async {
+    try {
+      final m = await ref.read(socialApiProvider).compartir('live', liveId, origen: 'live');
+      if (!mounted || m.texto.isEmpty) return;
+      await Share.share(m.texto);
+    } catch (_) {
+      // Sin cartel: compartir es opcional y el vivo sigue andando. Un error
+      // acá interrumpiría lo que la persona vino a mirar.
+    }
+  }
   @override
   Widget build(BuildContext context) {
     final teclado = MediaQuery.viewInsetsOf(context).bottom;
@@ -324,7 +342,9 @@ class _LiveViewerScreenState extends ConsumerState<LiveViewerScreen> {
                       right: Gap.sm,
                       bottom: abajo + 200,
                       child: RailDeAcciones(
+                        liveSessionId: live.id,
                         onTienda: _abrirTienda,
+                        onCompartir: () => _compartir(live.id),
                         onComentar: () => _focoComposer.requestFocus(),
                         onPerfil: () => Navigator.of(context).push(
                           MaterialPageRoute<void>(

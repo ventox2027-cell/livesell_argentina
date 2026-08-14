@@ -366,6 +366,20 @@ export const envSchema = z
     /** Apagable para que los tests controlen el reloj en vez de competir con él. */
     INVENTORY_RECONCILER_ENABLED: envBoolean(true),
 
+    /**
+     * El dominio público, para los enlaces que se comparten.
+     *
+     * Un enlace compartido sobrevive a la versión de la app que lo generó:
+     * alguien lo manda por WhatsApp hoy y lo abren en seis meses. Por eso lo
+     * arma el backend y no la app, y por eso el dominio es configuración y no
+     * una constante — en desarrollo apunta a otro lado, y escribirlo a mano
+     * haría que los enlaces de prueba lleven a producción.
+     *
+     * ⚠️ La página web que atiende estos enlaces todavía no existe. Los que se
+     * generen mientras tanto van a funcionar cuando esté: el formato no cambia.
+     */
+    PUBLIC_WEB_URL: z.string().url().default('https://vendox.com.ar'),
+
     // ─── Avisos ─────────────────────────────────────────────────────────────
 
     /**

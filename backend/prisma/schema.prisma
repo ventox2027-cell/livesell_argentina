@@ -539,6 +539,7 @@ model User {
   intents       PurchaseIntent[]
   notifications Notification[]
   supportTickets SupportTicket[]
+  likes          Like[]
 
   @@index([phoneE164])
   @@index([status, createdAt])
@@ -1016,6 +1017,9 @@ model Product {
   /// Precio tachado. DEBE ser mayor que el base o no se muestra: un "antes"
   /// menor que el "ahora" es publicidad engañosa.
   compareAtPriceCents Int? @map("compare_at_price_cents")
+
+  /// Cuántos "me gusta" tiene. Denormalizado, igual que en el vivo.
+  likesCount Int @default(0) @map("likes_count")
 
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
@@ -2062,6 +2066,13 @@ model LiveSession {
   // cancelar o devolver después, y el resumen tiene que decir qué pasó DURANTE
   // la transmisión. Recalcularlo un mes más tarde daría otro número.
   peakViewers   Int? @map("peak_viewers")
+
+  /// Cuántos "me gusta" tiene. Denormalizado.
+  ///
+  /// Contar la tabla en cada tarjeta del feed sería una consulta agregada por
+  /// fila en la pantalla más visitada de la app. Se mantiene en la misma
+  /// transacción que el "me gusta", así que no se puede despegar.
+  likesCount    Int  @default(0) @map("likes_count")
   uniqueViewers Int? @map("unique_viewers")
   totalOrders   Int? @map("total_orders")
   grossAmount   Int? @map("gross_amount")
@@ -2718,4 +2729,48 @@ model SupportMessage {
 
   @@index([ticketId, createdAt])
   @@map("support_messages")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ME GUSTA
+//
+// ─── Por qué una tabla polimórfica y no una por tipo ───
+//
+// Se puede dar "me gusta" a un vivo y a un producto, y mañana a una reseña.
+// Tres tablas idénticas con un nombre distinto significan tres consultas
+// distintas para "qué le gustó a esta persona", tres contadores que mantener y
+// tres formas de escribir el mismo bug.
+//
+// El costo de la tabla polimórfica es que la base no puede garantizar que
+// `targetId` apunte a algo que existe: no hay clave foránea posible cuando el
+// destino cambia de tabla según una columna. Se acepta a conciencia — un "me
+// gusta" huérfano no rompe nada, y el barrido que limpia se puede escribir
+// cuando haga falta.
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum LikeTarget {
+  LIVE
+  PRODUCT
+}
+
+model Like {
+  id     String @id // lik_<ulid>
+  userId String @map("user_id")
+
+  targetType LikeTarget @map("target_type")
+  targetId   String     @map("target_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Uno por persona y cosa. Tocar dos veces no cuenta dos.
+  ///
+  /// El índice único es lo que lo garantiza, no un `if`: dos toques rápidos
+  /// —que en un vivo pasan todo el tiempo— llegan como dos peticiones
+  /// simultáneas y una comprobación previa perdería la carrera.
+  @@unique([userId, targetType, targetId])
+  /// "¿Le gusta a esta persona?", que se pregunta al pintar cada tarjeta.
+  @@index([targetType, targetId])
+  @@map("likes")
 }

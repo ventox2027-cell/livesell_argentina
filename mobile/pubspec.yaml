@@ -42,6 +42,13 @@ dependencies:
   # vista que nosotros controlamos el vendedor no tiene forma de saber que no
   # la estamos leyendo. El navegador del sistema muestra el dominio real.
   url_launcher: ^6.3.1
+
+  # Para compartir por la hoja nativa del sistema.
+  #
+  # No un botón propio que copia al portapapeles: la hoja del sistema muestra
+  # las apps que la persona realmente usa, y compartir por WhatsApp es un toque
+  # en vez de tres.
+  share_plus: ^10.1.4
   flutter_secure_storage: ^10.3.1
   go_router: ^17.5.0
   google_fonts: ^8.2.1

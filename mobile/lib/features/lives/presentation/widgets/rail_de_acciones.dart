@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../../core/design/tokens.dart';
+import '../../../social/presentation/boton_me_gusta.dart';
 
 /// La columna de acciones del costado.
 ///
@@ -23,38 +24,43 @@ class RailDeAcciones extends StatelessWidget {
     required this.onTienda,
     required this.onComentar,
     required this.onPerfil,
+    required this.liveSessionId,
+    this.onCompartir,
   });
 
   final VoidCallback onTienda;
   final VoidCallback onComentar;
   final VoidCallback onPerfil;
 
+  /// Para el corazón. El estado lo maneja el propio botón.
+  final String liveSessionId;
+
+  final VoidCallback? onCompartir;
+
   @override
   Widget build(BuildContext context) {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        const _Accion(
-          icono: Icons.favorite_border_rounded,
-          etiqueta: 'Me gusta',
-          // Todavía no hay backend de "me gusta" sobre un vivo. Se deja
-          // visible y sin acción en vez de simular un contador que no existe:
-          // un corazón que se llena y no persiste es peor que uno que no hace
-          // nada, porque la próxima vez que entre no va a estar.
-          onTap: null,
+        // El corazón tiene su propio estado: se pinta apenas se toca y se
+        // corrige si el servidor dice otra cosa. Ver `BotonMeGusta`.
+        Padding(
+          padding: const EdgeInsets.only(bottom: Gap.lg),
+          child: BotonMeGusta(tipo: 'live', id: liveSessionId),
         ),
         _Accion(
           icono: Icons.chat_bubble_outline_rounded,
           etiqueta: 'Comentar',
           onTap: onComentar,
         ),
-        const _Accion(
+        _Accion(
           icono: Icons.send_outlined,
           etiqueta: 'Enviar',
-          // Compartir un vivo necesita una URL pública que todavía no existe:
-          // el dominio definitivo está pendiente. Un botón que copia un enlace
-          // roto es peor que uno que no hace nada.
-          onTap: null,
+          // El enlace lo arma el backend. ⚠️ La página web que lo atiende
+          // todavía no existe: quien lo abra sin la app instalada cae en un
+          // 404 hasta que esté. Los enlaces que se compartan mientras tanto
+          // van a funcionar cuando la página exista — el formato no cambia.
+          onTap: onCompartir,
         ),
         _Accion(
           icono: Icons.storefront_rounded,

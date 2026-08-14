@@ -83,7 +83,7 @@ beforeAll(async () => {
     throw new Error('Los tests de integración borran datos y sólo corren contra una base *_test');
   }
   await prisma.$executeRawUnsafe(
-    'TRUNCATE notifications, purchase_intents, reviews, follows, store_schedule_slots, store_schedules, ' +
+    'TRUNCATE likes, notifications, purchase_intents, reviews, follows, store_schedule_slots, store_schedules, ' +
       'live_session_products, live_sessions, audit_logs, seller_verifications, order_items, ' +
       'payment_attempts, refunds, orders, inventory_reservations, inventory, ' +
       'product_variant_options, product_images, product_variants, product_option_values, ' +
@@ -1095,5 +1095,210 @@ describe('Interesados y reapertura', () => {
       expect(fila?.pushStatus).toBe('SKIPPED');
       expect(fila?.nextAttemptAt).toBeNull();
     });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ME GUSTA Y COMPARTIR
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * El corazón y su contador.
+ *
+ * El contador está denormalizado —contar la tabla en cada tarjeta del feed
+ * sería una consulta agregada por fila en la pantalla más visitada— así que lo
+ * que hay que probar no es que sume, sino que **no se despegue** de las filas
+ * reales pase lo que pase.
+ */
+describe('Me gusta', () => {
+  async function productoPublicado(vendedor: { token: string }) {
+    n += 1;
+    const p = await call('POST', '/api/v1/products', {
+      token: vendedor.token,
+      body: {
+        name: `Producto like ${n}`,
+        slug: `producto-like-${n}-${Date.now().toString(36)}`,
+        basePriceCents: 890_000,
+        status: 'ACTIVE',
+      },
+    });
+    expect(p.status, JSON.stringify(p.body)).toBe(201);
+    return p.body.id as string;
+  }
+
+  /** Cuenta las filas reales, no el contador. */
+  async function filasReales(productId: string) {
+    return prisma.like.count({ where: { targetType: 'PRODUCT', targetId: productId } });
+  }
+
+  it('el corazón es un interruptor', async () => {
+    /**
+     * Un solo endpoint que alterna, no `POST` y `DELETE`. Con dos, la app tiene
+     * que saber el estado actual para elegir cuál llamar, y si el que tenía era
+     * viejo el resultado es al revés de lo que la persona quiso.
+     */
+    const vendedor = await nuevoVendedor();
+    const productId = await productoPublicado(vendedor);
+    const fan = await nuevoUsuario();
+
+    const dado = await call('POST', `/api/v1/products/${productId}/like`, { token: fan.token });
+    expect(dado.status, JSON.stringify(dado.body)).toBe(201);
+    expect(dado.body.meGusta).toBe(true);
+    expect(dado.body.total).toBe(1);
+
+    const quitado = await call('POST', `/api/v1/products/${productId}/like`, {
+      token: fan.token,
+    });
+    expect(quitado.body.meGusta).toBe(false);
+    expect(quitado.body.total).toBe(0);
+  });
+
+  it('⛔ el contador NUNCA se despega de las filas', async () => {
+    // Es lo único que importa de un contador denormalizado. Se hace una
+    // secuencia larga y al final se comparan las dos fuentes.
+    const vendedor = await nuevoVendedor();
+    const productId = await productoPublicado(vendedor);
+
+    const fans = [await nuevoUsuario(), await nuevoUsuario(), await nuevoUsuario()];
+    const url = `/api/v1/products/${productId}/like`;
+
+    for (const f of fans) await call('POST', url, { token: f.token });
+    // El primero se arrepiente.
+    await call('POST', url, { token: fans[0]!.token });
+    // Y vuelve.
+    await call('POST', url, { token: fans[0]!.token });
+
+    const producto = await prisma.product.findUniqueOrThrow({ where: { id: productId } });
+    expect(producto.likesCount).toBe(await filasReales(productId));
+    expect(producto.likesCount).toBe(3);
+  });
+
+  it('tocar dos veces seguidas no cuenta dos', async () => {
+    // En un vivo pasa todo el tiempo. Lo garantiza el índice único, no un `if`:
+    // dos toques rápidos llegan como dos peticiones y una comprobación previa
+    // perdería la carrera.
+    const vendedor = await nuevoVendedor();
+    const productId = await productoPublicado(vendedor);
+    const fan = await nuevoUsuario();
+    const url = `/api/v1/products/${productId}/like`;
+
+    const [a, b] = await Promise.all([
+      call('POST', url, { token: fan.token }),
+      call('POST', url, { token: fan.token }),
+    ]);
+
+    // Uno da y el otro quita, o los dos ven el mismo estado. Lo que NO puede
+    // pasar es que queden dos filas.
+    expect([a.status, b.status].every((s) => s === 201)).toBe(true);
+    expect(await filasReales(productId)).toBeLessThanOrEqual(1);
+
+    const producto = await prisma.product.findUniqueOrThrow({ where: { id: productId } });
+    expect(producto.likesCount).toBe(await filasReales(productId));
+  });
+
+  it('⛔ no se puede dar me gusta a algo que no existe', async () => {
+    // La tabla es polimórfica y no puede tener clave foránea: esto es lo único
+    // que impide acumular corazones sobre ids inventados.
+    const fan = await nuevoUsuario();
+    const r = await call('POST', '/api/v1/products/prd_00000000000000000000000000/like', {
+      token: fan.token,
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it('⛔ ni a un producto pausado', async () => {
+    const vendedor = await nuevoVendedor();
+    const productId = await productoPublicado(vendedor);
+    await call('PATCH', `/api/v1/products/${productId}`, {
+      token: vendedor.token,
+      body: { status: 'PAUSED' },
+    });
+
+    const fan = await nuevoUsuario();
+    const r = await call('POST', `/api/v1/products/${productId}/like`, { token: fan.token });
+    expect(r.status).toBe(400);
+  });
+
+  it('sin sesión se ve el total pero no el propio', async () => {
+    // Alguien que todavía no se registró tiene que poder ver cuántos me gusta
+    // tiene un producto: es parte de decidir si comprar.
+    const vendedor = await nuevoVendedor();
+    const productId = await productoPublicado(vendedor);
+    const fan = await nuevoUsuario();
+    await call('POST', `/api/v1/products/${productId}/like`, { token: fan.token });
+
+    const anonimo = await call('GET', `/api/v1/products/${productId}/like`);
+    expect(anonimo.status, JSON.stringify(anonimo.body)).toBe(200);
+    expect(anonimo.body.total).toBe(1);
+    expect(anonimo.body.meGusta).toBe(false);
+
+    const conSesion = await call('GET', `/api/v1/products/${productId}/like`, {
+      token: fan.token,
+    });
+    expect(conSesion.body.meGusta).toBe(true);
+  });
+
+  it('el me gusta de una persona no afecta al de otra', async () => {
+    const vendedor = await nuevoVendedor();
+    const productId = await productoPublicado(vendedor);
+    const uno = await nuevoUsuario();
+    const dos = await nuevoUsuario();
+    const url = `/api/v1/products/${productId}/like`;
+
+    await call('POST', url, { token: uno.token });
+    await call('POST', url, { token: dos.token });
+    await call('POST', url, { token: uno.token });
+
+    const deDos = await call('GET', url, { token: dos.token });
+    expect(deDos.body.meGusta).toBe(true);
+    expect(deDos.body.total).toBe(1);
+  });
+});
+
+describe('Compartir', () => {
+  it('el enlace de un producto lleva el precio', async () => {
+    const vendedor = await nuevoVendedor();
+    n += 1;
+    const p = await call('POST', '/api/v1/products', {
+      token: vendedor.token,
+      body: {
+        name: 'Buzo oversize',
+        slug: `buzo-compartir-${n}-${Date.now().toString(36)}`,
+        basePriceCents: 890_000,
+        status: 'ACTIVE',
+      },
+    });
+
+    const r = await call('GET', `/api/v1/share/product/${p.body.id}`);
+
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.body.url).toContain(`/p/${p.body.id}`);
+    expect(r.body.texto).toContain('Buzo oversize');
+    expect(r.body.texto).toContain('$8.900');
+    // La URL va última: es lo que hace que WhatsApp previsualice.
+    expect((r.body.texto as string).endsWith(r.body.url as string)).toBe(true);
+  });
+
+  it('es público: compartir es cómo llega gente sin la app', async () => {
+    const vendedor = await nuevoVendedor();
+    const tienda = await prisma.store.findFirstOrThrow({
+      where: { seller: { id: vendedor.sellerId } },
+    });
+
+    const r = await call('GET', `/api/v1/share/store/${tienda.slug}`);
+    expect(r.status).toBe(200);
+    expect(r.body.texto).toContain('Mirá lo que vende');
+  });
+
+  it('⛔ un tipo que no se puede compartir se rechaza', async () => {
+    const r = await call('GET', '/api/v1/share/usuario/algo');
+    expect(r.status).toBe(400);
+  });
+
+  it('compartir algo que no existe da error, no un enlace roto', async () => {
+    // Un enlace generado sobre un id inventado se comparte igual y no funciona
+    // para nadie.
+    const r = await call('GET', '/api/v1/share/product/prd_00000000000000000000000000');
+    expect(r.status).toBe(400);
   });
 });
