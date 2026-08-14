@@ -1,6 +1,18 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Prisma, type Seller, type Store } from '@prisma/client';
+import {
+  Prisma,
+  type ProcessorFeeMode,
+  type Seller,
+  type ShippingMode,
+  type Store,
+} from '@prisma/client';
 
+import {
+  costoDeEnvio,
+  etiquetaDeEnvio,
+  permiteEnvio,
+  permiteRetiro,
+} from '@/modules/orders/shipping';
 import { AuditService } from '@/shared/audit/audit.service';
 import { DomainEvent, DomainEventBus } from '@/shared/events/domain-events';
 import { DomainError } from '@/shared/errors/domain.error';
@@ -12,6 +24,7 @@ import type {
   CreateSellerDto,
   ChangeStoreSlugDto,
   UpdateSellerDto,
+  UpdateShippingPolicyDto,
   UpdateStoreDto,
 } from './dto/commerce.dto';
 import { OwnershipService } from './ownership.service';
@@ -245,6 +258,80 @@ export class SellersService {
   }
 
   /**
+   * Define cómo cobra el envío esta tienda y quién paga el medio de pago.
+   *
+   * ─── Por qué no afecta a las órdenes ya creadas ───
+   *
+   * Cada orden guarda su propia foto (`shippingModeSnapshot`,
+   * `processorFeeModeSnapshot`). Cambiar esto hoy no le cambia el total a nadie
+   * que ya compró: quien pagó $12.400 con envío incluido tiene que seguir
+   * viendo $12.400 con envío incluido para siempre, aunque mañana la tienda
+   * pase a retiro únicamente.
+   *
+   * ─── Por qué se audita entero ───
+   *
+   * Es el registro de "en esta fecha esta tienda pasó a trasladar el costo del
+   * procesador". Si un comprador reclama que le cobraron un recargo que no
+   * esperaba, esta es la única forma de reconstruir qué política estaba vigente
+   * cuando compró.
+   */
+  async updateShippingPolicy(userId: string, storeId: string, dto: UpdateShippingPolicyDto) {
+    const { store } = await this.ownership.storeOf(userId, storeId, { requireActive: true });
+
+    const actualizada = await this.prisma.store.update({
+      where: { id: store.id },
+      data: {
+        shippingMode: dto.shippingMode,
+        shippingFlatAmount: dto.shippingFlatAmount,
+        processorFeeMode: dto.processorFeeMode,
+        ...(dto.shippingNote !== undefined ? { shippingNote: dto.shippingNote } : {}),
+      },
+    });
+
+    await this.audit.logDiff({
+      action: 'store.shipping_policy_updated',
+      entityType: 'store',
+      entityId: store.id,
+      actorId: userId,
+      before: {
+        shippingMode: store.shippingMode,
+        shippingFlatAmount: store.shippingFlatAmount,
+        shippingNote: store.shippingNote,
+        processorFeeMode: store.processorFeeMode,
+      },
+      after: {
+        shippingMode: actualizada.shippingMode,
+        shippingFlatAmount: actualizada.shippingFlatAmount,
+        shippingNote: actualizada.shippingNote,
+        processorFeeMode: actualizada.processorFeeMode,
+      },
+    });
+
+    return this.politicaDeEnvio(actualizada);
+  }
+
+  /** La política tal como la ve el vendedor y tal como la ve quien compra. */
+  private politicaDeEnvio(store: {
+    shippingMode: ShippingMode;
+    shippingFlatAmount: number;
+    shippingNote: string | null;
+    processorFeeMode: ProcessorFeeMode;
+  }) {
+    const politica = { modo: store.shippingMode, montoFijo: store.shippingFlatAmount };
+    return {
+      shippingMode: store.shippingMode,
+      shippingFlatAmount: store.shippingFlatAmount,
+      shippingNote: store.shippingNote,
+      processorFeeMode: store.processorFeeMode,
+      // Derivados, para que la app no reimplemente las reglas y se desincronice.
+      permiteEnvio: permiteEnvio(store.shippingMode),
+      permiteRetiro: permiteRetiro(store.shippingMode),
+      etiquetaEnvio: etiquetaDeEnvio(politica, false),
+      costoEnvio: costoDeEnvio(politica, false),
+    };
+  }
+
+  /**
    * Cambia el slug de la tienda.
    *
    * Endpoint aparte del resto de la edición a propósito: cambiar el slug rompe
@@ -295,6 +382,10 @@ export class SellersService {
       logoUrl: store.logoUrl,
       coverUrl: store.coverUrl,
       seller: this.publicSeller(store.seller),
+      // Quien mira la vidriera tiene que saber cuánto sale el envío ANTES de
+      // llegar al checkout. Enterarse del costo con la tarjeta en la mano es la
+      // razón número uno por la que alguien abandona una compra.
+      envio: this.politicaDeEnvio(store),
     };
   }
 

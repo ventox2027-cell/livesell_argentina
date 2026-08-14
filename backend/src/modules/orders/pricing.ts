@@ -34,6 +34,14 @@ export interface EntradaDePrecio {
   quantity: number;
   shippingAmount?: number;
   discountAmount?: number;
+  /**
+   * Recargo por el medio de pago, cuando el vendedor decide trasladarlo.
+   *
+   * Campo propio y no sumado al envío: el checkout muestra una línea por
+   * concepto, y meterlo adentro haría que el comprador viera un costo de envío
+   * más alto que el que el vendedor cobra.
+   */
+  processorSurchargeAmount?: number;
   /** El vigente al crear la orden. Se guarda como foto. */
   platformFeeBps: number;
 }
@@ -42,6 +50,7 @@ export interface Precio {
   itemsSubtotal: number;
   shippingAmount: number;
   discountAmount: number;
+  processorSurchargeAmount: number;
   /** Lo que paga el comprador. */
   grossAmount: number;
   platformFeeBps: number;
@@ -92,17 +101,37 @@ export function porcentajeDe(monto: number, bps: number): number {
 export function calcularPrecio(entrada: EntradaDePrecio): Precio {
   const shippingAmount = entrada.shippingAmount ?? 0;
   const discountAmount = entrada.discountAmount ?? 0;
+  const processorSurchargeAmount = entrada.processorSurchargeAmount ?? 0;
 
   const itemsSubtotal = entrada.unitPrice * entrada.quantity;
-  const grossAmount = itemsSubtotal + shippingAmount - discountAmount;
+  const grossAmount = itemsSubtotal + shippingAmount + processorSurchargeAmount - discountAmount;
 
-  // Sobre el subtotal de productos, no sobre el bruto. Ver arriba.
+  /**
+   * ⚠️ Sobre el subtotal de PRODUCTOS. No sobre el bruto.
+   *
+   * VendoX cobra 6 % sobre lo que se vendió, no sobre lo que se movió:
+   *
+   *   · el envío es plata que el vendedor cobra y le entrega a un tercero para
+   *     despachar el paquete. No es ingreso suyo, y cobrarle comisión sobre eso
+   *     sería cobrarle por gastar;
+   *   · el recargo del procesador existe justamente para cubrir lo que Mercado
+   *     Pago le va a descontar. Un 6 % encima haría que trasladar el costo le
+   *     siga saliendo plata, que es lo contrario de para qué existe.
+   *
+   * Es DISTINTO del costo del procesador, cuya base sí es producto + envío
+   * (ver `baseDelCostoDeProcesador`): esa base la define Mercado Pago, que
+   * cobra sobre todo lo que pasa por él. Esta la definimos nosotros.
+   *
+   * Cambiar esta línea no corrige un cálculo: cambia el modelo de negocio.
+   * `orders-flow.spec.ts` tiene un test que lo dice explícitamente.
+   */
   const platformFeeAmount = porcentajeDe(itemsSubtotal, entrada.platformFeeBps);
 
   return {
     itemsSubtotal,
     shippingAmount,
     discountAmount,
+    processorSurchargeAmount,
     grossAmount,
     platformFeeBps: entrada.platformFeeBps,
     platformFeeAmount,
@@ -136,11 +165,17 @@ export function verificarCoherencia(p: Precio): { ok: true } | { ok: false; moti
   if (p.itemsSubtotal < 0) return { ok: false, motivo: 'el subtotal es negativo' };
   if (p.shippingAmount < 0) return { ok: false, motivo: 'el envío es negativo' };
   if (p.discountAmount < 0) return { ok: false, motivo: 'el descuento es negativo' };
+  if (p.processorSurchargeAmount < 0) {
+    return { ok: false, motivo: 'el recargo del medio de pago es negativo' };
+  }
 
   if (p.discountAmount > p.itemsSubtotal + p.shippingAmount) {
     return { ok: false, motivo: 'el descuento supera el total' };
   }
-  if (p.grossAmount !== p.itemsSubtotal + p.shippingAmount - p.discountAmount) {
+  if (
+    p.grossAmount !==
+    p.itemsSubtotal + p.shippingAmount + p.processorSurchargeAmount - p.discountAmount
+  ) {
     return { ok: false, motivo: 'el total no coincide con sus partes' };
   }
   if (p.platformFeeAmount > p.grossAmount) {

@@ -231,11 +231,15 @@ async function reservar(token: string, variantId: string, quantity = 1) {
   return r.body.reservationId as string;
 }
 
-async function crearOrden(token: string, reservationId: string) {
+async function crearOrden(
+  token: string,
+  reservationId: string,
+  extra: Record<string, unknown> = {},
+) {
   return call('POST', '/api/v1/orders', {
     token,
     idempotencyKey: clave('o'),
-    body: { reservationId },
+    body: { reservationId, ...extra },
   });
 }
 
@@ -1829,5 +1833,295 @@ describe('Código de entrega', () => {
     expect(orden?.preparingAt).not.toBeNull();
     expect(orden?.readyAt).not.toBeNull();
     expect(orden?.shippedAt).not.toBeNull();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ENVÍO Y COSTO DEL PROCESADOR
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Los tres números que ve el comprador antes de pagar.
+ *
+ * El total no es el precio del producto: es producto + envío + recargo del
+ * medio de pago. Cada uno sale de una regla distinta y **ninguno del cliente**.
+ * Un error acá no es cosmético: es plata que alguien paga de más, o un vendedor
+ * que despacha un paquete que nadie le pagó.
+ */
+describe('Envío y costo del procesador', () => {
+  /** Deja la política de la tienda como la dejaría el vendedor desde la app. */
+  async function definirPolitica(
+    sellerToken: string,
+    storeId: string,
+    body: Record<string, unknown>,
+  ) {
+    return call('PATCH', `/api/v1/stores/${storeId}/shipping`, { token: sellerToken, body });
+  }
+
+  async function tiendaDe(sellerToken: string) {
+    const r = await call('GET', '/api/v1/stores/me', { token: sellerToken });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    return r.body.id as string;
+  }
+
+  it('por omisión no cobra envío ni recargo: el total es el producto', async () => {
+    const { variantId } = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+    const reservationId = await reservar(comprador.token, variantId);
+
+    const r = await crearOrden(comprador.token, reservationId);
+
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(r.body.itemsSubtotal).toBe(890_000);
+    expect(r.body.shippingAmount).toBe(0);
+    expect(r.body.processorSurchargeAmount).toBe(0);
+    expect(r.body.grossAmount).toBe(890_000);
+    expect(r.body.shippingModeSnapshot).toBe('FREE');
+    expect(r.body.processorFeeModeSnapshot).toBe('ABSORBED');
+  });
+
+  it('con envío fijo, el total lo incluye', async () => {
+    const { sellerToken, variantId } = await nuevaVarianteConStock(3);
+    const storeId = await tiendaDe(sellerToken);
+
+    const politica = await definirPolitica(sellerToken, storeId, {
+      shippingMode: 'FIXED_PRICE',
+      shippingFlatAmount: 350_000,
+      processorFeeMode: 'ABSORBED',
+    });
+    expect(politica.status, JSON.stringify(politica.body)).toBe(200);
+
+    const comprador = await nuevoComprador();
+    const reservationId = await reservar(comprador.token, variantId);
+    const r = await crearOrden(comprador.token, reservationId);
+
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(r.body.shippingAmount).toBe(350_000);
+    expect(r.body.grossAmount).toBe(890_000 + 350_000);
+    expect(r.body.shippingModeSnapshot).toBe('FIXED_PRICE');
+  });
+
+  it('⛔ decir que se retira NO saltea el envío si la tienda no ofrece retiro', async () => {
+    /**
+     * Es la defensa entera de este bloque. Si el cuerpo de la petición pudiera
+     * decidirlo, alcanzaría con un campo para no pagar el envío — y el vendedor
+     * despacharía un paquete que nadie le pagó.
+     */
+    const { sellerToken, variantId } = await nuevaVarianteConStock(3);
+    const storeId = await tiendaDe(sellerToken);
+    await definirPolitica(sellerToken, storeId, {
+      shippingMode: 'FIXED_PRICE',
+      shippingFlatAmount: 350_000,
+      processorFeeMode: 'ABSORBED',
+    });
+
+    const comprador = await nuevoComprador();
+    const reservationId = await reservar(comprador.token, variantId);
+    const r = await crearOrden(comprador.token, reservationId, { retiraEnPersona: true });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(r.body.shippingAmount).toBe(350_000);
+    expect(r.body.pickupSelected).toBe(false);
+    expect(r.body.grossAmount).toBe(890_000 + 350_000);
+  });
+
+  it('con las dos opciones, retirar sale cero y queda marcado', async () => {
+    const { sellerToken, variantId } = await nuevaVarianteConStock(3);
+    const storeId = await tiendaDe(sellerToken);
+    await definirPolitica(sellerToken, storeId, {
+      shippingMode: 'FIXED_OR_PICKUP',
+      shippingFlatAmount: 350_000,
+      processorFeeMode: 'ABSORBED',
+    });
+
+    const comprador = await nuevoComprador();
+    const reservationId = await reservar(comprador.token, variantId);
+    const r = await crearOrden(comprador.token, reservationId, { retiraEnPersona: true });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(r.body.shippingAmount).toBe(0);
+    // ⚠️ No se deduce de `shippingAmount === 0`: hay tiendas con envío gratis.
+    // El vendedor tiene que saber que NO despache.
+    expect(r.body.pickupSelected).toBe(true);
+    expect(r.body.grossAmount).toBe(890_000);
+  });
+
+  it('con las dos opciones, no retirar cobra el envío', async () => {
+    const { sellerToken, variantId } = await nuevaVarianteConStock(3);
+    const storeId = await tiendaDe(sellerToken);
+    await definirPolitica(sellerToken, storeId, {
+      shippingMode: 'FIXED_OR_PICKUP',
+      shippingFlatAmount: 350_000,
+      processorFeeMode: 'ABSORBED',
+    });
+
+    const comprador = await nuevoComprador();
+    const reservationId = await reservar(comprador.token, variantId);
+    const r = await crearOrden(comprador.token, reservationId);
+
+    expect(r.body.shippingAmount).toBe(350_000);
+    expect(r.body.pickupSelected).toBe(false);
+  });
+
+  it('el recargo del procesador se calcula sobre producto MÁS envío', async () => {
+    const { sellerToken, variantId } = await nuevaVarianteConStock(3);
+    const storeId = await tiendaDe(sellerToken);
+    await definirPolitica(sellerToken, storeId, {
+      shippingMode: 'FIXED_PRICE',
+      shippingFlatAmount: 350_000,
+      processorFeeMode: 'PASSED_TO_BUYER',
+    });
+
+    const comprador = await nuevoComprador();
+    const reservationId = await reservar(comprador.token, variantId);
+    const r = await crearOrden(comprador.token, reservationId);
+
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    // (890.000 + 350.000) × 6,19 % = 76.756
+    expect(r.body.processorSurchargeAmount).toBe(76_756);
+    expect(r.body.grossAmount).toBe(890_000 + 350_000 + 76_756);
+    expect(r.body.processorFeeModeSnapshot).toBe('PASSED_TO_BUYER');
+  });
+
+  it('⛔ la comisión del 6 % NO se cobra sobre el envío ni sobre el recargo', async () => {
+    /**
+     * ═══════════════════════════════════════════════════════════════════════
+     * DECISIÓN COMERCIAL, NO UN DETALLE DE CÁLCULO
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * VendoX cobra 6 % **sobre lo que se vendió**, no sobre lo que se movió.
+     *
+     * El envío es plata que el vendedor cobra y le entrega a un tercero para
+     * despachar el paquete: no es ingreso suyo. Cobrarle comisión sobre eso
+     * sería cobrarle por gastar. Y el recargo del procesador existe justamente
+     * para cubrir lo que Mercado Pago le va a descontar; cobrarle 6 % encima
+     * haría que trasladar el costo le siga saliendo plata.
+     *
+     * Es distinto del costo del procesador, cuya base SÍ es producto + envío:
+     * Mercado Pago cobra sobre todo lo que pasa por él, y esa base la define
+     * Mercado Pago, no nosotros.
+     *
+     * Este test existe para que, si alguien "arregla" el cálculo para que la
+     * comisión salga del bruto, se entere de que está cambiando el modelo de
+     * negocio y no corrigiendo un bug.
+     */
+    const { sellerToken, variantId } = await nuevaVarianteConStock(3);
+    const storeId = await tiendaDe(sellerToken);
+    await definirPolitica(sellerToken, storeId, {
+      shippingMode: 'FIXED_PRICE',
+      shippingFlatAmount: 350_000,
+      processorFeeMode: 'PASSED_TO_BUYER',
+    });
+
+    const comprador = await nuevoComprador();
+    const reservationId = await reservar(comprador.token, variantId);
+    const r = await crearOrden(comprador.token, reservationId);
+
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(r.body.platformFeeBps).toBe(600);
+
+    // 6 % de 890.000 = 53.400. NO de 1.316.756.
+    expect(r.body.platformFeeAmount).toBe(53_400);
+
+    // El vendedor se queda con el envío entero y con el recargo entero: los va
+    // a gastar en el correo y en Mercado Pago.
+    expect(r.body.sellerNetAmount).toBe((r.body.grossAmount as number) - 53_400);
+  });
+
+  it('cambiar la política después NO le cambia el total a quien ya compró', async () => {
+    /**
+     * Es el motivo entero de las fotos. Quien pagó $12.400 con envío incluido
+     * tiene que seguir viendo $12.400 con envío incluido para siempre, aunque
+     * mañana la tienda pase a retiro únicamente.
+     */
+    const { sellerToken, variantId } = await nuevaVarianteConStock(3);
+    const storeId = await tiendaDe(sellerToken);
+    await definirPolitica(sellerToken, storeId, {
+      shippingMode: 'FIXED_PRICE',
+      shippingFlatAmount: 350_000,
+      processorFeeMode: 'ABSORBED',
+    });
+
+    const comprador = await nuevoComprador();
+    const reservationId = await reservar(comprador.token, variantId);
+    const r = await crearOrden(comprador.token, reservationId);
+    const totalOriginal = r.body.grossAmount as number;
+
+    await definirPolitica(sellerToken, storeId, {
+      shippingMode: 'PICKUP_ONLY',
+      shippingFlatAmount: 0,
+      processorFeeMode: 'PASSED_TO_BUYER',
+    });
+
+    const releida = await call('GET', `/api/v1/orders/${r.body.id}`, { token: comprador.token });
+    expect(releida.status, JSON.stringify(releida.body)).toBe(200);
+    expect(releida.body.grossAmount).toBe(totalOriginal);
+    expect(releida.body.shippingAmount).toBe(350_000);
+    expect(releida.body.shippingModeSnapshot).toBe('FIXED_PRICE');
+    expect(releida.body.processorFeeModeSnapshot).toBe('ABSORBED');
+  });
+
+  describe('Definir la política', () => {
+    it('cobrar envío exige un monto', async () => {
+      const { sellerToken } = await nuevaVarianteConStock(1);
+      const storeId = await tiendaDe(sellerToken);
+
+      const r = await definirPolitica(sellerToken, storeId, {
+        shippingMode: 'FIXED_PRICE',
+        shippingFlatAmount: 0,
+        processorFeeMode: 'ABSORBED',
+      });
+
+      expect(r.status, JSON.stringify(r.body)).toBe(400);
+    });
+
+    it('no cobrar envío exige que no haya monto', async () => {
+      const { sellerToken } = await nuevaVarianteConStock(1);
+      const storeId = await tiendaDe(sellerToken);
+
+      const r = await definirPolitica(sellerToken, storeId, {
+        shippingMode: 'FREE',
+        shippingFlatAmount: 350_000,
+        processorFeeMode: 'ABSORBED',
+      });
+
+      expect(r.status, JSON.stringify(r.body)).toBe(400);
+    });
+
+    it('⛔ no se puede tocar la política de otra tienda', async () => {
+      const propia = await nuevaVarianteConStock(1);
+      const ajena = await nuevaVarianteConStock(1);
+      const storeAjena = await tiendaDe(ajena.sellerToken);
+
+      const r = await definirPolitica(propia.sellerToken, storeAjena, {
+        shippingMode: 'FREE',
+        shippingFlatAmount: 0,
+        processorFeeMode: 'ABSORBED',
+      });
+
+      // 404 y no 403: confirmar que la tienda existe ya es información.
+      expect(r.status, JSON.stringify(r.body)).toBe(404);
+    });
+
+    it('la vidriera pública muestra el envío antes del checkout', async () => {
+      const { sellerToken } = await nuevaVarianteConStock(1);
+      const storeId = await tiendaDe(sellerToken);
+      await definirPolitica(sellerToken, storeId, {
+        shippingMode: 'FIXED_OR_PICKUP',
+        shippingFlatAmount: 350_000,
+        shippingNote: 'Envíos los martes y jueves a CABA y GBA',
+        processorFeeMode: 'ABSORBED',
+      });
+
+      const tienda = await prisma.store.findUniqueOrThrow({ where: { id: storeId } });
+      const r = await call('GET', `/api/v1/stores/by-slug/${tienda.slug}`);
+
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+      expect(r.body.envio.costoEnvio).toBe(350_000);
+      expect(r.body.envio.permiteRetiro).toBe(true);
+      expect(r.body.envio.permiteEnvio).toBe(true);
+      expect(r.body.envio.etiquetaEnvio).toBe('Envío');
+      expect(r.body.envio.shippingNote).toBe('Envíos los martes y jueves a CABA y GBA');
+    });
   });
 });

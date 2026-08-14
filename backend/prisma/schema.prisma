@@ -758,6 +758,38 @@ enum StoreStatus {
   @@map("store_status")
 }
 
+/// Cómo cobra el envío una tienda. V1 manual, sin transportistas.
+enum ShippingMode {
+  /// El vendedor lo absorbe. El comprador ve "Envío gratis".
+  FREE
+  /// Un monto fijo, el mismo para todo el país.
+  FIXED_PRICE
+  /// No hay envío: se retira en persona.
+  PICKUP_ONLY
+  /// El comprador elige entre pagar el envío o retirar.
+  FIXED_OR_PICKUP
+
+  @@map("shipping_mode")
+}
+
+/// Quién paga el costo del procesador de pagos.
+///
+/// El costo es del vendedor por definición del negocio. Esto dice si lo
+/// descuenta de lo suyo o lo suma al total del comprador.
+///
+/// ⚠️ **Trasladarlo tiene un límite legal.** En Argentina hay medios y
+/// situaciones donde recargar por pagar con tarjeta no está permitido. La
+/// plataforma ofrece la opción; la responsabilidad de usarla donde corresponde
+/// es del vendedor, y así se le dice en la pantalla.
+enum ProcessorFeeMode {
+  /// Lo descuenta de su neto. El comprador paga producto + envío.
+  ABSORBED
+  /// Se le suma al comprador, cuando el medio lo permite.
+  PASSED_TO_BUYER
+
+  @@map("processor_fee_mode")
+}
+
 enum ProductStatus {
   DRAFT
   ACTIVE
@@ -868,6 +900,35 @@ model Store {
   coverUrl    String? @map("cover_url")
 
   status    StoreStatus @default(ACTIVE)
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // ENVÍO — V1 MANUAL
+  // ═══════════════════════════════════════════════════════════════════════
+  //
+  // El vendedor define su costo a mano. No hay cálculo por transportista
+  // todavía: cotizar contra un carrier necesita peso, volumen y origen, y
+  // pedirle eso a alguien que vende tejidos por Instagram es pedirle que
+  // abandone. Cuando exista la integración, este campo pasa a ser el respaldo.
+  //
+  // El comprador lo ve ANTES de pagar, siempre.
+  shippingMode  ShippingMode @default(FREE) @map("shipping_mode")
+  /// Cuánto cobra por el envío. Sólo aplica en `FIXED_PRICE` y `FIXED_OR_PICKUP`.
+  shippingFlatAmount Int @default(0) @map("shipping_flat_amount")
+  /// Aclaración del vendedor: "Envíos los martes", "Retiro por Palermo".
+  shippingNote String? @map("shipping_note")
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // COSTO DEL PROCESADOR
+  // ═══════════════════════════════════════════════════════════════════════
+  //
+  // El costo de Mercado Pago es del vendedor. Puede absorberlo o trasladarlo,
+  // siempre que el medio y la normativa lo permitan.
+  //
+  // ⚠️ La tasa REAL la informa Mercado Pago después de cobrar y depende del
+  // plazo de acreditación, el medio y el rubro. No se guarda un porcentaje
+  // acá: hacerlo sería inventar un número y mostrárselo a alguien como si
+  // fuera cierto. Lo que se guarda es quién lo paga.
+  processorFeeMode ProcessorFeeMode @default(ABSORBED) @map("processor_fee_mode")
   /// Tienda principal del vendedor. Hoy siempre hay exactamente una.
   isPrimary Boolean     @default(true) @map("is_primary")
 
@@ -1393,6 +1454,29 @@ model Order {
 
   itemsSubtotal  Int @map("items_subtotal")
   shippingAmount Int @default(0) @map("shipping_amount")
+
+  /// Recargo por el medio de pago, si el vendedor lo traslada.
+  ///
+  /// Distinto de `paymentProcessorFeeAmount`, que es lo que el procesador
+  /// COBRÓ de verdad y llega después. Este es lo que se le sumó al comprador,
+  /// cerrado antes de pagar.
+  processorSurchargeAmount Int @default(0) @map("processor_surcharge_amount")
+
+  /// Foto de cómo se cobró el envío. La tienda puede cambiar su política
+  /// mañana; este pedido tiene que seguir explicando por qué cobró lo que
+  /// cobró.
+  shippingModeSnapshot ShippingMode? @map("shipping_mode_snapshot")
+
+  /// Foto de quién paga el costo del procesador.
+  processorFeeModeSnapshot ProcessorFeeMode? @map("processor_fee_mode_snapshot")
+
+  /// Si esta compra se retira en persona.
+  ///
+  /// No se deduce de `shippingAmount == 0`: hay tiendas con envío gratis, y
+  /// confundir las dos cosas hace que el vendedor despache un paquete que la
+  /// otra persona está esperando ir a buscar, o al revés — que nadie despache
+  /// nada mientras el comprador espera en su casa.
+  pickupSelected Boolean @default(false) @map("pickup_selected")
   discountAmount Int @default(0) @map("discount_amount")
   /// Lo que paga el comprador.
   grossAmount    Int @map("gross_amount")

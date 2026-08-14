@@ -76,6 +76,46 @@ export type UpdateStoreDto = z.infer<typeof UpdateStoreSchema>;
 export const ChangeStoreSlugSchema = z.object({ slug: SlugSchema });
 export type ChangeStoreSlugDto = z.infer<typeof ChangeStoreSlugSchema>;
 
+/**
+ * Política de envío y de quién paga el medio de pago.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * ENDPOINT APARTE, IGUAL QUE EL SLUG
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * No va dentro de `PATCH /stores/:id` a propósito. Esto define **plata que se
+ * le va a cobrar a compradores reales** en todos los pedidos que vengan
+ * después. Un campo suelto en el formulario de "editar tienda" se toca sin
+ * pensar; una pantalla propia obliga a que la interfaz lo muestre entero, con
+ * el ejemplo del total que va a ver quien compre.
+ *
+ * Las validaciones duplican los CHECK de la base a propósito: acá se puede
+ * decir QUÉ está mal en castellano, y la base es la última línea de defensa
+ * para cualquier camino que no pase por este esquema.
+ */
+export const UpdateShippingPolicySchema = z
+  .object({
+    shippingMode: z.enum(['FREE', 'FIXED_PRICE', 'PICKUP_ONLY', 'FIXED_OR_PICKUP']),
+    /**
+     * En centavos, como todo el dinero del proyecto. El tope de un millón de
+     * pesos no es un límite de negocio: es que un cero de más en un formulario
+     * no termine en un pedido imposible de explicar.
+     */
+    shippingFlatAmount: z.coerce.number().int().min(0).max(100_000_000).default(0),
+    /** Texto libre del vendedor: zonas, demoras, días de entrega. */
+    shippingNote: z.string().trim().max(500).nullable().optional(),
+    processorFeeMode: z.enum(['ABSORBED', 'PASSED_TO_BUYER']),
+  })
+  .refine(
+    (v) =>
+      (v.shippingMode === 'FIXED_PRICE' || v.shippingMode === 'FIXED_OR_PICKUP') === (v.shippingFlatAmount > 0),
+    {
+      path: ['shippingFlatAmount'],
+      message: 'Si cobrás el envío tenés que poner un monto, y si no lo cobrás tiene que ser cero',
+    },
+  );
+export type UpdateShippingPolicyDto = z.infer<typeof UpdateShippingPolicySchema>;
+
 // ─── Productos ──────────────────────────────────────────────────────────────
 
 /**

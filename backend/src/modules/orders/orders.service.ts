@@ -21,6 +21,7 @@ import {
   verificarCodigo,
 } from './delivery-code';
 import { calcularPrecio, referenciaDeOrden, verificarCoherencia } from './pricing';
+import { costoDeEnvio, permiteRetiro, recargoAlComprador } from './shipping';
 
 /**
  * Órdenes.
@@ -86,6 +87,10 @@ const ORDER_SELECT = {
   currency: true,
   itemsSubtotal: true,
   shippingAmount: true,
+  processorSurchargeAmount: true,
+  shippingModeSnapshot: true,
+  processorFeeModeSnapshot: true,
+  pickupSelected: true,
   discountAmount: true,
   grossAmount: true,
   platformFeeBps: true,
@@ -159,6 +164,8 @@ export class OrdersService {
     buyerId: string;
     reservationId: string;
     addressId?: string;
+    /** Sólo se respeta si la tienda ofrece retiro. Ver `costoDeEnvio`. */
+    retiraEnPersona?: boolean;
   }): Promise<OrdenPublica> {
     const { buyerId, reservationId } = params;
 
@@ -201,6 +208,9 @@ export class OrdersService {
               select: {
                 id: true,
                 status: true,
+                shippingMode: true,
+                shippingFlatAmount: true,
+                processorFeeMode: true,
                 seller: { select: { id: true, status: true, displayName: true } },
               },
             },
@@ -238,9 +248,46 @@ export class OrdersService {
     // escribir: la base tiene los mismos CHECK, pero fallar acá permite decir
     // QUÉ no cierra en vez de devolver el nombre de una restricción.
     const unitPrice = variante.priceOverrideCents ?? producto.basePriceCents;
+
+    /**
+     * El envío y el recargo salen de la política de la tienda, no del cliente.
+     *
+     * Es la misma regla que el precio: si el cuerpo de la petición pudiera
+     * decir cuánto sale el envío, alguien compraría con envío negativo. Lo
+     * único que aporta quien compra es **si retira** —y sólo se respeta cuando
+     * la tienda ofrece esa opción—.
+     */
+    const politica = {
+      modo: tienda.shippingMode,
+      montoFijo: tienda.shippingFlatAmount,
+    };
+    const retira = params.retiraEnPersona === true;
+    const envio = costoDeEnvio(politica, retira);
+
+    const itemsSubtotal = unitPrice * reserva.quantity;
+
+    /**
+     * El recargo del procesador queda CERRADO acá.
+     *
+     * Si el costo real que informa Mercado Pago después resulta mayor, la
+     * diferencia la absorbe el vendedor. Cambiar el total después de que
+     * alguien aceptó pagarlo no es una opción — ni técnica ni legalmente.
+     */
+    const recargo = recargoAlComprador({
+      modo: tienda.processorFeeMode,
+      itemsSubtotal,
+      envio,
+      bps: env.PROCESSOR_FEE_ESTIMATE_BPS,
+    });
+
     const precio = calcularPrecio({
       unitPrice,
       quantity: reserva.quantity,
+      shippingAmount: envio,
+      // Va en su propio campo, no sumado al envío: el checkout tiene que
+      // mostrar una línea por concepto. Meterlo adentro del envío haría que el
+      // comprador viera "Envío $4.200" cuando el vendedor cobra $3.500.
+      processorSurchargeAmount: recargo,
       platformFeeBps: env.VENDOX_PLATFORM_FEE_BPS,
     });
 
@@ -265,6 +312,12 @@ export class OrdersService {
             reservationId,
             status: 'PENDING_PAYMENT',
             ...precio,
+            // Fotos de la política con la que se cobró. La tienda puede
+            // cambiarla mañana; este pedido tiene que seguir explicando por qué
+            // cobró lo que cobró.
+            shippingModeSnapshot: tienda.shippingMode,
+            processorFeeModeSnapshot: tienda.processorFeeMode,
+            pickupSelected: retira && permiteRetiro(tienda.shippingMode),
             // Fotos: nada de esto se vuelve a leer de su tabla original.
             shippingAddress: direccion,
             buyerSnapshot: {

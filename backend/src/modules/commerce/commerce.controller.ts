@@ -27,6 +27,7 @@ import {
   ReorderImagesSchema,
   UpdateProductSchema,
   UpdateSellerSchema,
+  UpdateShippingPolicySchema,
   UpdateStoreSchema,
   UpdateVariantSchema,
   type ChangeStoreSlugDto,
@@ -37,6 +38,7 @@ import {
   type ReorderImagesDto,
   type UpdateProductDto,
   type UpdateSellerDto,
+  type UpdateShippingPolicyDto,
   type UpdateStoreDto,
   type UpdateVariantDto,
   DefinirOpcionesSchema,
@@ -128,6 +130,20 @@ export class CommerceController {
     @Body(new ZodValidationPipe(ChangeStoreSlugSchema)) dto: ChangeStoreSlugDto,
   ) {
     return this.sellers.changeStoreSlug(user.id, id, dto);
+  }
+
+  /**
+   * Endpoint aparte: define plata que se le cobra a compradores reales.
+   *
+   * Ver el comentario largo en `UpdateShippingPolicySchema`.
+   */
+  @Patch('stores/:id/shipping')
+  updateShippingPolicy(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(UpdateShippingPolicySchema)) dto: UpdateShippingPolicyDto,
+  ) {
+    return this.sellers.updateShippingPolicy(user.id, id, dto);
   }
 
   @Public()

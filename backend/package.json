@@ -37,7 +37,8 @@
     "jobs:una-vez": "node dist/jobs-once.js",
     "dev:worker": "nest start --watch --entryFile main-worker",
     "migrate:deploy": "prisma migrate deploy",
-    "admin:create": "tsx scripts/crear-admin.ts"
+    "admin:create": "tsx scripts/crear-admin.ts",
+    "db:generate": "node scripts/prisma-generate-forzado.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1110.0",

@@ -103,6 +103,7 @@ export class OrdersController {
       buyerId: user.id,
       reservationId: dto.reservationId,
       addressId: dto.addressId,
+      retiraEnPersona: dto.retiraEnPersona,
     });
   }
 

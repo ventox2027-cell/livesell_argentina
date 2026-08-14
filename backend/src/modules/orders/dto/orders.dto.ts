@@ -25,6 +25,15 @@ export const CreateOrderSchema = z.object({
   reservationId: z.string().min(1),
   /** Cuál de sus direcciones. Sin esto, la principal. */
   addressId: z.string().min(1).optional(),
+  /**
+   * Si la persona retira en vez de recibir.
+   *
+   * ⚠️ Es lo ÚNICO del envío que aporta quien compra, y el backend sólo lo
+   * respeta si la tienda ofrece retiro. Si el modo es `FIXED_PRICE`, mandar
+   * `true` no evita el costo: sería un campo del cuerpo que hace despachar un
+   * paquete que nadie pagó.
+   */
+  retiraEnPersona: z.boolean().optional(),
 });
 export type CreateOrderDto = z.infer<typeof CreateOrderSchema>;
 

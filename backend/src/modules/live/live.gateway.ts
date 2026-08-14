@@ -1,4 +1,4 @@
-import { Logger, OnModuleDestroy } from '@nestjs/common';
+import { Logger, OnApplicationShutdown } from '@nestjs/common';
 import {
   ConnectedSocket,
   MessageBody,
@@ -120,7 +120,7 @@ const MensajeSchema = z.object({
   // por long-polling agrega una superficie que nadie va a usar.
   transports: ['websocket'],
 })
-export class LiveGateway implements OnGatewayConnection, OnGatewayDisconnect, OnModuleDestroy {
+export class LiveGateway implements OnGatewayConnection, OnGatewayDisconnect, OnApplicationShutdown {
   private readonly logger = new Logger(LiveGateway.name);
 
   @WebSocketServer()
@@ -164,7 +164,35 @@ export class LiveGateway implements OnGatewayConnection, OnGatewayDisconnect, On
     }
   }
 
-  async onModuleDestroy(): Promise<void> {
+  /**
+   * Las conexiones del adaptador se cierran ÚLTIMAS.
+   *
+   * ═══════════════════════════════════════════════════════════════════════
+   * POR QUÉ `onApplicationShutdown` Y NO `onModuleDestroy`
+   * ═══════════════════════════════════════════════════════════════════════
+   *
+   * Nest apaga en este orden:
+   *
+   *     onModuleDestroy  →  beforeApplicationShutdown
+   *                      →  CIERRA EL SERVIDOR (y con él, Socket.IO)
+   *                      →  onApplicationShutdown
+   *
+   * Al cerrar Socket.IO, el adaptador de Redis hace `unsubscribe` y
+   * `punsubscribe` sobre estas dos conexiones. Si acá las cerráramos en
+   * `onModuleDestroy`, esos comandos llegarían a un socket ya cerrado y
+   * `ioredis` rechazaría con `Error: Connection is closed.`.
+   *
+   * Nadie las captura —salen de adentro del `close()` del adaptador— así que
+   * son **rechazos no manejados**. En los tests eso hacía que Vitest terminara
+   * con código 1 con las 818 pruebas en verde, y en producción son
+   * excepciones sueltas durante el apagado, justo cuando el proceso está
+   * drenando peticiones y una excepción no manejada lo puede matar antes de
+   * tiempo.
+   *
+   * Cerrarlas después del servidor invierte la dependencia: para cuando esto
+   * corre, el adaptador ya se dio de baja y no queda nadie que las use.
+   */
+  async onApplicationShutdown(): Promise<void> {
     await this.publicador?.quit().catch(() => this.publicador?.disconnect());
     await this.suscriptor?.quit().catch(() => this.suscriptor?.disconnect());
   }

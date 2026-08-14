@@ -327,6 +327,18 @@ export const envSchema = z
      * En puntos básicos y no en porcentaje decimal para poder expresar 6,5 %
      * sin coma flotante.
      */
+    /**
+     * Estimacion del costo de Mercado Pago, en puntos basicos.
+     *
+     * La tasa real depende del plazo de acreditacion, del medio y del rubro, y
+     * MP la informa despues de cobrar. Esto se usa SOLO para dos cosas, las dos
+     * declaradas como aproximadas: el recargo al comprador cuando el vendedor
+     * lo traslada -que tiene que ser un numero cerrado antes de pagar- y el
+     * neto estimado del panel del vendedor.
+     *
+     * Configurable para que el dia que se negocie otra tasa no se toque codigo.
+     */
+    PROCESSOR_FEE_ESTIMATE_BPS: z.coerce.number().int().min(0).max(2000).default(619),
     VENDOX_PLATFORM_FEE_BPS: z.coerce.number().int().min(0).max(5_000).default(600),
 
     /**
