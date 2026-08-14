@@ -332,6 +332,24 @@ void main() {
       expect(p.variantePara({})!.id, 'var_01KZZW0TPV7NE42V3YQ1WD35DG');
     });
 
+    test('⛔ la variante interna NO se le muestra a quien compra', () {
+      /**
+       * En el esquema, `title` es `@default("Default")`.
+       *
+       * Un producto sin talles ni colores tiene una única variante con ese
+       * título, y la app lo mostraba tal cual: la hoja de reserva decía
+       * "Campera de lana · Default". Apareció probando en el teléfono.
+       *
+       * La señal no es el texto —un vendedor podría escribir esa palabra— sino
+       * que la variante no tenga valores de opción: si no hay nada que elegir,
+       * no hay nada que nombrar.
+       */
+      final p = DetalleDeProducto.fromJson(real);
+
+      expect(p.variantes.first.titulo, 'Default'); // sigue llegando del backend
+      expect(p.variantes.first.etiqueta, isNull); // pero no se muestra
+    });
+
     test('⛔ un cuerpo de error NO se parsea como producto vendible', () {
       /**
        * `ApiClient` no lanza con 4xx: usa `validateStatus: s < 500` para poder
@@ -420,6 +438,13 @@ void main() {
       expect(p.variantes.firstWhere((v) => v.id == 'var_s_negro').disponible, 4);
       expect(p.variantes.firstWhere((v) => v.id == 'var_m_negro').disponible, 0);
       expect(p.variantes.firstWhere((v) => v.id == 'var_m_negro').agotada, isTrue);
+    });
+
+    test('una variante con opciones SÍ muestra su nombre', () {
+      // "S / Negro" es una elección real y hay que mostrarla: es lo que le
+      // confirma a la persona qué está por comprar.
+      final p = DetalleDeProducto.fromJson(json);
+      expect(p.variantes.firstWhere((v) => v.id == 'var_s_negro').etiqueta, 'S / Negro');
     });
 
     test('cada variante trae su propio precio ya resuelto', () {

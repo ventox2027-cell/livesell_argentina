@@ -356,6 +356,37 @@ describe('Vivo — producto destacado', () => {
     expect(vista.body.destacado.precioCentavos).toBe(890000);
   });
 
+  it('⛔ la variante interna NO viaja como nombre al comprador', async () => {
+    /**
+     * En el esquema, `title` es `@default("Default")`.
+     *
+     * Un producto sin talles ni colores tiene una única variante con ese
+     * título, y la tarjeta del producto destacado lo mostraba al lado del
+     * precio: "Campera de lana · Default", en la cara de quien está por
+     * comprar. Apareció probando en un teléfono real.
+     *
+     * La señal de que la variante es interna no es el texto —un vendedor podría
+     * escribir esa palabra— sino que **no tenga valores de opción**: si no hay
+     * nada que elegir, no hay nada que nombrar.
+     */
+    const v = await nuevoVendedorConProducto();
+    const c = await call('POST', '/api/v1/live', {
+      token: v.token,
+      body: { title: 'Vivo', productIds: [v.productId] },
+    });
+    await call('POST', `/api/v1/live/${c.body.id}/start`, { token: v.token });
+    await call('POST', `/api/v1/live/${c.body.id}/feature`, {
+      token: v.token,
+      body: { variantId: v.variantId },
+    });
+
+    const espectador = await nuevoUsuario();
+    const vista = await call('GET', `/api/v1/live/${c.body.id}`, { token: espectador.token });
+
+    expect(vista.body.destacado.variante).toBeNull();
+    expect(JSON.stringify(vista.body.destacado)).not.toContain('Default');
+  });
+
   it('dejar de destacar devuelve null, no se rompe', async () => {
     // `null` significa "dejó de destacar", no "no hay producto". La app tiene
     // que poder ocultar el panel de compra sin adivinar.

@@ -160,7 +160,9 @@ class _VariantSheetState extends ConsumerState<VariantSheet> {
       productVariantId: variante.id,
       nombreProducto: producto.nombre,
       precio: plata(variante.precioCentavos),
-      variante: variante.titulo.isEmpty ? null : variante.titulo,
+      // `etiqueta` es null cuando la variante es la interna del producto: sin
+      // opciones no hay nada que nombrar, y "Default" no le dice nada a nadie.
+      variante: variante.etiqueta,
     );
 
     if (!mounted) return;

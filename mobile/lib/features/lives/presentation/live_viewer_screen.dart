@@ -282,6 +282,10 @@ class _LiveViewerScreenState extends ConsumerState<LiveViewerScreen> {
       teclado: teclado,
       abajo: abajo,
       hayProducto: live?.destacado != null,
+      // Para que el chat no trepe por encima del encabezado en pantallas
+      // chicas: su alto es un tope, recortado por lo que quede libre.
+      altoPantalla: MediaQuery.sizeOf(context).height,
+      arriba: MediaQuery.paddingOf(context).top,
     );
 
     return Scaffold(

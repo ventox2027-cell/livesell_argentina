@@ -578,6 +578,7 @@ export class LiveService {
       where: { id: variantId },
       include: {
         inventory: true,
+        options: { select: { optionValueId: true } },
         product: { include: { images: { where: { position: 0 }, take: 1 } } },
       },
     });
@@ -587,7 +588,19 @@ export class LiveService {
       variantId: v.id,
       productId: v.productId,
       nombre: v.product.name,
-      variante: v.title,
+      /**
+       * `null` cuando la variante es la interna del producto.
+       *
+       * En el esquema `title` es `@default("Default")`, así que un producto sin
+       * talles ni colores tiene una única variante llamada así. La tarjeta del
+       * producto destacado lo mostraba tal cual, al lado del precio, y decía
+       * "Campera de lana · Default" en la cara de quien está por comprar.
+       *
+       * La señal no es el texto —un vendedor podría escribir esa palabra— sino
+       * que la variante **no tenga valores de opción**: si no hay nada que
+       * elegir, no hay nada que nombrar.
+       */
+      variante: v.options.length === 0 ? null : v.title,
       imagenUrl: v.product.images[0]?.url ?? null,
       precioCentavos: v.priceOverrideCents ?? v.product.basePriceCents,
       disponible: v.inventory ? v.inventory.onHand - v.inventory.reserved : null,

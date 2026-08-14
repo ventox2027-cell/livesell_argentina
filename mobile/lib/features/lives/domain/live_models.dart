@@ -364,6 +364,22 @@ class VarianteDeProducto {
   final String? sku;
 
   bool get agotada => disponible <= 0;
+
+  /// El nombre de la variante **para mostrarle a quien compra**, o `null`.
+  ///
+  /// ═══════════════════════════════════════════════════════════════════════════
+  /// "DEFAULT" NO ES UN NOMBRE, ES UN VALOR POR OMISIÓN DE LA BASE
+  /// ═══════════════════════════════════════════════════════════════════════════
+  ///
+  /// En el esquema, `title` es `@default("Default")`. Un producto sin talles ni
+  /// colores tiene una única variante implícita con ese título, y la app se lo
+  /// mostraba tal cual: en la hoja de reserva decía "Campera de lana ·
+  /// **Default**", que no significa nada para quien está comprando.
+  ///
+  /// La señal de que una variante es interna **no es que se llame "Default"** —
+  /// un vendedor podría escribir esa palabra— sino que **no tiene valores de
+  /// opción**. Si no hay nada que elegir, no hay nada que nombrar.
+  String? get etiqueta => valoresDeOpcion.isEmpty || titulo.trim().isEmpty ? null : titulo;
 }
 
 class DetalleDeProducto {

@@ -93,10 +93,26 @@ class MedidasDelVivo {
 ///   2. El producto queda arriba del composer y **nunca se mueve hacia abajo**.
 ///   3. El chat cede: se achica y sube para no pisar nada.
 ///   4. El vendedor se oculta mientras se escribe.
+/// Alto máximo del chat en reposo y con el teclado abierto.
+///
+/// Son topes, no valores fijos: el alto real se recorta al espacio que quede.
+const double altoChatEnReposo = 160;
+const double altoChatEscribiendo = 120;
+
+/// Lo que hay que dejar libre arriba del chat.
+///
+/// El encabezado con el estado y los espectadores, más aire para que el primer
+/// mensaje no arranque pegado a él. Sin este margen, en un teléfono chico el
+/// chat trepa por encima del encabezado y los mensajes viejos se leen sobre los
+/// contadores.
+const double _respiroSuperior = 96;
+
 MedidasDelVivo medirZonaInferior({
   required double teclado,
   required double abajo,
   required bool hayProducto,
+  double altoPantalla = double.infinity,
+  double arriba = 0,
 }) {
   final tecladoAbierto = teclado > 0;
 
@@ -120,12 +136,31 @@ MedidasDelVivo medirZonaInferior({
       ? producto + altoProducto
       : composer + altoComposer;
 
+  final baseDelChat = techoDeLaZonaFija + aire;
+
+  /**
+   * El alto del chat es un TOPE recortado por el espacio que queda.
+   *
+   * Antes eran 160 px fijos. En un teléfono chico —o con el teclado abierto y
+   * un producto destacado— la zona de abajo se come tanto alto que el chat
+   * trepaba por encima del encabezado: los mensajes viejos quedaban sobre el
+   * contador de espectadores y el botón de cerrar.
+   *
+   * `altoPantalla` es infinito por omisión para que quien no lo pase obtenga el
+   * comportamiento de siempre; la pantalla sí lo pasa.
+   */
+  final deseado = tecladoAbierto ? altoChatEscribiendo : altoChatEnReposo;
+  final disponible = altoPantalla.isFinite
+      ? altoPantalla - arriba - _respiroSuperior - baseDelChat
+      : deseado;
+
   return MedidasDelVivo(
-    chat: techoDeLaZonaFija + aire,
+    chat: baseDelChat,
     // El chat es lo único que cede espacio. Con el teclado abierto queda menos
     // pantalla libre, y mostrar menos mensajes es preferible a taparlos con el
-    // composer.
-    altoDelChat: tecladoAbierto ? 120 : 160,
+    // composer. Nunca negativo: en una pantalla imposible se muestra nada, no
+    // una altura al revés que reventaría el layout.
+    altoDelChat: _entre(disponible, 0, deseado),
     producto: producto,
     composer: composer,
     vendedor: abajo + 4,
@@ -134,3 +169,4 @@ MedidasDelVivo medirZonaInferior({
 }
 
 double _mayor(double a, double b) => a > b ? a : b;
+double _entre(double v, double min, double max) => v < min ? min : (v > max ? max : v);
