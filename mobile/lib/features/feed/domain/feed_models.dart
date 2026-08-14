@@ -16,6 +16,8 @@ class PublicacionFeed {
     required this.vendedor,
     required this.tiendaSlug,
     required this.tiendaNombre,
+    this.vendedorId = '',
+    this.storeId = '',
     this.descripcion,
     this.precioTachadoCentavos,
     this.portada,
@@ -46,6 +48,12 @@ class PublicacionFeed {
       // Si el backend dejara de mandar la tienda, el feed no puede mostrar una
       // publicación sin dueño: mejor un texto neutro que un hueco.
       vendedor: seller?['displayName'] as String? ?? store?['name'] as String? ?? 'Vendedor',
+      // Los ids ya venían en la respuesta y el modelo los tiraba. Sin ellos el
+      // feed sólo podía mostrar el NOMBRE del vendedor: no se podía abrir su
+      // perfil ni seguirlo de verdad, y por eso el botón "Seguir" del feed era
+      // un booleano local que se olvidaba al cerrar la app.
+      vendedorId: seller?['id'] as String? ?? '',
+      storeId: store?['id'] as String? ?? '',
       tiendaSlug: store?['slug'] as String? ?? '',
       tiendaNombre: store?['name'] as String? ?? '',
       descripcion: j['description'] as String?,
@@ -67,6 +75,14 @@ class PublicacionFeed {
   final String nombre;
   final int precioCentavos;
   final String vendedor;
+
+  /// Para abrir su perfil y seguirlo. Vacío si el backend no lo mandó, y ahí
+  /// la fila del vendedor no es tocable: mejor que abrir un perfil en blanco.
+  final String vendedorId;
+
+  /// Para abrir el catálogo de la tienda.
+  final String storeId;
+
   final String tiendaSlug;
   final String tiendaNombre;
   final String? descripcion;

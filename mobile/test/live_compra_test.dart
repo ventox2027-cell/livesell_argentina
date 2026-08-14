@@ -172,37 +172,39 @@ void main() {
   });
 
   group('El selector de variantes', () {
+    // La forma que arma `detalleParaComprar` en `stores.service.ts`, que es la
+    // que devuelve `GET /catalog/products/:id`.
     final producto = DetalleDeProducto.fromJson({
       'id': 'prd_x',
-      'name': 'Remera lisa',
-      'basePriceCents': 1500000,
-      'images': <dynamic>[],
-      'options': [
+      'nombre': 'Remera lisa',
+      'precioCentavos': 1500000,
+      'moneda': 'ARS',
+      'imagenes': <dynamic>[],
+      'ejes': [
         {
           'id': 'opt_talle',
-          'name': 'Talle',
-          'values': [
-            {'id': 'ov_s', 'value': 'S'},
-            {'id': 'ov_m', 'value': 'M'},
+          'nombre': 'Talle',
+          'valores': [
+            {'id': 'ov_s', 'valor': 'S'},
+            {'id': 'ov_m', 'valor': 'M'},
           ],
         },
       ],
-      'variants': [
+      'variantes': [
         {
           'id': 'var_s',
-          'title': 'S',
-          'inventory': {'onHand': 4, 'reserved': 0},
-          'options': [
-            {'optionValueId': 'ov_s'},
-          ],
+          'titulo': 'S',
+          'precioCentavos': 1500000,
+          'disponible': 4,
+          'valoresDeOpcion': ['ov_s'],
         },
         {
           'id': 'var_m',
-          'title': 'M',
-          'inventory': {'onHand': 2, 'reserved': 2},
-          'options': [
-            {'optionValueId': 'ov_m'},
-          ],
+          'titulo': 'M',
+          'precioCentavos': 1500000,
+          // Agotada a propósito: es la que tiene que verse tachada.
+          'disponible': 0,
+          'valoresDeOpcion': ['ov_m'],
         },
       ],
     });

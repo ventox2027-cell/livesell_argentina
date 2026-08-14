@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -6,6 +8,8 @@ import '../../../core/design/tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../auth/state/auth_providers.dart';
 import '../../inventory/presentation/reserve_sheet.dart';
+import '../../lives/data/live_api.dart';
+import '../../lives/presentation/seller_profile_screen.dart';
 import '../../seller/presentation/seller_home_screen.dart';
 import '../data/feed_repository.dart';
 import '../domain/feed_models.dart';
@@ -228,38 +232,60 @@ class _InfoPublicacion extends StatelessWidget {
       children: [
         Row(
           children: [
-            CircleAvatar(
-              radius: 16,
-              backgroundColor: AppColor.superficieAlta,
-              backgroundImage: datos.avatarUrl == null
-                  ? null
-                  : CachedNetworkImageProvider(datos.avatarUrl!),
-              child: datos.avatarUrl != null
-                  ? null
-                  : Text(
-                      datos.vendedor.characters.first.toUpperCase(),
-                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
-                    ),
-            ),
-            const SizedBox(width: Gap.sm),
+            // Toda la identidad del vendedor abre su perfil. El objetivo de
+            // toque va sobre el avatar y el nombre juntos, no sobre el nombre
+            // solo: un texto de 15 px es un blanco chico para un pulgar.
             Flexible(
-              child: Text(
-                datos.vendedor,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w700,
-                  shadows: [Shadow(color: Colors.black54, blurRadius: 8)],
+              child: GestureDetector(
+                onTap: datos.vendedorId.isEmpty
+                    ? null
+                    : () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => SellerProfileScreen(sellerId: datos.vendedorId),
+                          ),
+                        ),
+                behavior: HitTestBehavior.opaque,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    CircleAvatar(
+                      radius: 16,
+                      backgroundColor: AppColor.superficieAlta,
+                      backgroundImage: datos.avatarUrl == null
+                          ? null
+                          : CachedNetworkImageProvider(datos.avatarUrl!),
+                      child: datos.avatarUrl != null
+                          ? null
+                          : Text(
+                              datos.vendedor.characters.first.toUpperCase(),
+                              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+                            ),
+                    ),
+                    const SizedBox(width: Gap.sm),
+                    Flexible(
+                      child: Text(
+                        datos.vendedor,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          shadows: [Shadow(color: Colors.black54, blurRadius: 8)],
+                        ),
+                      ),
+                    ),
+                    if (datos.verificado) ...[
+                      const SizedBox(width: 4),
+                      // Identidad verificada. NO dice nada de reputación: eso
+                      // se ve en el perfil, con su propia insignia.
+                      const Icon(Icons.verified_rounded, size: 15, color: AppColor.acento),
+                    ],
+                  ],
                 ),
               ),
             ),
-            if (datos.verificado) ...[
-              const SizedBox(width: 4),
-              const Icon(Icons.verified_rounded, size: 15, color: AppColor.acento),
-            ],
             const SizedBox(width: Gap.sm),
-            const _BotonSeguir(),
+            if (datos.vendedorId.isNotEmpty) _BotonSeguir(sellerId: datos.vendedorId),
           ],
         ),
         if (datos.descripcion != null && datos.descripcion!.isNotEmpty) ...[
@@ -282,34 +308,88 @@ class _InfoPublicacion extends StatelessWidget {
   }
 }
 
-class _BotonSeguir extends StatefulWidget {
-  const _BotonSeguir();
+/// Seguir a un vendedor desde el feed.
+///
+/// ─── Antes era un booleano local, y eso era una mentira ───
+///
+/// El botón alternaba un `bool` en memoria: se ponía en "Siguiendo", no
+/// mandaba nada al servidor, y al volver a abrir la app decía "Seguir" otra
+/// vez. La persona creía que iba a recibir avisos de los vivos de ese vendedor
+/// y no iba a recibir ninguno.
+///
+/// Ahora el estado sale del backend y el contador lo devuelve él. Ver
+/// `stores.service.ts`: el follow es idempotente —un P2002 se trata como éxito—
+/// así que tocar dos veces no rompe nada.
+class _BotonSeguir extends ConsumerStatefulWidget {
+  const _BotonSeguir({required this.sellerId});
+
+  final String sellerId;
 
   @override
-  State<_BotonSeguir> createState() => _BotonSeguirState();
+  ConsumerState<_BotonSeguir> createState() => _BotonSeguirState();
 }
 
-class _BotonSeguirState extends State<_BotonSeguir> {
-  bool _siguiendo = false;
+class _BotonSeguirState extends ConsumerState<_BotonSeguir> {
+  /// `null` mientras no se sabe. El botón no se dibuja hasta saberlo: mostrar
+  /// "Seguir" y que dos segundos después cambie solo a "Siguiendo" se ve como
+  /// que la app hizo algo que nadie pidió.
+  bool? _siguiendo;
+  bool _enviando = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_cargar());
+  }
+
+  Future<void> _cargar() async {
+    try {
+      final perfil = await ref.read(liveApiProvider).perfil(widget.sellerId);
+      if (mounted) setState(() => _siguiendo = perfil.loSigo ?? false);
+    } catch (_) {
+      // Sin dato no se dibuja el botón. Es preferible a mostrar uno que
+      // miente sobre un estado que no pudimos leer.
+    }
+  }
+
+  Future<void> _alternar() async {
+    if (_enviando) return;
+    setState(() => _enviando = true);
+
+    final api = ref.read(liveApiProvider);
+    try {
+      final r = _siguiendo == true
+          ? await api.dejarDeSeguir(widget.sellerId)
+          : await api.seguir(widget.sellerId);
+      if (mounted) setState(() => _siguiendo = r.siguiendo);
+    } catch (_) {
+      // El estado no cambia: mejor que mostrar "Siguiendo" sobre algo que falló.
+    } finally {
+      if (mounted) setState(() => _enviando = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    final siguiendo = _siguiendo;
+    if (siguiendo == null) return const SizedBox.shrink();
+
     return GestureDetector(
-      onTap: () => setState(() => _siguiendo = !_siguiendo),
+      onTap: _enviando ? null : () => unawaited(_alternar()),
       child: AnimatedContainer(
         duration: Duraciones.rapida,
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
         decoration: BoxDecoration(
-          color: _siguiendo ? Colors.transparent : AppColor.acento,
-          border: Border.all(color: _siguiendo ? AppColor.textoSuave : AppColor.acento),
+          color: siguiendo ? Colors.transparent : AppColor.acento,
+          border: Border.all(color: siguiendo ? AppColor.textoSuave : AppColor.acento),
           borderRadius: BorderRadius.circular(Redondeo.sm),
         ),
         child: Text(
-          _siguiendo ? 'Siguiendo' : 'Seguir',
+          siguiendo ? 'Siguiendo' : 'Seguir',
           style: TextStyle(
             fontSize: 12,
             fontWeight: FontWeight.w700,
-            color: _siguiendo ? AppColor.textoSuave : Colors.white,
+            color: siguiendo ? AppColor.textoSuave : Colors.white,
           ),
         ),
       ),

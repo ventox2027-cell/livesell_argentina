@@ -377,62 +377,62 @@ class DetalleDeProducto {
     this.descripcion,
   });
 
-  /// Lee la respuesta de `GET /products/:id`.
+  /// Lee la respuesta de `GET /catalog/products/:id`.
   ///
-  /// ─── Por qué se aplanan las opciones acá ───
+  /// ═══════════════════════════════════════════════════════════════════════════
+  /// NO ES `GET /products/:id`
+  /// ═══════════════════════════════════════════════════════════════════════════
   ///
-  /// El backend devuelve el árbol completo —opciones, valores, variantes y qué
-  /// valor tiene cada variante— porque es lo que necesita el editor del
-  /// vendedor. El comprador sólo necesita "estos son los talles, éste es el que
-  /// hay". Aplanarlo en el modelo evita que cada pantalla vuelva a recorrer el
-  /// árbol y llegue a conclusiones distintas.
+  /// Aquél es el endpoint del VENDEDOR: resuelve el producto por dueño y le
+  /// responde `SELLER_NOT_FOUND` a cualquiera que no tenga tienda. Este modelo
+  /// lo leía, así que un comprador real abría el selector de talles y veía un
+  /// panel vacío con precio $0,00.
+  ///
+  /// El error no saltó a la vista porque `ApiClient` no lanza con 4xx —usa
+  /// `validateStatus: s < 500` para poder reintentar tras refrescar el token— y
+  /// acá todo se lee a la defensiva: el cuerpo del error entró por este
+  /// `fromJson` y salió un producto sin nombre, sin precio y sin variantes.
+  ///
+  /// ─── El disponible ya viene calculado ───
+  ///
+  /// Antes se hacía `onHand - reserved` en la app. Ahora lo manda el servidor,
+  /// que es la regla del proyecto: la app no calcula disponibilidad. Y de paso
+  /// `onHand` y `reserved` —cuánto tiene el vendedor y cuánto está apartado—
+  /// dejan de viajar a quien compra, que no tiene por qué verlos.
   factory DetalleDeProducto.fromJson(Map<String, dynamic> j) {
-    final opciones = j['options'] as List<dynamic>? ?? const [];
-    final variantesJson = j['variants'] as List<dynamic>? ?? const [];
-    final imagenes = j['images'] as List<dynamic>? ?? const [];
-
-    final ejes = opciones.map((o) {
+    final ejes = (j['ejes'] as List<dynamic>? ?? const []).map((o) {
       final op = o as Map<String, dynamic>;
-      final valores = (op['values'] as List<dynamic>? ?? const [])
+      final valores = (op['valores'] as List<dynamic>? ?? const [])
           .map((v) {
             final vv = v as Map<String, dynamic>;
-            return (id: vv['id'] as String? ?? '', valor: vv['value'] as String? ?? '');
+            return (id: vv['id'] as String? ?? '', valor: vv['valor'] as String? ?? '');
           })
           .toList();
-      return EjeDeVariacion(nombre: op['name'] as String? ?? '', valores: valores);
+      return EjeDeVariacion(nombre: op['nombre'] as String? ?? '', valores: valores);
     }).toList();
 
-    final variantes = variantesJson.map((v) {
+    final variantes = (j['variantes'] as List<dynamic>? ?? const []).map((v) {
       final vv = v as Map<String, dynamic>;
-      final inv = vv['inventory'] as Map<String, dynamic>?;
-      final onHand = (inv?['onHand'] as num?)?.toInt() ?? 0;
-      final reserved = (inv?['reserved'] as num?)?.toInt() ?? 0;
-
       return VarianteDeProducto(
         id: vv['id'] as String? ?? '',
-        titulo: vv['title'] as String? ?? '',
-        sku: vv['sku'] as String?,
-        precioCentavos: (vv['priceOverrideCents'] as num?)?.toInt() ??
-            (j['basePriceCents'] as num?)?.toInt() ??
-            0,
-        // El disponible se calcula acá y no se pide al backend como campo:
-        // siempre es derivado, y una tercera fuente se puede desincronizar.
-        disponible: onHand - reserved,
-        valoresDeOpcion: (vv['options'] as List<dynamic>? ?? const [])
-            .map((x) => (x as Map<String, dynamic>)['optionValueId'] as String? ?? '')
+        titulo: vv['titulo'] as String? ?? '',
+        precioCentavos: (vv['precioCentavos'] as num?)?.toInt() ?? 0,
+        disponible: (vv['disponible'] as num?)?.toInt() ?? 0,
+        valoresDeOpcion: (vv['valoresDeOpcion'] as List<dynamic>? ?? const [])
+            .map((x) => x as String? ?? '')
             .where((s) => s.isNotEmpty)
             .toList(),
       );
     }).toList();
 
+    final imagenes = j['imagenes'] as List<dynamic>? ?? const [];
+
     return DetalleDeProducto(
       id: j['id'] as String? ?? '',
-      nombre: j['name'] as String? ?? '',
-      descripcion: j['description'] as String?,
-      precioBaseCentavos: (j['basePriceCents'] as num?)?.toInt() ?? 0,
-      imagenUrl: imagenes.isEmpty
-          ? null
-          : (imagenes.first as Map<String, dynamic>)['url'] as String?,
+      nombre: j['nombre'] as String? ?? '',
+      descripcion: j['descripcion'] as String?,
+      precioBaseCentavos: (j['precioCentavos'] as num?)?.toInt() ?? 0,
+      imagenUrl: imagenes.isEmpty ? null : imagenes.first as String?,
       ejes: ejes,
       variantes: variantes,
     );

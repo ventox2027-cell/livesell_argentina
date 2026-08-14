@@ -88,10 +88,15 @@ beforeEach(async () => {
   if (claves.length > 0) await redis.client.del(...claves);
 });
 
-async function call(method: string, url: string, opts: { body?: unknown; token?: string } = {}) {
+async function call(
+  method: string,
+  url: string,
+  opts: { body?: unknown; token?: string; idempotencyKey?: string } = {},
+) {
   const headers: Record<string, string> = {};
   if (opts.body !== undefined) headers['content-type'] = 'application/json';
   if (opts.token) headers.authorization = `Bearer ${opts.token}`;
+  if (opts.idempotencyKey) headers['idempotency-key'] = opts.idempotencyKey;
 
   const res = await (app as NestFastifyApplication)
     .getHttpAdapter()
@@ -474,6 +479,138 @@ describe('Horarios', () => {
       body: { modo: 'ALWAYS_OPEN', franjas: [] },
     });
     expect(r.status).toBe(404);
+  });
+});
+
+/**
+ * El catálogo y el detalle que ve QUIEN COMPRA.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * NO HABÍA NINGÚN TEST DE ESTO, Y SE NOTÓ
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * La app pedía el detalle de producto a `GET /products/:id`, que es del
+ * VENDEDOR: resuelve por dueño y contesta `SELLER_NOT_FOUND` a cualquiera que
+ * no tenga tienda. O sea que el selector de talles **nunca funcionó para un
+ * comprador**: abría un panel sin nombre, con precio $0,00 y "esa combinación
+ * no existe".
+ *
+ * Ni el backend ni la app lo vieron. El backend porque nadie probaba el
+ * catálogo desde una sesión sin tienda; la app porque su test de contrato
+ * estaba escrito contra un JSON inventado en vez de una respuesta real, y
+ * porque `ApiClient` no lanza con 4xx —usa `validateStatus: s < 500` para poder
+ * reintentar tras refrescar el token—, así que el cuerpo del error se parseó
+ * como si fuera un producto.
+ *
+ * Lo encontró abrir la pantalla en el emulador.
+ */
+describe('Catálogo del comprador', () => {
+  /** Un vendedor con un producto publicado y stock. */
+  async function tiendaConProducto(onHand = 5) {
+    const vendedor = await nuevoVendedor();
+    n += 1;
+
+    const p = await call('POST', '/api/v1/products', {
+      token: vendedor.token,
+      body: {
+        name: `Producto catálogo ${n}`,
+        slug: `producto-catalogo-${n}-${Date.now().toString(36)}`,
+        basePriceCents: 4_500_000,
+        status: 'ACTIVE',
+      },
+    });
+    expect(p.status, JSON.stringify(p.body)).toBe(201);
+
+    const detalle = await call('GET', `/api/v1/products/${p.body.id}`, { token: vendedor.token });
+    const variantId = detalle.body.variants[0].id as string;
+
+    await call('PATCH', `/api/v1/products/${p.body.id}/variants/${variantId}/inventory`, {
+      token: vendedor.token,
+      body: { onHand },
+    });
+
+    return { ...vendedor, productId: p.body.id as string, variantId };
+  }
+
+  it('⛔ el detalle del vendedor le da 404 a quien compra', async () => {
+    // El defecto original, clavado: si alguien vuelve a apuntar la app acá,
+    // este test explica por qué no.
+    const tienda = await tiendaConProducto();
+    const comprador = await nuevoUsuario();
+
+    const r = await call('GET', `/api/v1/products/${tienda.productId}`, {
+      token: comprador.token,
+    });
+
+    expect(r.status).toBe(404);
+    expect(r.body.error.code).toBe('SELLER_NOT_FOUND');
+  });
+
+  it('el detalle del catálogo funciona SIN sesión', async () => {
+    const tienda = await tiendaConProducto(3);
+
+    // Sin token: mirar un producto no exige cuenta. Se pide al reservar.
+    const r = await call('GET', `/api/v1/catalog/products/${tienda.productId}`);
+
+    expect(r.status).toBe(200);
+    expect(r.body.nombre).toContain('Producto catálogo');
+    expect(r.body.precioCentavos).toBe(4_500_000);
+    expect(r.body.variantes).toHaveLength(1);
+    expect(r.body.variantes[0].disponible).toBe(3);
+  });
+
+  it('el disponible sale calculado, y onHand/reserved NO viajan', async () => {
+    const tienda = await tiendaConProducto(7);
+
+    // Se apartan dos unidades para que onHand y disponible no coincidan: si el
+    // backend mandara onHand, este test no notaría la diferencia.
+    const reserva = await call('POST', '/api/v1/inventory/reservations', {
+      token: (await nuevoUsuario()).token,
+      idempotencyKey: `cat-${Date.now()}-${n}`,
+      body: { productVariantId: tienda.variantId, quantity: 2 },
+    });
+    expect(reserva.status, JSON.stringify(reserva.body)).toBe(201);
+
+    const r = await call('GET', `/api/v1/catalog/products/${tienda.productId}`);
+
+    expect(r.body.variantes[0].disponible).toBe(5);
+
+    // Cuánto tiene el vendedor y cuánto está apartado son números suyos.
+    const crudo = JSON.stringify(r.body);
+    expect(crudo).not.toContain('onHand');
+    expect(crudo).not.toContain('reserved');
+  });
+
+  it('⛔ un producto pausado no se puede mirar', async () => {
+    const tienda = await tiendaConProducto();
+
+    const pausa = await call('PATCH', `/api/v1/products/${tienda.productId}`, {
+      token: tienda.token,
+      body: { status: 'PAUSED' },
+    });
+    expect(pausa.status, JSON.stringify(pausa.body)).toBe(200);
+
+    // 404 y no "existe pero está pausado": confirmar qué ids son reales le
+    // sirve a quien esté probando ids al azar, y a nadie más.
+    const r = await call('GET', `/api/v1/catalog/products/${tienda.productId}`);
+    expect(r.status).toBe(404);
+  });
+
+  it('un id que no existe da 404 y no rompe', async () => {
+    const r = await call('GET', '/api/v1/catalog/products/prd_que_no_existe');
+    expect(r.status).toBe(404);
+  });
+
+  it('el catálogo de la tienda lista el producto', async () => {
+    const tienda = await tiendaConProducto(4);
+
+    const r = await call('GET', `/api/v1/stores/${tienda.storeId}/catalog`);
+
+    expect(r.status).toBe(200);
+    const item = r.body.items.find((i: { id: string }) => i.id === tienda.productId);
+    expect(item).toBeDefined();
+    expect(item.disponible).toBe(4);
+    expect(item.variantes).toBe(1);
   });
 });
 

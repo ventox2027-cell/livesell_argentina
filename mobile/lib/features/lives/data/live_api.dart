@@ -78,8 +78,12 @@ class LiveApi {
   /// disponible total para poder mostrar "agotado", pero elegir talle necesita
   /// el stock de cada variante, y traer eso para trescientos productos sería
   /// mandar datos que casi nadie va a mirar.
+  ///
+  /// ⚠️ `/catalog/products/:id`, **no** `/products/:id`. El segundo es del
+  /// vendedor: resuelve por dueño y le contesta `SELLER_NOT_FOUND` a quien
+  /// compra. Ver la nota de `DetalleDeProducto.fromJson`.
   Future<DetalleDeProducto> producto(String productId) async {
-    final r = await _api.get<Map<String, dynamic>>('/products/$productId');
+    final r = await _api.get<Map<String, dynamic>>('/catalog/products/$productId');
     return DetalleDeProducto.fromJson(r.data!);
   }
 

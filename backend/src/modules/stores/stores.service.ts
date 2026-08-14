@@ -548,6 +548,76 @@ export class StoresService {
     };
   }
 
+  /**
+   * Un producto con sus opciones, variantes y stock, **para quien compra**.
+   *
+   * ═══════════════════════════════════════════════════════════════════════════
+   * POR QUÉ NO ALCANZABA CON `GET /products/:id`
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * Ese endpoint es del VENDEDOR: resuelve el producto por dueño y le contesta
+   * `SELLER_NOT_FOUND` a cualquiera que no tenga tienda. La app lo estaba
+   * usando para el selector de talles, así que un comprador real nunca podía
+   * elegir una variante — se encontraba con un panel vacío y precio $0,00.
+   *
+   * No se detectó antes porque el cliente HTTP no lanza con 4xx
+   * (`validateStatus: s < 500`, para poder reintentar tras refrescar el token)
+   * y el modelo de Flutter lee todo a la defensiva: el cuerpo del error se
+   * parseó como un producto sin nombre, sin precio y sin variantes.
+   *
+   * ─── Qué sale y qué no ───
+   *
+   * Sale `disponible` ya calculado. **No salen `onHand` ni `reserved`**: son
+   * números internos del vendedor —cuánto tiene, cuánto está apartado— y a
+   * quien compra sólo le importa si puede llevarlo. Además vale la regla de
+   * siempre: la app no calcula disponibilidad, la recibe.
+   *
+   * Sólo productos y variantes ACTIVE y no borrados. Un producto pausado no se
+   * puede comprar, y devolverlo sería ofrecer algo que la reserva va a
+   * rechazar.
+   */
+  async detalleParaComprar(productId: string) {
+    const producto = await this.prisma.product.findFirst({
+      where: { id: productId, status: 'ACTIVE', deletedAt: null },
+      include: {
+        images: { orderBy: { position: 'asc' } },
+        options: {
+          orderBy: { position: 'asc' },
+          include: { values: { orderBy: { position: 'asc' } } },
+        },
+        variants: {
+          where: { deletedAt: null, status: 'ACTIVE' },
+          include: { inventory: true, options: true },
+        },
+      },
+    });
+
+    // Pausado, borrado o inexistente dan lo mismo hacia afuera: 404. Distinguir
+    // "existe pero está pausado" le confirmaría a cualquiera qué ids son reales.
+    if (!producto) throw new NoEncontradoError('el producto');
+
+    return {
+      id: producto.id,
+      nombre: producto.name,
+      descripcion: producto.description,
+      precioCentavos: producto.basePriceCents,
+      moneda: producto.currency,
+      imagenes: producto.images.map((i) => i.url),
+      ejes: producto.options.map((o) => ({
+        id: o.id,
+        nombre: o.name,
+        valores: o.values.map((v) => ({ id: v.id, valor: v.value })),
+      })),
+      variantes: producto.variants.map((v) => ({
+        id: v.id,
+        titulo: v.title,
+        precioCentavos: v.priceOverrideCents ?? producto.basePriceCents,
+        disponible: v.inventory ? v.inventory.onHand - v.inventory.reserved : 0,
+        valoresDeOpcion: v.options.map((o) => o.optionValueId),
+      })),
+    };
+  }
+
   // ═══════════════════════════════════════════════════════════════════════════
   // INTENCIÓN DE COMPRA
   // ═══════════════════════════════════════════════════════════════════════════

@@ -158,6 +158,32 @@ void main() {
       expect(p.disponibilidad!.etiqueta, 'Últimas 2');
     });
 
+    test('trae los ids del vendedor y de la tienda', () {
+      /**
+       * Venían en la respuesta y el modelo los tiraba.
+       *
+       * Sin ellos el feed sólo tenía el NOMBRE del vendedor: no podía abrir su
+       * perfil ni seguirlo de verdad. Por eso el botón "Seguir" del feed era un
+       * booleano local que se olvidaba al cerrar la app — la persona creía que
+       * iba a recibir avisos de los vivos y no iba a recibir ninguno.
+       */
+      final p = PublicacionFeed.fromJson(json);
+
+      expect(p.vendedorId, 'sel_x');
+      expect(p.storeId, 'sto_x');
+    });
+
+    test('sin tienda en la respuesta, los ids quedan vacíos y no rompe', () {
+      // La fila del vendedor deja de ser tocable en vez de abrir un perfil en
+      // blanco. Es el mismo criterio defensivo que el resto del archivo.
+      final sinTienda = Map<String, dynamic>.from(json)..remove('store');
+      final p = PublicacionFeed.fromJson(sinTienda);
+
+      expect(p.vendedorId, '');
+      expect(p.storeId, '');
+      expect(p.vendedor, 'Vendedor');
+    });
+
     test('agotado: aparece igual, pero no se puede comprar', () {
       // El producto NO desaparece del feed. Se muestra con el botón apagado:
       // esconderlo le sacaría al vendedor la prueba de que hubo demanda.

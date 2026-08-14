@@ -273,67 +273,131 @@ void main() {
     });
   });
 
+  /**
+   * GET /api/v1/catalog/products/:id
+   *
+   * ═══════════════════════════════════════════════════════════════════════════
+   * ESTE GRUPO ESTABA ESCRITO CONTRA UN JSON INVENTADO
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * Y por eso pasó en verde mientras la pantalla de variantes estaba rota para
+   * cualquier comprador real.
+   *
+   * La app pedía `GET /products/:id`, que es el endpoint del VENDEDOR: resuelve
+   * por dueño y contesta `SELLER_NOT_FOUND` a quien no tiene tienda. El test no
+   * lo vio porque el JSON de acá abajo lo había escrito yo a mano, con la forma
+   * que suponía. La cabecera de `contrato_api_test.dart` ya lo advertía: **los
+   * JSON tienen que ser respuestas reales, copiadas tal cual**.
+   *
+   * El de abajo lo es: sale de `curl` contra el backend corriendo.
+   */
   group('Producto con variantes', () {
-    // GET /api/v1/products/:id — el árbol completo que arma el backend.
+    // Respuesta REAL, copiada de curl. Producto sin opciones, una sola variante.
+    final real = <String, dynamic>{
+      'id': 'prd_01KZZW0TPRV8AR3N065Q47RSVF',
+      'nombre': 'Campera de lana',
+      'descripcion': null,
+      'precioCentavos': 4500000,
+      'moneda': 'ARS',
+      'imagenes': <dynamic>[],
+      'ejes': <dynamic>[],
+      'variantes': [
+        {
+          'id': 'var_01KZZW0TPV7NE42V3YQ1WD35DG',
+          'titulo': 'Default',
+          'precioCentavos': 4500000,
+          'disponible': 3,
+          'valoresDeOpcion': <dynamic>[],
+        },
+      ],
+    };
+
+    test('la respuesta real se parsea, y el precio NO es cero', () {
+      final p = DetalleDeProducto.fromJson(real);
+
+      // El síntoma exacto del defecto: la hoja mostraba "$ 0,00" y "Esa
+      // combinación no existe" porque estaba parseando un cuerpo de error.
+      expect(p.nombre, 'Campera de lana');
+      expect(p.precioBaseCentavos, 4500000);
+      expect(p.variantes, hasLength(1));
+      expect(p.variantes.first.disponible, 3);
+    });
+
+    test('sin ejes, la única variante se resuelve sola', () {
+      final p = DetalleDeProducto.fromJson(real);
+
+      // Es lo que habilita "Comprar" de una: un producto sin talles no tiene
+      // nada que elegir.
+      expect(p.variantePara({}), isNotNull);
+      expect(p.variantePara({})!.id, 'var_01KZZW0TPV7NE42V3YQ1WD35DG');
+    });
+
+    test('⛔ un cuerpo de error NO se parsea como producto vendible', () {
+      /**
+       * `ApiClient` no lanza con 4xx: usa `validateStatus: s < 500` para poder
+       * reintentar tras refrescar el token. Así que el cuerpo del error llega
+       * hasta acá, y la lectura defensiva lo convierte en un producto vacío.
+       *
+       * No se puede evitar que se parsee —es la misma tolerancia que sostiene
+       * el resto del archivo— pero sí se puede exigir que el resultado sea
+       * *inservible* de forma evidente: sin variantes, `variantePara` devuelve
+       * null y el botón queda deshabilitado en vez de ofrecer algo a $0,00.
+       */
+      final p = DetalleDeProducto.fromJson({
+        'error': {'code': 'SELLER_NOT_FOUND', 'message': 'Todavía no tenés un perfil de vendedor'},
+      });
+
+      expect(p.variantes, isEmpty);
+      expect(p.variantePara({}), isNull);
+    });
+
+    // Producto con dos ejes, con la MISMA forma que arma `detalleParaComprar`.
     final json = <String, dynamic>{
       'id': 'prd_x',
-      'name': 'Remera lisa',
-      'description': 'Algodón peinado.',
-      'basePriceCents': 1500000,
-      'images': [
-        {'id': 'img_x', 'url': 'https://ejemplo.test/media/products/prd_x/a.jpg', 'position': 0},
-      ],
-      'options': [
+      'nombre': 'Remera lisa',
+      'descripcion': 'Algodón peinado.',
+      'precioCentavos': 1500000,
+      'moneda': 'ARS',
+      'imagenes': ['https://ejemplo.test/media/products/prd_x/a.jpg'],
+      'ejes': [
         {
           'id': 'opt_talle',
-          'name': 'Talle',
-          'values': [
-            {'id': 'ov_s', 'value': 'S'},
-            {'id': 'ov_m', 'value': 'M'},
+          'nombre': 'Talle',
+          'valores': [
+            {'id': 'ov_s', 'valor': 'S'},
+            {'id': 'ov_m', 'valor': 'M'},
           ],
         },
         {
           'id': 'opt_color',
-          'name': 'Color',
-          'values': [
-            {'id': 'ov_negro', 'value': 'Negro'},
-            {'id': 'ov_blanco', 'value': 'Blanco'},
+          'nombre': 'Color',
+          'valores': [
+            {'id': 'ov_negro', 'valor': 'Negro'},
+            {'id': 'ov_blanco', 'valor': 'Blanco'},
           ],
         },
       ],
-      'variants': [
+      'variantes': [
         {
           'id': 'var_s_negro',
-          'title': 'S / Negro',
-          'sku': 'REM-S-N',
-          'priceOverrideCents': null,
-          'inventory': {'onHand': 5, 'reserved': 1},
-          'options': [
-            {'optionValueId': 'ov_s'},
-            {'optionValueId': 'ov_negro'},
-          ],
+          'titulo': 'S / Negro',
+          'precioCentavos': 1500000,
+          'disponible': 4,
+          'valoresDeOpcion': ['ov_s', 'ov_negro'],
         },
         {
           'id': 'var_m_negro',
-          'title': 'M / Negro',
-          'sku': 'REM-M-N',
-          'priceOverrideCents': 1800000,
-          'inventory': {'onHand': 2, 'reserved': 2},
-          'options': [
-            {'optionValueId': 'ov_m'},
-            {'optionValueId': 'ov_negro'},
-          ],
+          'titulo': 'M / Negro',
+          'precioCentavos': 1800000,
+          'disponible': 0,
+          'valoresDeOpcion': ['ov_m', 'ov_negro'],
         },
         {
           'id': 'var_m_blanco',
-          'title': 'M / Blanco',
-          'sku': 'REM-M-B',
-          'priceOverrideCents': null,
-          'inventory': {'onHand': 3, 'reserved': 0},
-          'options': [
-            {'optionValueId': 'ov_m'},
-            {'optionValueId': 'ov_blanco'},
-          ],
+          'titulo': 'M / Blanco',
+          'precioCentavos': 1500000,
+          'disponible': 3,
+          'valoresDeOpcion': ['ov_m', 'ov_blanco'],
         },
       ],
     };
@@ -348,17 +412,17 @@ void main() {
       expect(p.imagenUrl, isNotNull);
     });
 
-    test('el disponible es onHand menos reservado', () {
+    test('el disponible viene del servidor, no se calcula acá', () {
       final p = DetalleDeProducto.fromJson(json);
 
-      // No se pide como campo al backend: siempre es derivado, y una tercera
-      // fuente se puede desincronizar.
+      // Antes la app hacía `onHand - reserved`. Ahora lo manda el backend, y de
+      // paso esos dos números internos del vendedor no viajan a quien compra.
       expect(p.variantes.firstWhere((v) => v.id == 'var_s_negro').disponible, 4);
       expect(p.variantes.firstWhere((v) => v.id == 'var_m_negro').disponible, 0);
       expect(p.variantes.firstWhere((v) => v.id == 'var_m_negro').agotada, isTrue);
     });
 
-    test('el precio de la variante pisa al base sólo si existe', () {
+    test('cada variante trae su propio precio ya resuelto', () {
       final p = DetalleDeProducto.fromJson(json);
 
       expect(p.variantes.firstWhere((v) => v.id == 'var_s_negro').precioCentavos, 1500000);
@@ -408,16 +472,17 @@ void main() {
     test('un producto sin ejes usa su única variante', () {
       final p = DetalleDeProducto.fromJson({
         'id': 'prd_simple',
-        'name': 'Vela',
-        'basePriceCents': 990000,
-        'images': <dynamic>[],
-        'options': <dynamic>[],
-        'variants': [
+        'nombre': 'Vela',
+        'precioCentavos': 990000,
+        'imagenes': <dynamic>[],
+        'ejes': <dynamic>[],
+        'variantes': [
           {
             'id': 'var_unica',
-            'title': 'Única',
-            'inventory': {'onHand': 7, 'reserved': 0},
-            'options': <dynamic>[],
+            'titulo': 'Única',
+            'precioCentavos': 990000,
+            'disponible': 7,
+            'valoresDeOpcion': <dynamic>[],
           },
         ],
       });

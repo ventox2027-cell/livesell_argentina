@@ -85,6 +85,22 @@ export class StoresController {
     return this.stores.catalogo(id, q);
   }
 
+  /**
+   * El detalle de un producto para quien compra.
+   *
+   * ⚠️ No confundir con `GET /products/:id`, que es del VENDEDOR y resuelve por
+   * dueño. La app usaba aquél para el selector de talles y a un comprador real
+   * le contestaba `SELLER_NOT_FOUND`.
+   *
+   * Público, como el catálogo: se puede mirar un producto sin cuenta. La cuenta
+   * se pide al reservar.
+   */
+  @Public()
+  @Get('catalog/products/:id')
+  producto(@Param('id') id: string) {
+    return this.stores.detalleParaComprar(id);
+  }
+
   @Public()
   @Get('stores/:id/status')
   estado(@Param('id') id: string) {
