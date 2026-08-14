@@ -58,15 +58,19 @@ class _Arranque extends StatelessWidget {
 ///
 /// Es la razón de ser del producto y lo que lo diferencia de una tienda. Un
 /// botón más en una fila de cinco iguales lo escondería.
-class _NavegacionPrincipal extends StatefulWidget {
+class _NavegacionPrincipal extends ConsumerStatefulWidget {
   const _NavegacionPrincipal();
 
   @override
-  State<_NavegacionPrincipal> createState() => _NavegacionPrincipalState();
+  ConsumerState<_NavegacionPrincipal> createState() => _NavegacionPrincipalState();
 }
 
-class _NavegacionPrincipalState extends State<_NavegacionPrincipal> {
+class _NavegacionPrincipalState extends ConsumerState<_NavegacionPrincipal> {
   int _indice = 0;
+
+  /// La posición de "En vivo" en la barra. Nombrada porque se usa dos veces y
+  /// un `2` suelto no dice nada.
+  static const _pestanaVivo = 2;
 
   static const _pantallas = [
     FeedScreen(),
@@ -76,6 +80,22 @@ class _NavegacionPrincipalState extends State<_NavegacionPrincipal> {
     ProfileScreen(),
   ];
 
+  void _cambiarA(int i) {
+    /**
+     * Entrar a "En vivo" recarga la lista.
+     *
+     * El `IndexedStack` mantiene las cinco pantallas montadas para no perder su
+     * estado —posición del feed, texto escrito en el buscador—, pero eso hace
+     * que `initState` de la grilla corra una sola vez en toda la sesión. Sin
+     * este disparo, la pestaña mostraría los vivos de cuando se abrió la app.
+     *
+     * Va acá y no en la pantalla porque el shell es el único que sabe cuándo
+     * una pestaña pasa a estar visible.
+     */
+    if (i == _pestanaVivo) ref.invalidate(livesActivosProvider);
+    setState(() => _indice = i);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -84,10 +104,7 @@ class _NavegacionPrincipalState extends State<_NavegacionPrincipal> {
       // producto.
       extendBody: true,
       body: IndexedStack(index: _indice, children: _pantallas),
-      bottomNavigationBar: _BarraInferior(
-        indice: _indice,
-        onCambio: (i) => setState(() => _indice = i),
-      ),
+      bottomNavigationBar: _BarraInferior(indice: _indice, onCambio: _cambiarA),
     );
   }
 }

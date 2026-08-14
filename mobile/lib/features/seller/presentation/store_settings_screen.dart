@@ -6,6 +6,7 @@ import '../../../core/design/tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../data/seller_repository.dart';
 import '../domain/seller_models.dart';
+import 'schedule_screen.dart';
 
 /// Ajustes de la tienda.
 ///
@@ -188,6 +189,19 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
 
               if (store != null) ...[
                 const SizedBox(height: Gap.xxl),
+                // Horarios y pausa son cosas distintas y van separadas:
+                // "pausada" es una decisión de hoy, el horario es la regla de
+                // todas las semanas. Fundirlas en un interruptor haría que
+                // reabrir después de pausar borrara el horario cargado.
+                _FilaDeAjuste(
+                  icono: Icons.schedule_rounded,
+                  titulo: 'Horarios',
+                  detalle: 'Cuándo se puede comprar en tu tienda',
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(builder: (_) => const ScheduleScreen()),
+                  ),
+                ),
+                const SizedBox(height: Gap.lg),
                 _Apertura(
                   pausada: store.pausada,
                   onAlternar: _guardando ? null : () => _alternarApertura(p),
@@ -196,6 +210,56 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
             ],
           );
         },
+      ),
+    );
+  }
+}
+
+class _FilaDeAjuste extends StatelessWidget {
+  const _FilaDeAjuste({
+    required this.icono,
+    required this.titulo,
+    required this.detalle,
+    required this.onTap,
+  });
+
+  final IconData icono;
+  final String titulo;
+  final String detalle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(Redondeo.lg),
+      child: Container(
+        padding: const EdgeInsets.all(Gap.lg),
+        decoration: BoxDecoration(
+          color: AppColor.superficie,
+          borderRadius: BorderRadius.circular(Redondeo.lg),
+          border: Border.all(color: AppColor.borde),
+        ),
+        child: Row(
+          children: [
+            Icon(icono, size: 19, color: AppColor.textoSuave),
+            const SizedBox(width: Gap.md),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(titulo, style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 2),
+                  Text(
+                    detalle,
+                    style: const TextStyle(fontSize: 12.5, color: AppColor.textoSuave),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right_rounded, color: AppColor.textoDebil),
+          ],
+        ),
       ),
     );
   }

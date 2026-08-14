@@ -195,5 +195,10 @@ class ApiClient {
 
   Future<Response<T>> patch<T>(String path, {Object? data}) => _dio.patch<T>(path, data: data);
 
+  /// Reemplazo completo. Se usa donde el backend expone `PUT` de verdad —el
+  /// horario de la tienda— y no como sinónimo de `PATCH`: mandar medio recurso
+  /// a un `PUT` borra lo que no se mandó.
+  Future<Response<T>> put<T>(String path, {Object? data}) => _dio.put<T>(path, data: data);
+
   Future<Response<T>> delete<T>(String path) => _dio.delete<T>(path);
 }

@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/design/tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
+import '../../orders/domain/order_models.dart';
 import '../../orders/presentation/checkout_sheet.dart';
 import '../data/inventory_repository.dart';
 import '../domain/inventory_models.dart';
@@ -35,15 +36,24 @@ class ReserveSheet extends ConsumerStatefulWidget {
   final String precio;
   final String? variante;
 
-  /// Devuelve la reserva creada, o `null` si se cerró sin reservar.
-  static Future<Reserva?> mostrar(
+  /// Devuelve el **pedido** si la compra se completó, o `null` si se cerró
+  /// antes de pagar.
+  ///
+  /// ─── Por qué el pedido y no la reserva ───
+  ///
+  /// Esta hoja llega hasta el final: aparta y encadena con el checkout. Cuando
+  /// termina bien, la reserva ya fue consumida por el pedido — devolverla sería
+  /// entregar un objeto que en la base ya no significa nada. El pedido, en
+  /// cambio, es lo único que quien abrió la hoja puede seguir usando: mostrar
+  /// la referencia, llevar a "mis pedidos", confirmar la compra en el vivo.
+  static Future<Pedido?> mostrar(
     BuildContext context, {
     required String productVariantId,
     required String nombreProducto,
     required String precio,
     String? variante,
   }) {
-    return showModalBottomSheet<Reserva>(
+    return showModalBottomSheet<Pedido>(
       context: context,
       isScrollControlled: true,
       backgroundColor: AppColor.superficie,
@@ -208,7 +218,7 @@ class _ReserveSheetState extends ConsumerState<ReserveSheet> with WidgetsBinding
     ref.invalidate(disponibilidadProvider(widget.productVariantId));
 
     // Con el pedido resuelto, la hoja de reserva ya cumplió su función.
-    if (pedido != null) Navigator.of(context).pop(r);
+    if (pedido != null) Navigator.of(context).pop(pedido);
   }
 
   Future<void> _cancelar() async {
