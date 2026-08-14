@@ -314,6 +314,52 @@ export const envSchema = z
     /** Apagable para que los tests controlen el reloj en vez de competir con él. */
     INVENTORY_RECONCILER_ENABLED: envBoolean(true),
 
+    // ─── Avisos ─────────────────────────────────────────────────────────────
+
+    /**
+     * Cada cuánto sale el lote de avisos pendientes.
+     *
+     * Treinta segundos porque un aviso que llega medio minuto tarde no le
+     * cambia el día a nadie, y bajarlo multiplica los viajes a la base sin
+     * ganar nada perceptible. Lo que sí necesita ser inmediato -el chat del
+     * vivo- no pasa por acá: va por el socket.
+     */
+    NOTIFICATIONS_DISPATCHER_INTERVAL_MS: z.coerce
+      .number()
+      .int()
+      .min(1_000)
+      .max(600_000)
+      .default(30_000),
+
+    NOTIFICATIONS_DISPATCHER_ENABLED: envBoolean(true),
+
+    /**
+     * Cuántos avisos por vuelta.
+     *
+     * Si se acumularon miles -porque el proveedor estuvo caído toda la noche-
+     * mandarlos todos de una agota la cuota y bloquea el proceso. De a cien, y
+     * el barrido vuelve a pasar enseguida.
+     */
+    NOTIFICATIONS_DISPATCH_BATCH: z.coerce.number().int().min(1).max(1_000).default(100),
+
+    // ─── Reaperturas de tienda ──────────────────────────────────────────────
+
+    /**
+     * Cada cuánto se busca una tienda que haya reabierto.
+     *
+     * Un minuto. El aviso puede salir hasta un minuto tarde y eso no le cambia
+     * el resultado a nadie; bajarlo recorre las tiendas el doble de veces para
+     * ganar treinta segundos que nadie percibe.
+     */
+    STORE_REOPEN_SWEEP_INTERVAL_MS: z.coerce
+      .number()
+      .int()
+      .min(5_000)
+      .max(3_600_000)
+      .default(60_000),
+
+    STORE_REOPEN_SWEEP_ENABLED: envBoolean(true),
+
     // ─── Órdenes y comisión ─────────────────────────────────────────────────
 
     /**

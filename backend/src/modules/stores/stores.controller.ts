@@ -161,6 +161,18 @@ export class StoresController {
     return this.stores.guardarHorario(user.id, dto);
   }
 
+  /**
+   * Quién está esperando para comprar.
+   *
+   * ⚠️ Sin datos de contacto: nombre de pila y números, nada más. Quien dejó
+   * una intención pidió que le AVISEN, no le dio su teléfono a un vendedor.
+   * El aviso lo manda VendoX. Ver `interesados` en el servicio.
+   */
+  @Get('stores/me/intents')
+  interesados(@CurrentUser() user: AuthenticatedUser) {
+    return this.stores.interesados(user.id);
+  }
+
   // ─── Intención de compra ───────────────────────────────────────────────────
 
   /**

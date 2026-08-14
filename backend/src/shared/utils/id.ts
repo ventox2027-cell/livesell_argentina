@@ -57,6 +57,7 @@ export const ID_PREFIX = {
   follow: 'flw',
   review: 'rev',
   purchaseIntent: 'pin',
+  notification: 'ntf',
   auditLog: 'aud',
 } as const;
 

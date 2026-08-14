@@ -3,6 +3,8 @@ import { type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { NotificationsService } from '@/modules/notifications/notifications.service';
+import type { ReaperturasService } from '@/modules/stores/reaperturas.service';
 import type { PrismaService } from '@/shared/prisma/prisma.service';
 import type { RedisService } from '@/shared/redis/redis.service';
 
@@ -37,11 +39,18 @@ const TEST_ENV = {
   SPIKE_ENABLED: 'false',
   PAYMENTS_SPIKE_ENABLED: 'false',
   LOG_LEVEL: 'error',
+
+  // Los barridos se invocan a mano para que cada caso diga QUÉ está probando
+  // en vez de esperar a ver qué pasa.
+  STORE_REOPEN_SWEEP_ENABLED: 'false',
+  NOTIFICATIONS_DISPATCHER_ENABLED: 'false',
 };
 
 let app: INestApplication;
 let prisma: PrismaService;
 let redis: RedisService;
+let reaperturas: ReaperturasService;
+let notifications: NotificationsService;
 
 beforeAll(async () => {
   Object.assign(process.env, TEST_ENV);
@@ -50,6 +59,8 @@ beforeAll(async () => {
   const { LiveKitService } = await import('@/modules/livekit/livekit.service');
   const { PrismaService } = await import('@/shared/prisma/prisma.service');
   const { RedisService } = await import('@/shared/redis/redis.service');
+  const { ReaperturasService } = await import('@/modules/stores/reaperturas.service');
+  const { NotificationsService } = await import('@/modules/notifications/notifications.service');
 
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(LiveKitService)
@@ -65,12 +76,14 @@ beforeAll(async () => {
   app = await crearAppDePrueba(moduleRef);
   prisma = app.get(PrismaService);
   redis = app.get(RedisService);
+  reaperturas = app.get(ReaperturasService);
+  notifications = app.get(NotificationsService);
 
   if (!(process.env.DATABASE_URL ?? '').includes('_test')) {
     throw new Error('Los tests de integración borran datos y sólo corren contra una base *_test');
   }
   await prisma.$executeRawUnsafe(
-    'TRUNCATE purchase_intents, reviews, follows, store_schedule_slots, store_schedules, ' +
+    'TRUNCATE notifications, purchase_intents, reviews, follows, store_schedule_slots, store_schedules, ' +
       'live_session_products, live_sessions, audit_logs, seller_verifications, order_items, ' +
       'payment_attempts, refunds, orders, inventory_reservations, inventory, ' +
       'product_variant_options, product_images, product_variants, product_option_values, ' +
@@ -682,5 +695,405 @@ describe('Intención de compra', () => {
     });
     expect(intenciones).toHaveLength(1);
     expect(intenciones[0]?.quantity).toBe(3);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INTERESADOS Y REAPERTURA
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * El otro lado de la intención de compra.
+ *
+ * Alguien deja "avisame cuando abran". Lo que sigue son dos cosas: que el
+ * vendedor pueda ver cuánta gente está esperando —para reponer— y que a esa
+ * gente efectivamente se le avise cuando la tienda abre.
+ *
+ * Lo que se prueba con más insistencia es lo que NO se devuelve: quien dejó una
+ * intención pidió un aviso, no le dio su teléfono a un vendedor.
+ */
+describe('Interesados y reapertura', () => {
+  /** Producto activo con stock, listo para que alguien lo espere. */
+  async function productoDe(vendedor: { token: string }, stock = 0) {
+    n += 1;
+    const p = await call('POST', '/api/v1/products', {
+      token: vendedor.token,
+      body: {
+        name: `Buzo interesados ${n}`,
+        slug: `buzo-interesados-${n}-${Date.now().toString(36)}`,
+        basePriceCents: 890_000,
+        status: 'ACTIVE',
+      },
+    });
+    expect(p.status, JSON.stringify(p.body)).toBe(201);
+
+    const detalle = await call('GET', `/api/v1/products/${p.body.id}`, { token: vendedor.token });
+    const variantId = detalle.body.variants[0].id as string;
+
+    if (stock > 0) {
+      await call('PATCH', `/api/v1/products/${p.body.id}/variants/${variantId}/inventory`, {
+        token: vendedor.token,
+        body: { onHand: stock },
+      });
+    }
+
+    return { productId: p.body.id as string, variantId };
+  }
+
+  /** Cierra la tienda con un horario que hoy no cubre este momento. */
+  async function cerrar(vendedor: { token: string }) {
+    const r = await call('PUT', '/api/v1/stores/me/schedule', {
+      token: vendedor.token,
+      body: {
+        modo: 'SCHEDULED',
+        zona: 'America/Argentina/Buenos_Aires',
+        // Sin franjas: con modo por horarios y ninguna franja, está cerrada
+        // siempre. Es lo contrario de "sin horario configurado".
+        franjas: [],
+      },
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+  }
+
+  /** La vuelve a abrir de par en par. */
+  async function abrir(vendedor: { token: string }) {
+    const r = await call('PUT', '/api/v1/stores/me/schedule', {
+      token: vendedor.token,
+      body: { modo: 'ALWAYS_OPEN', zona: 'America/Argentina/Buenos_Aires', franjas: [] },
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+  }
+
+  describe('La lista del vendedor', () => {
+    it('cuenta personas y unidades, agrupadas por producto', async () => {
+      const vendedor = await nuevoVendedor();
+      const { productId, variantId } = await productoDe(vendedor, 1);
+
+      const uno = await nuevoUsuario();
+      const dos = await nuevoUsuario();
+      await call('POST', `/api/v1/variants/${variantId}/intent`, {
+        token: uno.token,
+        body: { quantity: 2 },
+      });
+      await call('POST', `/api/v1/variants/${variantId}/intent`, {
+        token: dos.token,
+        body: { quantity: 1 },
+      });
+
+      const r = await call('GET', '/api/v1/stores/me/intents', { token: vendedor.token });
+
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+      expect(r.body.totalPersonas).toBe(2);
+      expect(r.body.totalUnidades).toBe(3);
+      expect(r.body.items).toHaveLength(1);
+      expect(r.body.items[0].productoId).toBe(productId);
+      expect(r.body.items[0].personas).toBe(2);
+      expect(r.body.items[0].unidades).toBe(3);
+    });
+
+    it('⛔ NUNCA devuelve teléfono, email ni apellido', async () => {
+      /**
+       * ═══════════════════════════════════════════════════════════════════
+       * ES EL TEST MÁS IMPORTANTE DE ESTE BLOQUE
+       * ═══════════════════════════════════════════════════════════════════
+       *
+       * Quien dejó una intención pidió que le AVISEN. No le dio su teléfono a
+       * un vendedor para que lo contacte por WhatsApp. Si esos datos
+       * aparecieran acá, eso es exactamente lo que pasaría el primer día, y no
+       * habría forma de volver atrás.
+       *
+       * Se busca sobre el JSON entero y no sobre los campos que conozco: si
+       * mañana alguien agrega `user: {...}` completo a la proyección, esto lo
+       * tiene que ver.
+       */
+      const vendedor = await nuevoVendedor();
+      const { variantId } = await productoDe(vendedor, 1);
+
+      const comprador = await nuevoUsuario();
+      const perfil = await prisma.user.update({
+        where: { id: comprador.userId },
+        data: { phoneE164: '+5491133445566', lastName: 'Apellidoraro' },
+      });
+
+      await call('POST', `/api/v1/variants/${variantId}/intent`, {
+        token: comprador.token,
+        body: { quantity: 1 },
+      });
+
+      const r = await call('GET', '/api/v1/stores/me/intents', { token: vendedor.token });
+      const crudo = JSON.stringify(r.body);
+
+      expect(crudo).not.toContain(perfil.phoneE164);
+      expect(crudo).not.toContain(perfil.email);
+      expect(crudo).not.toContain('Apellidoraro');
+      expect(crudo).not.toContain(comprador.userId);
+
+      // Lo que sí: el nombre de pila, para que la lista no sea anónima.
+      expect(r.body.items[0].gente[0].nombre).toBe(perfil.firstName);
+    });
+
+    it('⛔ no muestra interesados de otra tienda', async () => {
+      const propio = await nuevoVendedor();
+      const ajeno = await nuevoVendedor();
+      const { variantId } = await productoDe(ajeno, 1);
+
+      const comprador = await nuevoUsuario();
+      await call('POST', `/api/v1/variants/${variantId}/intent`, {
+        token: comprador.token,
+        body: { quantity: 1 },
+      });
+
+      const r = await call('GET', '/api/v1/stores/me/intents', { token: propio.token });
+
+      expect(r.status).toBe(200);
+      expect(r.body.items).toHaveLength(0);
+      expect(r.body.totalPersonas).toBe(0);
+    });
+
+    it('marca los productos donde el stock no alcanza', async () => {
+      // Es el número que hace útil la pantalla: no "hay interesados" sino "hay
+      // interesados y no tenés qué venderles".
+      const vendedor = await nuevoVendedor();
+      const { variantId } = await productoDe(vendedor, 1);
+
+      const uno = await nuevoUsuario();
+      const dos = await nuevoUsuario();
+      await call('POST', `/api/v1/variants/${variantId}/intent`, {
+        token: uno.token,
+        body: { quantity: 2 },
+      });
+      await call('POST', `/api/v1/variants/${variantId}/intent`, {
+        token: dos.token,
+        body: { quantity: 2 },
+      });
+
+      const r = await call('GET', '/api/v1/stores/me/intents', { token: vendedor.token });
+
+      // Cuatro unidades esperadas, una disponible.
+      expect(r.body.items[0].variantes[0].disponible).toBe(1);
+      expect(r.body.items[0].variantes[0].unidades).toBe(4);
+      expect(r.body.sinStock).toBe(1);
+    });
+  });
+
+  describe('El aviso al reabrir', () => {
+    it('la tienda que reabre le avisa a quien estaba esperando', async () => {
+      const vendedor = await nuevoVendedor();
+      const { productId, variantId } = await productoDe(vendedor, 3);
+      await cerrar(vendedor);
+
+      const comprador = await nuevoUsuario();
+      await call('POST', `/api/v1/variants/${variantId}/intent`, {
+        token: comprador.token,
+        body: { quantity: 1 },
+      });
+
+      // El barrido tiene que ver la tienda cerrada antes de verla abierta: es
+      // una TRANSICIÓN, no un estado.
+      await reaperturas.barrer();
+      await abrir(vendedor);
+      const resumen = await reaperturas.barrer();
+
+      expect(resumen.reabiertas).toBe(1);
+      expect(resumen.avisos).toBe(1);
+
+      const avisos = await call('GET', '/api/v1/notifications', { token: comprador.token });
+      expect(avisos.status, JSON.stringify(avisos.body)).toBe(200);
+      expect(avisos.body.items).toHaveLength(1);
+      expect(avisos.body.items[0].type).toBe('STORE_REOPENED');
+      expect(avisos.body.items[0].data.productId).toBe(productId);
+      expect(avisos.body.sinLeer).toBe(1);
+    });
+
+    it('⛔ dos barridos seguidos NO avisan dos veces', async () => {
+      /**
+       * Es lo que hace que un vendedor probando su horario a las diez de la
+       * mañana no le mande cuatro notificaciones a la misma persona. Lo
+       * garantizan dos cosas: el UPDATE condicional sobre `wasOpen` y la clave
+       * de deduplicación.
+       */
+      const vendedor = await nuevoVendedor();
+      const { variantId } = await productoDe(vendedor, 3);
+      await cerrar(vendedor);
+
+      const comprador = await nuevoUsuario();
+      await call('POST', `/api/v1/variants/${variantId}/intent`, {
+        token: comprador.token,
+        body: { quantity: 1 },
+      });
+
+      await reaperturas.barrer();
+      await abrir(vendedor);
+
+      await reaperturas.barrer();
+      const segundo = await reaperturas.barrer();
+      const tercero = await reaperturas.barrer();
+
+      expect(segundo.avisos).toBe(0);
+      expect(tercero.avisos).toBe(0);
+
+      const cuantos = await prisma.notification.count({
+        where: { userId: comprador.userId, type: 'STORE_REOPENED' },
+      });
+      expect(cuantos).toBe(1);
+    });
+
+    it('una tienda que nunca cerró no manda nada', async () => {
+      // `wasOpen` arranca en `true` justamente para esto: si arrancara en
+      // `false`, la primera corrida vería una reapertura falsa en TODAS las
+      // tiendas y les avisaría a todos de golpe.
+      const vendedor = await nuevoVendedor();
+      const { variantId } = await productoDe(vendedor, 3);
+      await abrir(vendedor);
+
+      const comprador = await nuevoUsuario();
+      await call('POST', `/api/v1/variants/${variantId}/intent`, {
+        token: comprador.token,
+        body: { quantity: 1 },
+      });
+
+      const resumen = await reaperturas.barrer();
+
+      expect(resumen.avisos).toBe(0);
+      expect(
+        await prisma.notification.count({ where: { userId: comprador.userId } }),
+      ).toBe(0);
+    });
+
+    it('⛔ no avisa por un producto pausado', async () => {
+      // Sería mandar a alguien a una pantalla donde no puede comprar.
+      const vendedor = await nuevoVendedor();
+      const { productId, variantId } = await productoDe(vendedor, 3);
+      await cerrar(vendedor);
+
+      const comprador = await nuevoUsuario();
+      await call('POST', `/api/v1/variants/${variantId}/intent`, {
+        token: comprador.token,
+        body: { quantity: 1 },
+      });
+
+      await call('PATCH', `/api/v1/products/${productId}`, {
+        token: vendedor.token,
+        body: { status: 'PAUSED' },
+      });
+
+      await reaperturas.barrer();
+      await abrir(vendedor);
+      const resumen = await reaperturas.barrer();
+
+      expect(resumen.reabiertas).toBe(1);
+      expect(resumen.avisos).toBe(0);
+    });
+
+    it('la intención queda marcada como avisada', async () => {
+      const vendedor = await nuevoVendedor();
+      const { variantId } = await productoDe(vendedor, 3);
+      await cerrar(vendedor);
+
+      const comprador = await nuevoUsuario();
+      await call('POST', `/api/v1/variants/${variantId}/intent`, {
+        token: comprador.token,
+        body: { quantity: 1 },
+      });
+
+      await reaperturas.barrer();
+      await abrir(vendedor);
+      await reaperturas.barrer();
+
+      const intencion = await prisma.purchaseIntent.findFirst({
+        where: { userId: comprador.userId, productVariantId: variantId },
+      });
+      expect(intencion?.notifiedAt).not.toBeNull();
+
+      // Y el vendedor lo ve en su lista.
+      const lista = await call('GET', '/api/v1/stores/me/intents', { token: vendedor.token });
+      expect(lista.body.items[0].gente[0].avisado).toBe(true);
+    });
+  });
+
+  describe('El centro de notificaciones', () => {
+    async function avisarA(comprador: { token: string; userId: string }) {
+      const vendedor = await nuevoVendedor();
+      const { variantId } = await productoDe(vendedor, 3);
+      await cerrar(vendedor);
+      await call('POST', `/api/v1/variants/${variantId}/intent`, {
+        token: comprador.token,
+        body: { quantity: 1 },
+      });
+      await reaperturas.barrer();
+      await abrir(vendedor);
+      await reaperturas.barrer();
+    }
+
+    it('marcar una como leída baja el contador', async () => {
+      const comprador = await nuevoUsuario();
+      await avisarA(comprador);
+
+      const antes = await call('GET', '/api/v1/notifications/unread-count', {
+        token: comprador.token,
+      });
+      expect(antes.body.sinLeer).toBe(1);
+
+      const lista = await call('GET', '/api/v1/notifications', { token: comprador.token });
+      const id = lista.body.items[0].id as string;
+
+      const marcada = await call('PATCH', `/api/v1/notifications/${id}/read`, {
+        token: comprador.token,
+      });
+      expect(marcada.status, JSON.stringify(marcada.body)).toBe(200);
+
+      const despues = await call('GET', '/api/v1/notifications/unread-count', {
+        token: comprador.token,
+      });
+      expect(despues.body.sinLeer).toBe(0);
+    });
+
+    it('⛔ no se puede marcar leída la notificación de otro', async () => {
+      const dueño = await nuevoUsuario();
+      const intruso = await nuevoUsuario();
+      await avisarA(dueño);
+
+      const lista = await call('GET', '/api/v1/notifications', { token: dueño.token });
+      const id = lista.body.items[0].id as string;
+
+      // Responde OK: confirmar que el id existe ya sería información. Lo que
+      // importa es que NO cambió nada.
+      await call('PATCH', `/api/v1/notifications/${id}/read`, { token: intruso.token });
+
+      const sinLeer = await call('GET', '/api/v1/notifications/unread-count', {
+        token: dueño.token,
+      });
+      expect(sinLeer.body.sinLeer).toBe(1);
+    });
+
+    it('⛔ nadie ve las notificaciones de otro', async () => {
+      const dueño = await nuevoUsuario();
+      const intruso = await nuevoUsuario();
+      await avisarA(dueño);
+
+      const r = await call('GET', '/api/v1/notifications', { token: intruso.token });
+
+      expect(r.body.items).toHaveLength(0);
+      expect(r.body.sinLeer).toBe(0);
+    });
+
+    it('sin Firebase configurado el aviso queda OMITIDO, no ENVIADO', async () => {
+      /**
+       * Marcarlo como enviado sería mentirle a la base. El día que se conecte
+       * Firebase de verdad, nadie sabría cuáles salieron y cuáles no.
+       */
+      const comprador = await nuevoUsuario();
+      await avisarA(comprador);
+
+      const resumen = await notifications.despachar();
+      expect(resumen.omitidos).toBeGreaterThanOrEqual(1);
+      expect(resumen.enviados).toBe(0);
+
+      const fila = await prisma.notification.findFirst({
+        where: { userId: comprador.userId },
+      });
+      expect(fila?.pushStatus).toBe('SKIPPED');
+      expect(fila?.nextAttemptAt).toBeNull();
+    });
   });
 });

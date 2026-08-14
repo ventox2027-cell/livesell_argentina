@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 
 import { AuditService } from '@/shared/audit/audit.service';
 
+import { ReaperturasService } from './reaperturas.service';
 import { StoresController } from './stores.controller';
 import { StoresService } from './stores.service';
 
@@ -14,7 +15,7 @@ import { StoresService } from './stores.service';
  */
 @Module({
   controllers: [StoresController],
-  providers: [StoresService, AuditService],
-  exports: [StoresService],
+  providers: [StoresService, ReaperturasService, AuditService],
+  exports: [StoresService, ReaperturasService],
 })
 export class StoresModule {}

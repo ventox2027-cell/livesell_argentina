@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 
+import { NotificationsService } from '@/modules/notifications/notifications.service';
 import { AuditService } from '@/shared/audit/audit.service';
 import { DomainError } from '@/shared/errors/domain.error';
 import { PrismaService } from '@/shared/prisma/prisma.service';
@@ -37,6 +38,7 @@ export class StoresService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -664,6 +666,315 @@ export class StoresService {
       where: { userId, productVariantId: variantId },
     });
     return { ok: true as const };
+  }
+
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // INTERESADOS: EL LADO DEL VENDEDOR
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Quién está esperando para comprar, agrupado por producto.
+   *
+   * ═══════════════════════════════════════════════════════════════════════
+   * SIN DATOS DE CONTACTO. A PROPÓSITO.
+   * ═══════════════════════════════════════════════════════════════════════
+   *
+   * Devuelve cuántas personas y cuántas unidades, con nombre de pila. **No
+   * devuelve teléfono, ni email, ni apellido completo.**
+   *
+   * Quien dejó una intención pidió que le avisen cuando la tienda abra. No le
+   * dio su teléfono a un vendedor para que lo contacte por WhatsApp — y si lo
+   * expusiéramos, eso es exactamente lo que pasaría el primer día. El aviso lo
+   * manda VendoX.
+   *
+   * Lo que el vendedor necesita para decidir es el número: "hay once personas
+   * esperando el talle M". Eso sí está, y es lo que le sirve para reponer.
+   */
+  async interesados(userId: string) {
+    const tienda = await this.tiendaDe(userId);
+
+    const intenciones = await this.prisma.purchaseIntent.findMany({
+      // La pertenencia va en el WHERE. Un producto de otra tienda no aparece
+      // ni aunque alguien conozca su id.
+      where: {
+        variant: {
+          deletedAt: null,
+          product: { storeId: tienda.id, deletedAt: null },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        quantity: true,
+        notifiedAt: true,
+        createdAt: true,
+        user: { select: { id: true, firstName: true } },
+        variant: {
+          select: {
+            id: true,
+            title: true,
+            options: { select: { optionValueId: true } },
+            inventory: { select: { onHand: true, reserved: true } },
+            product: {
+              select: {
+                id: true,
+                name: true,
+                status: true,
+                images: { orderBy: { position: 'asc' }, take: 1, select: { url: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    /**
+     * Se agrupa por producto y no por variante.
+     *
+     * El vendedor piensa en "el buzo verde", no en once filas de talles. Las
+     * variantes van adentro, que es donde la información sirve para reponer.
+     */
+    const porProducto = new Map<
+      string,
+      {
+        productoId: string;
+        nombre: string;
+        imagen: string | null;
+        publicado: boolean;
+        personas: number;
+        unidades: number;
+        variantes: Map<
+          string,
+          { varianteId: string; etiqueta: string | null; personas: number; unidades: number; disponible: number }
+        >;
+        gente: Array<{ nombre: string; cantidad: number; desde: Date; avisado: boolean }>;
+      }
+    >();
+
+    for (const i of intenciones) {
+      const producto = i.variant.product;
+
+      let fila = porProducto.get(producto.id);
+      if (!fila) {
+        fila = {
+          productoId: producto.id,
+          nombre: producto.name,
+          imagen: producto.images[0]?.url ?? null,
+          publicado: producto.status === 'ACTIVE',
+          personas: 0,
+          unidades: 0,
+          variantes: new Map(),
+          gente: [],
+        };
+        porProducto.set(producto.id, fila);
+      }
+
+      fila.personas += 1;
+      fila.unidades += i.quantity;
+      fila.gente.push({
+        // Nombre de pila solo. Ver el comentario de arriba.
+        nombre: i.user.firstName,
+        cantidad: i.quantity,
+        desde: i.createdAt,
+        avisado: i.notifiedAt !== null,
+      });
+
+      const clave = i.variant.id;
+      const variante = fila.variantes.get(clave) ?? {
+        varianteId: i.variant.id,
+        // La variante interna no tiene ejes: para el vendedor es "el producto",
+        // no una opción con nombre. Ver `variantePublica`.
+        etiqueta: i.variant.options.length === 0 ? null : i.variant.title,
+        personas: 0,
+        unidades: 0,
+        disponible: i.variant.inventory
+          ? i.variant.inventory.onHand - i.variant.inventory.reserved
+          : 0,
+      };
+      variante.personas += 1;
+      variante.unidades += i.quantity;
+      fila.variantes.set(clave, variante);
+    }
+
+    const items = [...porProducto.values()]
+      .map((p) => ({
+        ...p,
+        variantes: [...p.variantes.values()].sort((a, b) => b.personas - a.personas),
+      }))
+      .sort((a, b) => b.personas - a.personas);
+
+    return {
+      items,
+      totalPersonas: new Set(intenciones.map((i) => i.user.id)).size,
+      totalUnidades: intenciones.reduce((suma, i) => suma + i.quantity, 0),
+      /**
+       * Sin stock para cubrir lo que la gente está esperando.
+       *
+       * Es el número que hace útil esta pantalla: no "hay interesados" sino
+       * "hay interesados y no tenés qué venderles".
+       */
+      sinStock: [...porProducto.values()].filter((p) =>
+        [...p.variantes.values()].some((v) => v.disponible < v.unidades),
+      ).length,
+    };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // REAPERTURA
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Avisa a quien dejó una intención en esta tienda.
+   *
+   * Devuelve cuántos avisos se crearon. Público para que el barrido de
+   * reaperturas y los tests lo llamen sin depender del reloj.
+   *
+   * ─── Por qué se marcan las intenciones ANTES de crear los avisos ───
+   *
+   * Al revés, un fallo entre las dos escrituras dejaría avisos creados con las
+   * intenciones sin marcar, y el siguiente barrido volvería a avisarle a la
+   * misma gente. La deduplicación por clave lo frenaría igual, pero apoyarse en
+   * dos defensas cuando el orden correcto es gratis es apoyarse en la de
+   * repuesto.
+   */
+  async avisarInteresados(storeId: string, momento: Date): Promise<number> {
+    const intenciones = await this.prisma.purchaseIntent.findMany({
+      where: {
+        notifiedAt: null,
+        variant: {
+          deletedAt: null,
+          product: {
+            storeId,
+            deletedAt: null,
+            // Un producto pausado o en borrador no genera aviso: sería mandar a
+            // alguien a una pantalla donde no puede comprar.
+            status: 'ACTIVE',
+          },
+        },
+      },
+      select: {
+        id: true,
+        userId: true,
+        variant: {
+          select: {
+            id: true,
+            product: { select: { id: true, name: true, store: { select: { name: true } } } },
+          },
+        },
+      },
+    });
+
+    if (intenciones.length === 0) return 0;
+
+    await this.prisma.purchaseIntent.updateMany({
+      where: { id: { in: intenciones.map((i) => i.id) } },
+      data: { notifiedAt: momento },
+    });
+
+    const marca = momento.toISOString();
+
+    return this.notifications.crearVarios(
+      intenciones.map((i) => ({
+        userId: i.userId,
+        type: 'STORE_REOPENED' as const,
+        title: `${i.variant.product.store.name} volvió a abrir`,
+        // El nombre del producto va en el cuerpo y no en el título: el título
+        // lo trunca la barra de notificaciones del teléfono, y lo que hace que
+        // alguien lo abra es reconocer la tienda.
+        body: `Ya podés comprar ${i.variant.product.name}.`,
+        data: {
+          tipo: 'product',
+          productId: i.variant.product.id,
+          variantId: i.variant.id,
+          storeId,
+        },
+        /**
+         * La marca de la reapertura es lo que hace única la clave.
+         *
+         * Dos barridos simultáneos sobre la misma reapertura escriben lo mismo
+         * y el índice único deja pasar uno solo. La reapertura de mañana lleva
+         * otra marca y sí manda un aviso nuevo.
+         */
+        dedupeKey: `store_reopened:${storeId}:${i.userId}:${marca}`,
+      })),
+    );
+  }
+
+  /**
+   * Detecta qué tiendas acaban de abrir y avisa.
+   *
+   * ═══════════════════════════════════════════════════════════════════════
+   * "REABRIR" NO ES UN EVENTO: ES UNA TRANSICIÓN QUE HAY QUE BUSCAR
+   * ═══════════════════════════════════════════════════════════════════════
+   *
+   * Que una tienda esté abierta se calcula con el horario y la hora actual.
+   * Nadie aprieta un botón a las nueve de la mañana, así que no hay ningún
+   * momento en el que el sistema se entere solo.
+   *
+   * Este barrido recorre las tiendas con horario configurado, calcula el estado
+   * y lo compara con `wasOpen`. Cuando pasa de cerrada a abierta, ese es el
+   * instante de la reapertura.
+   *
+   * ─── Sólo las que tienen horario ───
+   *
+   * Una tienda sin horario está siempre abierta y nunca reabre. Filtrarlas acá
+   * evita recorrer el catálogo entero cada treinta segundos.
+   */
+  async barrerReaperturas(ahora = new Date()): Promise<{ reabiertas: number; avisos: number }> {
+    const horarios = await this.prisma.storeSchedule.findMany({
+      where: { store: { status: 'ACTIVE', seller: { status: 'ACTIVE' } } },
+      include: { slots: true },
+    });
+
+    let reabiertas = 0;
+    let avisos = 0;
+
+    for (const horario of horarios) {
+      const hayLive = await this.prisma.liveSession.count({
+        where: { storeId: horario.storeId, state: { in: ['LIVE', 'RECONNECTING'] } },
+      });
+
+      const estado = estaAbierta({
+        modo: horario.mode,
+        zona: horario.timezone,
+        franjas: horario.slots.map(
+          (s): Franja => ({
+            weekday: s.weekday,
+            opensAtMinutes: s.opensAtMinutes,
+            closesAtMinutes: s.closesAtMinutes,
+          }),
+        ),
+        hayLive: hayLive > 0,
+        ahora,
+      });
+
+      if (estado.abierta === horario.wasOpen) continue;
+
+      /**
+       * El UPDATE condicional es lo que hace que dos worker no avisen dos veces.
+       *
+       * La condición y la escritura son la misma operación: sólo uno puede
+       * cambiar la fila de `wasOpen: false` a `true`, y el que pierde ve
+       * `count: 0` y no avisa. Un `if` antes del `update` no da esa garantía.
+       */
+      const { count } = await this.prisma.storeSchedule.updateMany({
+        where: { id: horario.id, wasOpen: horario.wasOpen },
+        data: {
+          wasOpen: estado.abierta,
+          ...(estado.abierta ? { lastReopenedAt: ahora } : {}),
+        },
+      });
+      if (count === 0) continue;
+
+      // Sólo al abrir. Cerrar no le interesa a nadie.
+      if (!estado.abierta) continue;
+
+      reabiertas += 1;
+      avisos += await this.avisarInteresados(horario.storeId, ahora);
+    }
+
+    return { reabiertas, avisos };
   }
 
   private async tiendaDe(userId: string) {

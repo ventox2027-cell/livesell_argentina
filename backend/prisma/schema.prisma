@@ -537,6 +537,7 @@ model User {
   follows       Follow[]
   reviews       Review[]
   intents       PurchaseIntent[]
+  notifications Notification[]
 
   @@index([phoneE164])
   @@index([status, createdAt])
@@ -2119,12 +2120,43 @@ model StoreSchedule {
   /// vuelva al horario de verano— la interpretación cambia.
   timezone String @default("America/Argentina/Buenos_Aires")
 
+  /// Si la tienda estaba abierta la última vez que se miró.
+  ///
+  /// ═══════════════════════════════════════════════════════════════════════
+  /// EXISTE PORQUE "REABRIR" NO ES UN EVENTO
+  /// ═══════════════════════════════════════════════════════════════════════
+  ///
+  /// Que una tienda esté abierta se CALCULA: es el horario, la zona y la hora
+  /// actual. Nadie aprieta un botón a las nueve de la mañana. Así que no hay
+  /// ningún momento en el que el sistema se entere de que abrió, y sin eso no
+  /// hay a quién avisarle.
+  ///
+  /// Guardar el último estado conocido convierte el cálculo en una transición:
+  /// el barrido compara lo que da la cuenta con lo que dice esta columna, y
+  /// cuando pasa de `false` a `true` es exactamente el instante de la
+  /// reapertura.
+  ///
+  /// Arranca en `true` a propósito. Con `false`, la primera corrida del barrido
+  /// vería una transición falsa en TODAS las tiendas y les mandaría un aviso de
+  /// reapertura a todos los interesados de golpe.
+  wasOpen Boolean @default(true) @map("was_open")
+
+  /// Cuándo fue la última reapertura detectada.
+  ///
+  /// Es lo que hace única la clave de deduplicación del aviso: dos barridos
+  /// simultáneos sobre la misma reapertura escriben la misma clave y el índice
+  /// único deja pasar uno solo, pero la reapertura del día siguiente sí manda
+  /// un aviso nuevo.
+  lastReopenedAt DateTime? @map("last_reopened_at")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
   store Store               @relation(fields: [storeId], references: [id], onDelete: Cascade)
   slots StoreScheduleSlot[]
 
+  /// El barrido de reaperturas: las que estaban cerradas la última vez.
+  @@index([wasOpen])
   @@map("store_schedules")
 }
 
@@ -2265,4 +2297,112 @@ model PurchaseIntent {
   @@unique([userId, productVariantId])
   @@index([productVariantId, notifiedAt])
   @@map("purchase_intents")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// NOTIFICACIONES
+//
+// ─── Una fila por aviso, no un envío directo a FCM ───
+//
+// Cuando pasa algo que hay que avisar —una tienda que reabre, un pedido que
+// se despachó, una respuesta de soporte— se escribe una fila acá. El envío del
+// push es un paso APARTE, que lee estas filas.
+//
+// El motivo es que FCM se cae, tarda, y devuelve errores por token. Si el aviso
+// se mandara desde adentro de la transacción que despacha el pedido:
+//
+//   · un timeout de Google revertiría el despacho, que ya pasó de verdad;
+//   · o se ignoraría el error, y el aviso se perdería sin dejar rastro.
+//
+// Con la fila escrita, el peor caso es un aviso que llega tarde. Y queda el
+// centro de notificaciones dentro de la app, que funciona aunque la persona
+// tenga los push apagados —que es la mayoría— o el teléfono sin señal.
+//
+// ─── Por qué el estado del push vive en la misma fila ───
+//
+// Un aviso va a UNA persona; el reparto por dispositivo se resuelve mandando a
+// todos sus tokens, y el estado por token ya vive en `Device.failureCount`.
+// Una tabla aparte de "entregas" agregaría una unión por cada lectura del
+// centro de notificaciones para responder algo que nadie pregunta.
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum NotificationType {
+  /// La tienda donde alguien dejó una intención volvió a abrir.
+  STORE_REOPENED
+  /// Un vendedor al que se sigue arrancó un vivo.
+  LIVE_STARTED
+  /// Cambió el estado de un pedido: preparándose, listo, despachado, entregado.
+  ORDER_STATUS
+  /// Al vendedor: le entró una venta.
+  ORDER_RECEIVED
+  /// Se acreditó un pago.
+  PAYMENT_APPROVED
+  /// Se rechazó un cobro y se puede reintentar.
+  PAYMENT_REJECTED
+  /// Hay novedades en un ticket de soporte.
+  SUPPORT_REPLY
+  /// Aviso de la plataforma: verificación, suspensión, cambios de cuenta.
+  ACCOUNT
+}
+
+enum NotificationPushStatus {
+  /// Todavía no se intentó mandar.
+  PENDING
+  /// Se entregó a FCM. No garantiza que haya llegado al teléfono.
+  SENT
+  /// No se intentó a propósito: sin dispositivos, o push apagados.
+  SKIPPED
+  /// Se intentó y falló las veces suficientes como para dejar de intentar.
+  FAILED
+}
+
+model Notification {
+  id     String @id // ntf_<ulid>
+  userId String @map("user_id")
+
+  type NotificationType
+
+  /// El texto ya resuelto, no una plantilla con variables.
+  ///
+  /// Se guarda escrito porque tiene que decir lo mismo dentro de un año. Una
+  /// plantilla renderizada al leer diría "Tu pedido de {producto}" con el
+  /// nombre ACTUAL del producto, que el vendedor pudo haber cambiado, y para
+  /// un producto archivado no diría nada.
+  title String
+  body  String
+
+  /// A dónde lleva tocarla. `{ tipo: 'order', id: 'ord_...' }`.
+  ///
+  /// Json y no columnas: cada tipo de aviso apunta a una entidad distinta, y
+  /// una columna por entidad serían ocho columnas nulas en cada fila.
+  data Json?
+
+  /// Idempotencia de negocio.
+  ///
+  /// `store_reopened:<storeId>:<userId>` hace que una tienda que abre y cierra
+  /// tres veces en una tarde —porque el vendedor está probando el horario— no
+  /// mande tres avisos a la misma persona. El índice único lo garantiza en la
+  /// base, no en un `if` que se puede perder una carrera.
+  dedupeKey String? @unique @map("dedupe_key")
+
+  /// Cuándo la persona la vio dentro de la app. `null` = sin leer.
+  readAt DateTime? @map("read_at")
+
+  pushStatus    NotificationPushStatus @default(PENDING) @map("push_status")
+  pushAttempts  Int                    @default(0) @map("push_attempts") @db.SmallInt
+  /// Cuándo se puede volver a intentar. Espaciado creciente entre fallos.
+  nextAttemptAt DateTime?              @map("next_attempt_at")
+  pushedAt      DateTime?              @map("pushed_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// El centro de notificaciones: las de esta persona, las más nuevas primero.
+  @@index([userId, createdAt])
+  /// El contador de no leídas, sin recorrer el historial entero.
+  @@index([userId, readAt])
+  /// El barrido de envío: sólo las que están esperando su turno.
+  @@index([pushStatus, nextAttemptAt])
+  @@map("notifications")
 }
