@@ -6,6 +6,7 @@ import '../../../core/design/tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../data/seller_repository.dart';
 import '../domain/seller_models.dart';
+import 'politicas_screen.dart';
 import 'schedule_screen.dart';
 
 /// Ajustes de la tienda.
@@ -200,6 +201,28 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
                   onTap: () => Navigator.of(context).push(
                     MaterialPageRoute<void>(builder: (_) => const ScheduleScreen()),
                   ),
+                ),
+                const SizedBox(height: Gap.lg),
+                // Envío y devoluciones aparte del resto: define plata que se
+                // le cobra a compradores reales y obligaciones legales que el
+                // vendedor asume. No son dos campos más de este formulario.
+                _FilaDeAjuste(
+                  icono: Icons.local_shipping_outlined,
+                  titulo: 'Envío y devoluciones',
+                  detalle: 'Cuánto cobrás de envío y qué pasa si lo devuelven',
+                  onTap: () async {
+                    final cambio = await Navigator.of(context).push<bool>(
+                      MaterialPageRoute<bool>(
+                        builder: (_) => PoliticasScreen(
+                          storeId: store.id,
+                          inicial: (envio: store.envio, cambios: store.cambios),
+                        ),
+                      ),
+                    );
+                    // Al volver con cambios hay que releer: la tienda que
+                    // tenemos en memoria quedó vieja.
+                    if (cambio ?? false) ref.invalidate(miPerfilVendedorProvider);
+                  },
                 ),
                 const SizedBox(height: Gap.lg),
                 _Apertura(

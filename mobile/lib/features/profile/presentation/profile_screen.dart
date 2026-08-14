@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../notifications/data/notifications_api.dart';
+import '../../notifications/presentation/notifications_screen.dart';
 import '../../../core/config/runtime_config.dart';
 import '../../../core/design/tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
@@ -38,6 +40,30 @@ class ProfileScreen extends ConsumerWidget {
             _TarjetaCompletar(faltantes: sesion.faltantes),
             const SizedBox(height: Gap.xl),
           ],
+
+          // Los avisos van primero de la sección: es lo único de esta pantalla
+          // que puede tener algo esperando, y lo que la persona vino a ver si
+          // llegó acá desde una notificación que ya se fue de la barra.
+          Consumer(
+            builder: (context, ref, _) {
+              final sinLeer = ref.watch(avisosSinLeerProvider).valueOrNull ?? 0;
+              return _Fila(
+                icono: Icons.notifications_none_rounded,
+                texto: 'Avisos',
+                detalle: sinLeer > 0 ? '$sinLeer sin leer' : null,
+                resaltarDetalle: sinLeer > 0,
+                onTap: () async {
+                  await Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const NotificationsScreen(),
+                    ),
+                  );
+                  // Al volver, el contador puede haber cambiado.
+                  ref.invalidate(avisosSinLeerProvider);
+                },
+              );
+            },
+          ),
 
           const _Titulo('Cuenta'),
           _Fila(

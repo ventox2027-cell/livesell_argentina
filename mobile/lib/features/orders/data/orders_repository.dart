@@ -41,10 +41,18 @@ class OrdersRepository {
     required String reservationId,
     required String idempotencyKey,
     String? addressId,
+    bool retiraEnPersona = false,
   }) async {
     final res = await _api.raw.post<Map<String, dynamic>>(
       '/orders',
-      data: {'reservationId': reservationId, if (addressId != null) 'addressId': addressId},
+      data: {
+        'reservationId': reservationId,
+        if (addressId != null) 'addressId': addressId,
+        // Lo único del envío que aporta quien compra. El backend sólo lo
+        // respeta si la tienda ofrece retiro: mandarlo en una tienda que no lo
+        // ofrece NO evita el costo.
+        if (retiraEnPersona) 'retiraEnPersona': true,
+      },
       options: Options(headers: {'idempotency-key': idempotencyKey}),
     );
     if (res.statusCode != 201 && res.statusCode != 200) throw _error(res);

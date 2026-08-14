@@ -11,6 +11,7 @@ import '../../orders/domain/order_models.dart';
 import '../data/live_api.dart';
 import '../domain/live_models.dart';
 import 'shop_sheet.dart' show plata;
+import 'widgets/envio_y_politicas.dart';
 
 /// Elegir talle, color y cantidad. El paso previo a apartar.
 ///
@@ -85,6 +86,14 @@ class _VariantSheetState extends ConsumerState<VariantSheet> {
 
   int _cantidad = 1;
   bool _enviandoIntencion = false;
+
+  /// Si eligió retirar en persona.
+  ///
+  /// Sólo significa algo cuando la tienda ofrece las dos opciones. En los demás
+  /// modos el backend lo ignora, y está bien: si bastara con un campo del
+  /// cuerpo para no pagar el envío, el vendedor despacharía paquetes que nadie
+  /// le pagó.
+  bool _retira = false;
 
   @override
   void initState() {
@@ -163,6 +172,9 @@ class _VariantSheetState extends ConsumerState<VariantSheet> {
       // `etiqueta` es null cuando la variante es la interna del producto: sin
       // opciones no hay nada que nombrar, y "Default" no le dice nada a nadie.
       variante: variante.etiqueta,
+      // Sólo se manda si la tienda ofrece las dos opciones: en los demás modos
+      // el backend lo ignora y mandarlo igual confundiría al leer los logs.
+      retiraEnPersona: producto.envio.hayQueElegir && _retira,
     );
 
     if (!mounted) return;
@@ -264,6 +276,19 @@ class _VariantSheetState extends ConsumerState<VariantSheet> {
                   ),
                   const SizedBox(height: Gap.lg),
                 ],
+
+                // Envío y devoluciones ANTES de reservar. Enterarse del costo
+                // del envío con la tarjeta en la mano es la razón número uno
+                // por la que alguien abandona una compra.
+                EnvioYPoliticas(
+                  envio: producto.envio,
+                  cambios: producto.cambios,
+                  retira: _retira,
+                  onCambiarRetiro: producto.envio.hayQueElegir
+                      ? (v) => setState(() => _retira = v)
+                      : null,
+                ),
+                const SizedBox(height: Gap.lg),
 
                 if (variante != null && !variante.agotada) ...[
                   _Cantidad(

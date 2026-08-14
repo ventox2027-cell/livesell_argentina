@@ -1,7 +1,14 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 
+import { diasEfectivos, resumenParaElComprador } from '@/modules/commerce/politicas';
 import { NotificationsService } from '@/modules/notifications/notifications.service';
+import {
+  costoDeEnvio,
+  etiquetaDeEnvio,
+  permiteEnvio,
+  permiteRetiro,
+} from '@/modules/orders/shipping';
 import { AuditService } from '@/shared/audit/audit.service';
 import { DomainError } from '@/shared/errors/domain.error';
 import { PrismaService } from '@/shared/prisma/prisma.service';
@@ -591,6 +598,20 @@ export class StoresService {
           where: { deletedAt: null, status: 'ACTIVE' },
           include: { inventory: true, options: true },
         },
+        store: {
+          select: {
+            id: true,
+            name: true,
+            shippingMode: true,
+            shippingFlatAmount: true,
+            shippingNote: true,
+            processorFeeMode: true,
+            exchangeMode: true,
+            exchangeWindowDays: true,
+            returnShippingPaidBy: true,
+            exchangeNote: true,
+          },
+        },
       },
     });
 
@@ -617,6 +638,47 @@ export class StoresService {
         disponible: v.inventory ? v.inventory.onHand - v.inventory.reserved : 0,
         valoresDeOpcion: v.options.map((o) => o.optionValueId),
       })),
+
+      /**
+       * El envío y las devoluciones, ANTES de pagar.
+       *
+       * Enterarse del costo del envío con la tarjeta en la mano es la razón
+       * número uno por la que alguien abandona una compra. Y el derecho de
+       * arrepentimiento tiene que estar visible antes de comprar, no después
+       * -Resolución 424/2020-.
+       *
+       * Los derivados van calculados desde el backend para que la app no
+       * reimplemente las reglas y se desincronice el día que cambien.
+       */
+      tienda: {
+        id: producto.store.id,
+        nombre: producto.store.name,
+      },
+      envio: {
+        modo: producto.store.shippingMode,
+        costo: costoDeEnvio({
+          modo: producto.store.shippingMode,
+          montoFijo: producto.store.shippingFlatAmount,
+        }),
+        etiqueta: etiquetaDeEnvio({
+          modo: producto.store.shippingMode,
+          montoFijo: producto.store.shippingFlatAmount,
+        }),
+        permiteEnvio: permiteEnvio(producto.store.shippingMode),
+        permiteRetiro: permiteRetiro(producto.store.shippingMode),
+        nota: producto.store.shippingNote,
+        trasladaCostoDelProcesador: producto.store.processorFeeMode === 'PASSED_TO_BUYER',
+      },
+      cambios: {
+        modo: producto.store.exchangeMode,
+        dias: diasEfectivos(producto.store.exchangeWindowDays),
+        resumen: resumenParaElComprador({
+          modo: producto.store.exchangeMode,
+          diasParaCambiar: producto.store.exchangeWindowDays,
+          quienPagaElEnvio: producto.store.returnShippingPaidBy,
+          nota: producto.store.exchangeNote,
+        }),
+      },
     };
   }
 

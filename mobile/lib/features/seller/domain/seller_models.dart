@@ -4,6 +4,8 @@
 /// backend. La conversión a pesos ocurre sólo al mostrar — nunca al calcular.
 library;
 
+import 'politicas_models.dart';
+
 int _int(Object? v, [int fallback = 0]) =>
     v is int ? v : v is num ? v.toInt() : fallback;
 
@@ -61,6 +63,16 @@ class Store {
     this.description,
     this.logoUrl,
     this.coverUrl,
+    this.envio = const PoliticaDeEnvioEditable(
+      modo: ModoDeEnvio.free,
+      montoFijo: 0,
+      trasladaCostoDelProcesador: false,
+    ),
+    this.cambios = const PoliticaDeCambiosEditable(
+      modo: ModoDeCambios.soloLegal,
+      dias: PoliticaDeCambiosEditable.diasMinimosLegales,
+      envioDeVueltaLoPagaElVendedor: true,
+    ),
   });
 
   factory Store.fromJson(Map<String, dynamic> j) => Store(
@@ -71,6 +83,11 @@ class Store {
         description: j['description'] as String?,
         logoUrl: j['logoUrl'] as String?,
         coverUrl: j['coverUrl'] as String?,
+        // Las políticas viajan dentro del mismo objeto `store`: el backend las
+        // guarda ahí, y separarlas obligaría a una segunda petición para pintar
+        // una pantalla que ya tiene todo lo que necesita.
+        envio: PoliticaDeEnvioEditable.fromJson(j),
+        cambios: PoliticaDeCambiosEditable.fromJson(j),
       );
 
   final String id;
@@ -80,6 +97,12 @@ class Store {
   final String? description;
   final String? logoUrl;
   final String? coverUrl;
+
+  /// Cómo cobra el envío y quién paga el costo del cobro.
+  final PoliticaDeEnvioEditable envio;
+
+  /// Cambios y devoluciones. El piso legal se aplica igual.
+  final PoliticaDeCambiosEditable cambios;
 
   bool get pausada => status == 'PAUSED';
 }

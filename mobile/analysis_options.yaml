@@ -1,5 +1,14 @@
 include: package:flutter_lints/flutter.yaml
 
+# El ancho real del proyecto.
+#
+# `dart format` por omisión corta en 80, y todo el código de esta app está
+# escrito a ~100. Sin esta línea, correr el formateador sobre un archivo lo
+# deja distinto del resto y llena los diffs de reindentaciones que no aportan
+# nada. Se descubrió formateando un widget nuevo y viendo el destrozo.
+formatter:
+  page_width: 100
+
 analyzer:
   language:
     strict-casts: true

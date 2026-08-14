@@ -12,6 +12,7 @@ import '../../../shared/widgets/app_snack.dart';
 import '../data/orders_repository.dart';
 import '../domain/order_models.dart';
 import 'address_sheet.dart';
+import 'widgets/desglose_de_precio.dart';
 
 /// El checkout.
 ///
@@ -45,17 +46,22 @@ class CheckoutSheet extends ConsumerStatefulWidget {
     required this.reservationId,
     required this.nombreProducto,
     required this.precio,
+    this.retiraEnPersona = false,
   });
 
   final String reservationId;
   final String nombreProducto;
   final String precio;
 
+  /// Lo eligió en la hoja de variantes, donde vio el precio de cada opción.
+  final bool retiraEnPersona;
+
   static Future<Pedido?> mostrar(
     BuildContext context, {
     required String reservationId,
     required String nombreProducto,
     required String precio,
+    bool retiraEnPersona = false,
   }) {
     return showModalBottomSheet<Pedido>(
       context: context,
@@ -67,6 +73,7 @@ class CheckoutSheet extends ConsumerStatefulWidget {
         reservationId: reservationId,
         nombreProducto: nombreProducto,
         precio: precio,
+        retiraEnPersona: retiraEnPersona,
       ),
     );
   }
@@ -106,6 +113,7 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
             reservationId: widget.reservationId,
             idempotencyKey: _claveDePedido,
             addressId: _direccion?.id,
+            retiraEnPersona: widget.retiraEnPersona,
           );
       if (!mounted) return;
       setState(() {
@@ -397,20 +405,8 @@ class _Resumen extends StatelessWidget {
           const SizedBox(height: Gap.lg),
         ],
 
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            const Text('Total', style: TextStyle(fontSize: 15, color: AppColor.textoSuave)),
-            Text(
-              pedido.total,
-              style: const TextStyle(
-                fontSize: 26,
-                fontWeight: FontWeight.w800,
-                letterSpacing: -0.8,
-              ),
-            ),
-          ],
-        ),
+        // Una línea por concepto. Ver el comentario de `DesgloseDePrecio`.
+        DesgloseDePrecio(pedido: pedido),
         const SizedBox(height: Gap.lg),
 
         FilledButton(

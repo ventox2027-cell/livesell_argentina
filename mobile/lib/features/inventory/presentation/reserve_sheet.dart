@@ -29,12 +29,17 @@ class ReserveSheet extends ConsumerStatefulWidget {
     required this.nombreProducto,
     required this.precio,
     this.variante,
+    this.retiraEnPersona = false,
   });
 
   final String productVariantId;
   final String nombreProducto;
   final String precio;
   final String? variante;
+
+  /// Si eligió retirar en persona en la hoja anterior, donde vio el precio de
+  /// cada opción de entrega.
+  final bool retiraEnPersona;
 
   /// Devuelve el **pedido** si la compra se completó, o `null` si se cerró
   /// antes de pagar.
@@ -52,6 +57,7 @@ class ReserveSheet extends ConsumerStatefulWidget {
     required String nombreProducto,
     required String precio,
     String? variante,
+    bool retiraEnPersona = false,
   }) {
     return showModalBottomSheet<Pedido>(
       context: context,
@@ -62,6 +68,7 @@ class ReserveSheet extends ConsumerStatefulWidget {
         nombreProducto: nombreProducto,
         precio: precio,
         variante: variante,
+        retiraEnPersona: retiraEnPersona,
       ),
     );
   }
@@ -212,6 +219,7 @@ class _ReserveSheetState extends ConsumerState<ReserveSheet> with WidgetsBinding
       reservationId: r.reservationId,
       nombreProducto: widget.nombreProducto,
       precio: widget.precio,
+      retiraEnPersona: widget.retiraEnPersona,
     );
 
     if (!mounted) return;

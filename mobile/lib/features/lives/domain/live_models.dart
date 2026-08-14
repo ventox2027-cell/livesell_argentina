@@ -14,6 +14,10 @@
 // Acá el costo de un campo faltante es un texto vacío o un `null`. La pantalla
 // sigue en pie y quien la mira puede seguir comprando.
 
+import 'politicas_de_tienda.dart';
+
+export 'politicas_de_tienda.dart' show PoliticaDeCambios, PoliticaDeEnvio;
+
 class ResumenDeLive {
   const ResumenDeLive({
     required this.id,
@@ -389,8 +393,11 @@ class DetalleDeProducto {
     required this.precioBaseCentavos,
     required this.ejes,
     required this.variantes,
+    required this.envio,
+    required this.cambios,
     this.imagenUrl,
     this.descripcion,
+    this.nombreDeTienda,
   });
 
   /// Lee la respuesta de `GET /catalog/products/:id`.
@@ -451,6 +458,13 @@ class DetalleDeProducto {
       imagenUrl: imagenes.isEmpty ? null : imagenes.first as String?,
       ejes: ejes,
       variantes: variantes,
+      nombreDeTienda: (j['tienda'] as Map<String, dynamic>?)?['nombre'] as String?,
+      // Envío y devoluciones ANTES de comprar. Enterarse del costo del envío
+      // con la tarjeta en la mano es la razón número uno por la que alguien
+      // abandona una compra, y el derecho de arrepentimiento tiene que estar
+      // visible antes de pagar, no después.
+      envio: PoliticaDeEnvio.fromJson(j['envio'] as Map<String, dynamic>?),
+      cambios: PoliticaDeCambios.fromJson(j['cambios'] as Map<String, dynamic>?),
     );
   }
 
@@ -461,6 +475,13 @@ class DetalleDeProducto {
   final String? imagenUrl;
   final List<EjeDeVariacion> ejes;
   final List<VarianteDeProducto> variantes;
+  final String? nombreDeTienda;
+
+  /// Cuánto sale el envío y si se puede retirar.
+  final PoliticaDeEnvio envio;
+
+  /// Qué pasa si no le gusta. Incluye el derecho legal, siempre.
+  final PoliticaDeCambios cambios;
 
   /// La variante que corresponde a una combinación de valores elegidos.
   ///

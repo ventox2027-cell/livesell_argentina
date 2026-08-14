@@ -9,6 +9,7 @@ import '../../lives/presentation/prepare_live_screen.dart';
 import '../../orders/presentation/seller_orders_screen.dart';
 import '../data/seller_repository.dart';
 import '../domain/seller_models.dart';
+import 'interesados_screen.dart';
 import 'product_editor_screen.dart';
 import 'store_settings_screen.dart';
 
@@ -258,6 +259,38 @@ class _Panel extends ConsumerWidget {
                   Expanded(
                     child: Text(
                       'Mis ventas',
+                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  Icon(Icons.chevron_right_rounded, color: AppColor.textoDebil),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: Gap.md),
+
+          // Los interesados van al lado de las ventas y no en ajustes: es
+          // demanda que todavía no se cobró, y la decisión que dispara —reponer
+          // stock— se toma mirando lo que se vendió, no configurando la tienda.
+          InkWell(
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const InteresadosScreen()),
+            ),
+            borderRadius: BorderRadius.circular(Redondeo.lg),
+            child: Container(
+              padding: const EdgeInsets.all(Gap.lg),
+              decoration: BoxDecoration(
+                color: AppColor.superficie,
+                borderRadius: BorderRadius.circular(Redondeo.lg),
+                border: Border.all(color: AppColor.borde),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.people_outline_rounded, size: 20, color: AppColor.textoSuave),
+                  SizedBox(width: Gap.md),
+                  Expanded(
+                    child: Text(
+                      'Interesados',
                       style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
                     ),
                   ),

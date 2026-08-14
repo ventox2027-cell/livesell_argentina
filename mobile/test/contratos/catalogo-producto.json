@@ -1,0 +1,82 @@
+{
+  "id": "prd_01M014TN53W0Q51ZXN5CHHN3ZM",
+  "nombre": "Buzo oversize de algodón",
+  "descripcion": "Tejido a mano, algodón peinado.",
+  "precioCentavos": 890000,
+  "moneda": "ARS",
+  "imagenes": [],
+  "ejes": [
+    {
+      "id": "opt_01M014TN55ASYBSH5PZEA21YSG",
+      "nombre": "Talle",
+      "valores": [
+        {
+          "id": "opv_01M014TN57H3V52EFSXATSVJZH",
+          "valor": "S"
+        },
+        {
+          "id": "opv_01M014TN57TBTRZWB8C5WNC21Q",
+          "valor": "M"
+        }
+      ]
+    },
+    {
+      "id": "opt_01M014TN59D4XGNHHC68JWP6D4",
+      "nombre": "Color",
+      "valores": [
+        {
+          "id": "opv_01M014TN5A25H0PDNJD5B65M3F",
+          "valor": "Negro"
+        }
+      ]
+    }
+  ],
+  "variantes": [
+    {
+      "id": "var_01M014TN5CEVTVJT9T19Y7HZED",
+      "titulo": "S / Negro",
+      "precioCentavos": 890000,
+      "disponible": 4,
+      "valoresDeOpcion": [
+        "opv_01M014TN57H3V52EFSXATSVJZH",
+        "opv_01M014TN5A25H0PDNJD5B65M3F"
+      ]
+    },
+    {
+      "id": "var_01M014TN5GF6R8ZES831PQJAFA",
+      "titulo": "M / Negro",
+      "precioCentavos": 890000,
+      "disponible": 4,
+      "valoresDeOpcion": [
+        "opv_01M014TN57TBTRZWB8C5WNC21Q",
+        "opv_01M014TN5A25H0PDNJD5B65M3F"
+      ]
+    }
+  ],
+  "tienda": {
+    "id": "sto_01M014TN2XHV3EDME7B7H6PPW8",
+    "nombre": "Tejidos Marta msthumte"
+  },
+  "envio": {
+    "modo": "FIXED_OR_PICKUP",
+    "costo": 350000,
+    "etiqueta": "Envío",
+    "permiteEnvio": true,
+    "permiteRetiro": true,
+    "nota": "Envíos los martes y jueves. Retiro por Palermo.",
+    "trasladaCostoDelProcesador": true
+  },
+  "cambios": {
+    "modo": "CAMBIO_SIN_CAUSA",
+    "dias": 30,
+    "resumen": {
+      "titulo": "Cambios y devoluciones",
+      "lineas": [
+        "Cambio por otro talle o color dentro de los 30 días.",
+        "El envío de vuelta lo paga quien cambia.",
+        "Con la etiqueta puesta y sin uso."
+      ],
+      "derechoDeArrepentimiento": "Tenés 10 días corridos desde que recibís el producto para arrepentirte de la compra, sin dar motivos y sin costo. Es un derecho que te da la ley y no depende del vendedor."
+    }
+  }
+}

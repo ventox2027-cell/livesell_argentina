@@ -153,6 +153,9 @@ class Pedido {
     required this.fecha,
     this.itemsSubtotal = 0,
     this.shippingAmount = 0,
+    this.recargoProcesador = 0,
+    this.modoDeEnvio,
+    this.retiraEnPersona = false,
     this.platformFeeAmount = 0,
     this.sellerNetAmount = 0,
     this.lineas = const [],
@@ -180,6 +183,9 @@ class Pedido {
       fecha: DateTime.tryParse(j['createdAt'] as String? ?? '') ?? DateTime.now(),
       itemsSubtotal: _int(j['itemsSubtotal']),
       shippingAmount: _int(j['shippingAmount']),
+      recargoProcesador: _int(j['processorSurchargeAmount']),
+      modoDeEnvio: j['shippingModeSnapshot'] as String?,
+      retiraEnPersona: j['pickupSelected'] as bool? ?? false,
       platformFeeAmount: _int(j['platformFeeAmount']),
       sellerNetAmount: _int(j['sellerNetAmount']),
       lineas: (j['items'] as List<dynamic>? ?? [])
@@ -210,6 +216,22 @@ class Pedido {
   final DateTime fecha;
   final int itemsSubtotal;
   final int shippingAmount;
+
+  /// Lo que se le sumó por el medio de pago, si el vendedor lo traslada.
+  ///
+  /// Línea propia y no sumada al envío: si fuera parte del envío, el comprador
+  /// vería "Envío .200" cuando el vendedor cobra .500.
+  final int recargoProcesador;
+
+  /// La política con la que se cobró ESTE pedido, no la actual de la tienda.
+  final String? modoDeEnvio;
+
+  /// Si se retira en persona.
+  ///
+  /// No se deduce de `shippingAmount == 0`: hay tiendas con envío gratis, y
+  /// confundirlas hace que alguien espere un paquete que tiene que ir a buscar.
+  final bool retiraEnPersona;
+
   final int platformFeeAmount;
   final int sellerNetAmount;
   final List<LineaDePedido> lineas;
