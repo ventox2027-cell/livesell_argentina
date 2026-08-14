@@ -143,6 +143,19 @@ class OrdersRepository {
     );
   }
 
+  /// Confirma la entrega con el codigo que tiene quien compro.
+  ///
+  /// Es el UNICO camino a DELIVERED: avanzarVenta no lo acepta. "Entregado"
+  /// es una afirmacion sobre el mundo fisico y no puede hacerla solo quien
+  /// tiene interes en que sea cierta.
+  Future<void> confirmarEntrega(String orderId, String codigo) async {
+    final res = await _api.post<Map<String, dynamic>>(
+      "/seller/orders/$orderId/delivery-confirmation",
+      data: {"code": codigo},
+    );
+    if (res.statusCode != 201 && res.statusCode != 200) throw _error(res);
+  }
+
   Future<void> avanzarVenta(String orderId, String status) async {
     final res = await _api.patch<Map<String, dynamic>>(
       '/seller/orders/$orderId/fulfillment',

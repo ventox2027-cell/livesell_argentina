@@ -28,6 +28,23 @@ export const REDACT_PATHS = [
   '*.docNumber',
   '*.phoneE164',
 
+  /**
+   * El código de entrega.
+   *
+   * Es lo único que impide que un vendedor marque entregado un pedido que no
+   * entregó. Un `logger.debug(orden)` mientras se depura lo dejaría en los logs
+   * de la plataforma, al alcance de cualquiera que los lea — incluido el
+   * vendedor si alguna vez se le exponen.
+   *
+   * ⚠️ El comodín `*` matchea UN nivel. Si algún día el código viaja anidado
+   * —`{ pedido: { orden: { deliveryCode } } }`— hay que agregar la ruta
+   * explícita, como se hizo con las credenciales de AWS. Ver la nota de abajo.
+   */
+  '*.deliveryCode',
+  '*.delivery_code',
+  'orden.deliveryCode',
+  'order.deliveryCode',
+
   // Mercado Pago (Sprint 0B). La primera línea de defensa es `scrubMpPayment`,
   // que limpia la respuesta antes de que llegue acá; esto es la red debajo,
   // para el `logger.debug(respuesta)` que alguien agregue depurando a las 2 AM.

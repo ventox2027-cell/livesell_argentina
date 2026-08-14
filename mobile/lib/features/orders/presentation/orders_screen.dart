@@ -7,6 +7,7 @@ import '../../../shared/widgets/app_snack.dart';
 import '../../seller/domain/seller_models.dart';
 import '../data/orders_repository.dart';
 import '../domain/order_models.dart';
+import 'widgets/codigo_de_entrega.dart';
 
 /// Mis pedidos.
 ///
@@ -205,6 +206,13 @@ class OrderDetailScreen extends ConsumerWidget {
                     ],
                   ),
                 ),
+
+              // El codigo va ANTES del total: cuando el pedido esta en la puerta,
+              // es lo unico que la persona necesita de esta pantalla.
+              if (p.esperaEntrega) ...[
+                const SizedBox(height: Gap.md),
+                CodigoDeEntrega(codigo: p.codigoDeEntrega!),
+              ],
 
               const Divider(color: AppColor.borde, height: Gap.xl),
               Row(

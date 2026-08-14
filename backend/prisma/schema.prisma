@@ -1433,6 +1433,28 @@ model Order {
   expiredAt   DateTime? @map("expired_at")
   refundedAt  DateTime? @map("refunded_at")
 
+  // ─── Preparación y entrega ───
+  //
+  // Se guarda CUÁNDO pasó cada cosa, no sólo el estado actual. El estado dice
+  // dónde está el pedido; estas marcas dicen cuánto tardó cada paso, que es lo
+  // que después permite hablar de demoras sin inventar.
+  preparingAt DateTime? @map("preparing_at")
+  readyAt     DateTime? @map("ready_at")
+  shippedAt   DateTime? @map("shipped_at")
+  deliveredAt DateTime? @map("delivered_at")
+
+  /// El código que el comprador le dice al repartidor. Seis dígitos.
+  ///
+  /// ⚠️ NUNCA sale en una respuesta del vendedor ni aparece en logs. Se guarda
+  /// en claro a propósito: el comprador tiene que poder leerlo cada vez que
+  /// abre su pedido, no una sola vez. La explicación está en `delivery-code.ts`.
+  deliveryCode         String?   @map("delivery_code")
+  deliveryCodeIssuedAt DateTime? @map("delivery_code_issued_at")
+  /// Intentos fallidos seguidos. Se reinicia al confirmar.
+  deliveryCodeAttempts Int       @default(0) @map("delivery_code_attempts")
+  /// Hasta cuándo no se aceptan más intentos.
+  deliveryCodeLockedUntil DateTime? @map("delivery_code_locked_until")
+
   buyer    User             @relation(fields: [buyerId], references: [id])
   store    Store            @relation(fields: [storeId], references: [id])
   seller   Seller           @relation(fields: [sellerId], references: [id])

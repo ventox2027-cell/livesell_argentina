@@ -9,6 +9,7 @@ import '../../../shared/widgets/app_snack.dart';
 import '../../seller/domain/seller_models.dart';
 import '../data/orders_repository.dart';
 import '../domain/order_models.dart';
+import 'widgets/confirmar_entrega_sheet.dart';
 
 /// Las ventas del vendedor.
 ///
@@ -153,6 +154,15 @@ class _TarjetaDeVenta extends ConsumerStatefulWidget {
 class _TarjetaDeVentaState extends ConsumerState<_TarjetaDeVenta> {
   bool _guardando = false;
 
+  /// Pide el código y confirma. El vendedor nunca lo ve: sólo lo escribe.
+  Future<void> _confirmarEntrega() async {
+    await ConfirmarEntregaSheet.mostrar(
+      context,
+      orderId: widget.venta.id,
+      referencia: widget.venta.referencia,
+    );
+  }
+
   Future<void> _avanzar() async {
     final siguiente = widget.venta.siguienteEstado;
     if (siguiente == null) return;
@@ -287,7 +297,31 @@ class _TarjetaDeVentaState extends ConsumerState<_TarjetaDeVenta> {
             ],
           ),
 
-          if (v.etiquetaSiguiente != null) ...[
+          /**
+           * Despachado ya no avanza solo: pide el código.
+           *
+           * "Entregado" es una afirmación sobre el mundo físico, y hasta acá la
+           * hacía unilateralmente quien tiene interés en que sea cierta. Ahora
+           * hay que pedirle los seis números a quien recibe el pedido.
+           */
+          if (v.pideCodigoDeEntrega) ...[
+            const SizedBox(height: Gap.md),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: () => unawaited(_confirmarEntrega()),
+                style: FilledButton.styleFrom(minimumSize: const Size(0, 44)),
+                icon: const Icon(Icons.check_circle_outline_rounded, size: 19),
+                label: const Text('Confirmar entrega'),
+              ),
+            ),
+            const SizedBox(height: Gap.xs),
+            const Text(
+              'Pedile el código a quien recibe el pedido.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 12, color: AppColor.textoSuave),
+            ),
+          ] else if (v.etiquetaSiguiente != null) ...[
             const SizedBox(height: Gap.md),
             SizedBox(
               width: double.infinity,

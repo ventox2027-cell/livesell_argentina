@@ -26,11 +26,13 @@ import { AddressesService } from './addresses.service';
 import {
   CreateOrderSchema,
   CreatePaymentAttemptSchema,
+  ConfirmarEntregaSchema,
   FulfillmentSchema,
   OrderPageQuerySchema,
   UpsertAddressSchema,
   type CreateOrderDto,
   type CreatePaymentAttemptDto,
+  type ConfirmarEntregaDto,
   type FulfillmentDto,
   type OrderPageQueryDto,
   type UpsertAddressDto,
@@ -249,6 +251,28 @@ export class OrdersController {
   ) {
     const seller = await this.ownership.sellerOf(user.id, { requireActive: true });
     return this.orders.advanceFulfillment(orderId, seller.id, dto.status);
+  }
+
+  /**
+   * Confirma la entrega con el código que tiene quien compró.
+   *
+   * ⛔ **Es el único camino a `DELIVERED`.** `PATCH .../fulfillment` no lo
+   * acepta: "entregado" es una afirmación sobre el mundo físico y no puede
+   * hacerla unilateralmente quien tiene interés en que sea cierta.
+   *
+   * El límite es bajo y va por vendedor: cinco intentos por pedido ya frenan
+   * la fuerza bruta, y esto frena al que prueba números sobre muchos pedidos a
+   * la vez.
+   */
+  @RateLimit({ limit: 20, windowSec: 300, bucket: 'orders:delivery' })
+  @Post('seller/orders/:id/delivery-confirmation')
+  async confirmarEntrega(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') orderId: string,
+    @Body(new ZodValidationPipe(ConfirmarEntregaSchema)) dto: ConfirmarEntregaDto,
+  ) {
+    const seller = await this.ownership.sellerOf(user.id, { requireActive: true });
+    return this.orders.confirmarEntrega(orderId, seller.id, dto.code);
   }
 }
 

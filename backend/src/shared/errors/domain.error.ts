@@ -128,6 +128,17 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<string, number>> = {
   /** El comprador no puede cambiar estados de preparación. */
   FULFILLMENT_NOT_ALLOWED: 403,
   INVALID_TRANSITION: 409,
+
+  // ─── Entrega ───
+  //
+  // 422 y no 400: el cuerpo está bien formado —seis dígitos, ya lo validó el
+  // DTO— y lo que falla es la regla. La app necesita distinguir "escribiste
+  // cualquier cosa" de "el número no es ese", porque son dos mensajes
+  // distintos para el repartidor.
+  DELIVERY_CODE_INVALID: 422,
+  DELIVERY_CODE_LOCKED: 422,
+  /** Intentar `DELIVERED` sin pasar por el código. */
+  DELIVERY_CODE_REQUIRED: 422,
 };
 
 export class NotFoundError extends DomainError {

@@ -106,6 +106,21 @@ export const FulfillmentSchema = z.object({
 });
 export type FulfillmentDto = z.infer<typeof FulfillmentSchema>;
 
+/**
+ * El codigo que el comprador le dice al repartidor.
+ *
+ * Seis digitos exactos. Se valida el formato antes de comparar para que un
+ * cuerpo raro no consuma uno de los cinco intentos: gastar intentos de un
+ * vendedor legitimo por un espacio de mas seria castigarlo por nada.
+ */
+export const ConfirmarEntregaSchema = z.object({
+  code: z
+    .string()
+    .trim()
+    .regex(/^[0-9]{6}$/, { message: 'El codigo tiene seis numeros' }),
+});
+export type ConfirmarEntregaDto = z.infer<typeof ConfirmarEntregaSchema>;
+
 export const OrderPageQuerySchema = z.object({
   cursor: z.string().min(1).optional(),
   limit: z.coerce.number().int().min(1).max(50).default(20),

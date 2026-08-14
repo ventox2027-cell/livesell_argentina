@@ -15,6 +15,11 @@ import {
   puedeVencer,
   transicionValida,
 } from './order-state';
+import {
+  finDelBloqueo,
+  generarCodigoDeEntrega,
+  verificarCodigo,
+} from './delivery-code';
 import { calcularPrecio, referenciaDeOrden, verificarCoherencia } from './pricing';
 
 /**
@@ -95,6 +100,14 @@ const ORDER_SELECT = {
   cancelledAt: true,
   expiredAt: true,
   refundedAt: true,
+  // La línea de tiempo del pedido. El estado dice dónde está; estas marcas
+  // dicen cuánto tardó cada paso.
+  preparingAt: true,
+  readyAt: true,
+  shippedAt: true,
+  deliveredAt: true,
+  // ⚠️ `deliveryCode` NO está acá a propósito: esta proyección la usan también
+  // las respuestas del vendedor, y él nunca puede verlo.
 } satisfies Prisma.OrderSelect;
 
 /**
@@ -327,6 +340,16 @@ export class OrdersService {
       where: { id: orderId, buyerId },
       select: {
         ...ORDER_SELECT,
+        /**
+         * El código de entrega sale SÓLO acá.
+         *
+         * Es el detalle del comprador, resuelto con  en el WHERE. El
+         * vendedor tiene sus propios endpoints y ninguno lo incluye: si pudiera
+         * leerlo, podría marcar entregado sin haber entregado y todo el
+         * mecanismo no serviría para nada.
+         */
+        deliveryCode: true,
+        deliveryCodeIssuedAt: true,
         items: true,
         attempts: {
           orderBy: { createdAt: 'desc' },
@@ -431,9 +454,23 @@ export class OrdersService {
   async advanceFulfillment(orderId: string, sellerId: string, hacia: OrderStatus) {
     const orden = await this.prisma.order.findFirst({
       where: { id: orderId, sellerId },
-      select: { id: true, status: true },
+      select: { id: true, status: true, deliveryCode: true },
     });
     if (!orden) throw new OrderNotFoundError();
+
+    /**
+     * ⛔ `DELIVERED` no se alcanza por este camino.
+     *
+     * "Entregado" es una afirmación sobre el mundo físico, y hasta acá la hacía
+     * unilateralmente quien tiene interés en que sea cierta. Ahora exige el
+     * código que tiene el comprador: `confirmarEntrega`.
+     */
+    if (hacia === 'DELIVERED') {
+      throw new DomainError(
+        'DELIVERY_CODE_REQUIRED',
+        'Para marcar entregado hace falta el código que tiene quien compró',
+      );
+    }
 
     if (!esTransicionDelVendedor(orden.status, hacia)) {
       throw new DomainError(
@@ -443,9 +480,33 @@ export class OrdersService {
       );
     }
 
+    /**
+     * Al despachar se emite el código de entrega.
+     *
+     * Acá y no antes: el código sirve para confirmar que el paquete llegó, y
+     * mostrárselo al comprador mientras el pedido todavía se está preparando lo
+     * expone a un screenshot días antes de que haga falta.
+     *
+     * Si ya había uno —el vendedor volvió a marcar despachado— se conserva: el
+     * comprador ya lo tiene anotado y cambiárselo por debajo lo dejaría
+     * diciendo un número que no sirve.
+     */
+    const emitirCodigo = hacia === 'SHIPPED' && !orden.deliveryCode;
+
     const actualizada = await this.prisma.order.update({
       where: { id: orden.id },
-      data: { status: hacia },
+      data: {
+        status: hacia,
+        ...this.marcaDeTiempo(hacia),
+        ...(emitirCodigo
+          ? {
+              deliveryCode: generarCodigoDeEntrega(),
+              deliveryCodeIssuedAt: new Date(),
+              deliveryCodeAttempts: 0,
+              deliveryCodeLockedUntil: null,
+            }
+          : {}),
+      },
       select: ORDER_SELECT,
     });
 
@@ -464,6 +525,148 @@ export class OrdersService {
     });
 
     return actualizada;
+  }
+
+  /** Cuándo pasó cada paso de la preparación. */
+  private marcaDeTiempo(hacia: OrderStatus): Record<string, Date> {
+    const ahora = new Date();
+    switch (hacia) {
+      case 'PREPARING':
+        return { preparingAt: ahora };
+      case 'READY_TO_SHIP':
+        return { readyAt: ahora };
+      case 'SHIPPED':
+        return { shippedAt: ahora };
+      default:
+        return {};
+    }
+  }
+
+  /**
+   * El vendedor confirma la entrega con el código del comprador.
+   *
+   * ═══════════════════════════════════════════════════════════════════════════
+   * EL VENDEDOR NUNCA VE EL CÓDIGO
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * No sale en ninguna respuesta suya: ni en el detalle de la orden, ni en el
+   * listado, ni en el error de un intento fallido. Este método sólo **compara**.
+   *
+   * Si pudiera consultarlo, todo el mecanismo no serviría para nada: podría
+   * marcar entregado sin haber entregado, que es exactamente lo que hay que
+   * impedir.
+   *
+   * ─── El bloqueo protege al comprador, no al sistema ───
+   *
+   * Cinco intentos y media hora de espera. No es contra la fuerza bruta —seis
+   * dígitos y cinco intentos ya la hacen inviable— sino contra el vendedor que
+   * prueba números a ver si pega y cierra la entrega sin haberla hecho.
+   */
+  async confirmarEntrega(orderId: string, sellerId: string, codigo: string) {
+    const orden = await this.prisma.order.findFirst({
+      where: { id: orderId, sellerId },
+      select: {
+        id: true,
+        status: true,
+        deliveryCode: true,
+        deliveryCodeAttempts: true,
+        deliveryCodeLockedUntil: true,
+        deliveredAt: true,
+      },
+    });
+    if (!orden) throw new OrderNotFoundError();
+
+    const veredicto = verificarCodigo(codigo, {
+      codigo: orden.deliveryCode,
+      intentos: orden.deliveryCodeAttempts,
+      bloqueadoHasta: orden.deliveryCodeLockedUntil,
+      entregado: orden.deliveredAt !== null,
+      status: orden.status,
+    });
+
+    if (!veredicto.ok) {
+      // El intento fallido se cuenta ANTES de responder, y en la misma
+      // escritura que el bloqueo: leer, decidir y escribir por separado dejaría
+      // una ventana para probar en paralelo.
+      if (veredicto.motivo === 'NO_COINCIDE') {
+        await this.prisma.order.update({
+          where: { id: orden.id },
+          data: {
+            deliveryCodeAttempts: { increment: 1 },
+            ...(veredicto.bloquear ? { deliveryCodeLockedUntil: finDelBloqueo() } : {}),
+          },
+        });
+      }
+
+      /**
+       * Queda registrado SIEMPRE, con quién y cuándo.
+       *
+       * Varios fallidos sobre pedidos distintos es la señal de un vendedor
+       * probando números, y sin este rastro no se ve.
+       *
+       * ⚠️ No se registra el código ingresado: sería guardar intentos de
+       * adivinar un secreto al lado del secreto.
+       */
+      /**
+       * Se ESPERA la escritura, a diferencia del resto del servicio.
+       *
+       * En los demás casos el registro es un rastro para investigar después y
+       * puede ir en segundo plano. Acá es la evidencia de que alguien está
+       * probando números para cerrar una entrega que no hizo: si se pierde
+       * porque el proceso se reinició en el medio, se pierde justo el dato que
+       * justificaba mirar.
+       */
+      await this.audit.log({
+        action: 'order.delivery_code_failed',
+        entityType: 'order',
+        entityId: orden.id,
+        actorId: sellerId,
+        after: { motivo: veredicto.motivo, intentosRestantes: veredicto.intentosRestantes },
+      });
+
+      throw new DomainError(
+        veredicto.motivo === 'BLOQUEADO' ? 'DELIVERY_CODE_LOCKED' : 'DELIVERY_CODE_INVALID',
+        veredicto.motivo === 'BLOQUEADO'
+          ? 'Demasiados intentos. Probá de nuevo en un rato.'
+          : 'El código no coincide.',
+        { intentosRestantes: veredicto.intentosRestantes },
+      );
+    }
+
+    // Reconfirmar algo ya entregado no vuelve a escribir ni a auditar.
+    if (orden.deliveredAt) {
+      return this.prisma.order.findUniqueOrThrow({
+        where: { id: orden.id },
+        select: ORDER_SELECT,
+      });
+    }
+
+    const entregada = await this.prisma.order.update({
+      where: { id: orden.id },
+      data: {
+        status: 'DELIVERED',
+        deliveredAt: new Date(),
+        deliveryCodeAttempts: 0,
+        deliveryCodeLockedUntil: null,
+      },
+      select: ORDER_SELECT,
+    });
+
+    this.events.publish(DomainEvent.orderFulfillmentChanged, {
+      entityId: orden.id,
+      actorId: sellerId,
+      data: { desde: orden.status, hacia: 'DELIVERED' },
+    });
+    await this.audit.log({
+      action: 'order.delivered',
+      entityType: 'order',
+      entityId: orden.id,
+      actorId: sellerId,
+      before: { status: orden.status },
+      after: { status: 'DELIVERED' },
+    });
+
+    return entregada;
   }
 
   /** El comprador se arrepiente antes de pagar. */

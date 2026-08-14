@@ -1611,3 +1611,223 @@ async function enviarWebhook(
 
   return { status: res.statusCode, body: res.body ? JSON.parse(res.body) : null };
 }
+
+/**
+ * La confirmación de entrega con código.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * EL VENDEDOR YA NO DECIDE SOLO QUE ENTREGÓ
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * "Entregado" es una afirmación sobre el mundo físico, y hasta acá la hacía
+ * unilateralmente quien tiene interés en que sea cierta. Ahora hace falta un
+ * código que sólo tiene el comprador.
+ *
+ * Lo que estos tests fijan: que el vendedor no pueda verlo, que no pueda
+ * saltearlo, y que probando números se quede sin intentos.
+ */
+describe('Código de entrega', () => {
+  /** Una orden confirmada y despachada, lista para entregar. */
+  async function ordenDespachada() {
+    const { variantId, sellerToken } = await nuevaVarianteConStock(5);
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, variantId));
+
+    proveedor.proximo = { status: 'approved' };
+    await pagar(comprador.token, orden.body.id);
+
+    for (const estado of ['PREPARING', 'READY_TO_SHIP', 'SHIPPED']) {
+      const r = await call('PATCH', `/api/v1/seller/orders/${orden.body.id}/fulfillment`, {
+        token: sellerToken,
+        body: { status: estado },
+      });
+      expect(r.status, `${estado}: ${JSON.stringify(r.body)}`).toBe(200);
+    }
+
+    return { orderId: orden.body.id as string, compradorToken: comprador.token, sellerToken };
+  }
+
+  it('al despachar se emite el código y lo ve SÓLO el comprador', async () => {
+    const { orderId, compradorToken } = await ordenDespachada();
+
+    const vista = await call('GET', `/api/v1/orders/${orderId}`, { token: compradorToken });
+
+    expect(vista.status).toBe(200);
+    expect(vista.body.deliveryCode).toMatch(/^[0-9]{6}$/);
+    expect(vista.body.deliveryCodeIssuedAt).toBeTruthy();
+    expect(vista.body.shippedAt).toBeTruthy();
+  });
+
+  it('⛔ el vendedor NO puede ver el código en ninguna de sus respuestas', async () => {
+    /**
+     * Es el punto entero del mecanismo. Si pudiera leerlo, podría marcar
+     * entregado sin haber entregado y no serviría para nada.
+     */
+    const { orderId, sellerToken } = await ordenDespachada();
+
+    const lista = await call('GET', '/api/v1/seller/orders', { token: sellerToken });
+    expect(JSON.stringify(lista.body)).not.toContain('deliveryCode');
+
+    const detalle = await call('GET', `/api/v1/seller/orders/${orderId}`, { token: sellerToken });
+    if (detalle.status === 200) {
+      expect(JSON.stringify(detalle.body)).not.toContain('deliveryCode');
+    }
+  });
+
+  it('⛔ el vendedor NO puede marcar entregado por el camino de siempre', async () => {
+    const { orderId, sellerToken } = await ordenDespachada();
+
+    const r = await call('PATCH', `/api/v1/seller/orders/${orderId}/fulfillment`, {
+      token: sellerToken,
+      body: { status: 'DELIVERED' },
+    });
+
+    // El DTO ni siquiera acepta ese valor: es la primera barrera.
+    expect(r.status).toBe(400);
+
+    const orden = await prisma.order.findUnique({ where: { id: orderId } });
+    expect(orden?.status).toBe('SHIPPED');
+    expect(orden?.deliveredAt).toBeNull();
+  });
+
+  it('con el código correcto, el pedido queda entregado', async () => {
+    const { orderId, compradorToken, sellerToken } = await ordenDespachada();
+
+    const vista = await call('GET', `/api/v1/orders/${orderId}`, { token: compradorToken });
+    const codigo = vista.body.deliveryCode as string;
+
+    const r = await call('POST', `/api/v1/seller/orders/${orderId}/delivery-confirmation`, {
+      token: sellerToken,
+      body: { code: codigo },
+    });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(r.body.status).toBe('DELIVERED');
+
+    const orden = await prisma.order.findUnique({ where: { id: orderId } });
+    expect(orden?.deliveredAt).not.toBeNull();
+    expect(orden?.deliveryCodeAttempts).toBe(0);
+  });
+
+  it('confirmar dos veces con el mismo código no rompe', async () => {
+    const { orderId, compradorToken, sellerToken } = await ordenDespachada();
+    const vista = await call('GET', `/api/v1/orders/${orderId}`, { token: compradorToken });
+    const codigo = vista.body.deliveryCode as string;
+
+    const url = `/api/v1/seller/orders/${orderId}/delivery-confirmation`;
+    await call('POST', url, { token: sellerToken, body: { code: codigo } });
+    const segunda = await call('POST', url, { token: sellerToken, body: { code: codigo } });
+
+    // El repartidor puede tocar dos veces con mala señal.
+    expect(segunda.status).toBe(201);
+    expect(segunda.body.status).toBe('DELIVERED');
+
+    // Y una sola marca de entrega en la bitácora.
+    const entregas = await prisma.auditLog.count({
+      where: { entityId: orderId, action: 'order.delivered' },
+    });
+    expect(entregas).toBe(1);
+  });
+
+  it('⛔ un código equivocado no entrega y descuenta un intento', async () => {
+    const { orderId, sellerToken } = await ordenDespachada();
+
+    const r = await call('POST', `/api/v1/seller/orders/${orderId}/delivery-confirmation`, {
+      token: sellerToken,
+      body: { code: '000000' },
+    });
+
+    expect(r.status).toBe(422);
+
+    const orden = await prisma.order.findUnique({ where: { id: orderId } });
+    expect(orden?.status).toBe('SHIPPED');
+    expect(orden?.deliveredAt).toBeNull();
+    expect(orden?.deliveryCodeAttempts).toBe(1);
+  });
+
+  it('⛔ probar números agota los intentos y bloquea', async () => {
+    const { orderId, compradorToken, sellerToken } = await ordenDespachada();
+    const url = `/api/v1/seller/orders/${orderId}/delivery-confirmation`;
+
+    // Cinco intentos con números inventados.
+    for (let i = 0; i < 5; i++) {
+      await call('POST', url, { token: sellerToken, body: { code: '000000' } });
+    }
+
+    const orden = await prisma.order.findUnique({ where: { id: orderId } });
+    expect(orden?.deliveryCodeLockedUntil).not.toBeNull();
+
+    // Y ahora ni el correcto pasa: si pasara, alcanzaría con esperar y seguir
+    // probando de a cinco.
+    const vista = await call('GET', `/api/v1/orders/${orderId}`, { token: compradorToken });
+    const r = await call('POST', url, {
+      token: sellerToken,
+      body: { code: vista.body.deliveryCode as string },
+    });
+
+    expect(r.status).toBe(422);
+    expect(JSON.stringify(r.body)).toContain('LOCKED');
+  });
+
+  it('cada intento fallido queda en la bitácora, sin el código probado', async () => {
+    const { orderId, sellerToken } = await ordenDespachada();
+
+    await call('POST', `/api/v1/seller/orders/${orderId}/delivery-confirmation`, {
+      token: sellerToken,
+      body: { code: '111111' },
+    });
+
+    const fallidos = await prisma.auditLog.findMany({
+      where: { entityId: orderId, action: 'order.delivery_code_failed' },
+    });
+
+    expect(fallidos).toHaveLength(1);
+    // Guardar los intentos de adivinar un secreto al lado del secreto sería
+    // dejar la respuesta escrita en el margen.
+    expect(JSON.stringify(fallidos[0])).not.toContain('111111');
+  });
+
+  it('⛔ un vendedor no puede confirmar la entrega de otro', async () => {
+    const { orderId, compradorToken } = await ordenDespachada();
+    const otro = await nuevaVarianteConStock(1);
+
+    const vista = await call('GET', `/api/v1/orders/${orderId}`, { token: compradorToken });
+
+    const r = await call('POST', `/api/v1/seller/orders/${orderId}/delivery-confirmation`, {
+      token: otro.sellerToken,
+      body: { code: vista.body.deliveryCode as string },
+    });
+
+    // 404 y no 403: la pertenencia va en el WHERE, así que la orden ajena no
+    // se encuentra.
+    expect(r.status).toBe(404);
+  });
+
+  it('⛔ un código con formato raro no consume intentos', async () => {
+    const { orderId, sellerToken } = await ordenDespachada();
+
+    const r = await call('POST', `/api/v1/seller/orders/${orderId}/delivery-confirmation`, {
+      token: sellerToken,
+      body: { code: 'abc' },
+    });
+
+    expect(r.status).toBe(400);
+
+    // Gastar intentos de un vendedor legítimo por un cuerpo mal formado sería
+    // castigarlo por nada.
+    const orden = await prisma.order.findUnique({ where: { id: orderId } });
+    expect(orden?.deliveryCodeAttempts).toBe(0);
+  });
+
+  it('las marcas de tiempo de la preparación quedan registradas', async () => {
+    const { orderId } = await ordenDespachada();
+
+    const orden = await prisma.order.findUnique({ where: { id: orderId } });
+
+    // El estado dice dónde está el pedido; estas marcas dicen cuánto tardó cada
+    // paso, que es lo que después permite hablar de demoras sin inventar.
+    expect(orden?.preparingAt).not.toBeNull();
+    expect(orden?.readyAt).not.toBeNull();
+    expect(orden?.shippedAt).not.toBeNull();
+  });
+});

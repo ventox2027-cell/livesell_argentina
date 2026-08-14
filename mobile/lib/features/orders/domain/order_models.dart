@@ -162,6 +162,9 @@ class Pedido {
     this.motivo,
     this.pagadoEl,
     this.confirmadoEl,
+    this.codigoDeEntrega,
+    this.despachadoEl,
+    this.entregadoEl,
   });
 
   factory Pedido.fromJson(Map<String, dynamic> j) {
@@ -189,6 +192,10 @@ class Pedido {
       motivo: j['statusReason'] as String?,
       pagadoEl: DateTime.tryParse(j['paidAt'] as String? ?? ''),
       confirmadoEl: DateTime.tryParse(j['confirmedAt'] as String? ?? ''),
+      // Sólo viene en el detalle del comprador. El vendedor nunca lo recibe.
+      codigoDeEntrega: j['deliveryCode'] as String?,
+      despachadoEl: DateTime.tryParse(j['shippedAt'] as String? ?? ''),
+      entregadoEl: DateTime.tryParse(j['deliveredAt'] as String? ?? ''),
     );
   }
 
@@ -210,6 +217,17 @@ class Pedido {
   final String? motivo;
   final DateTime? pagadoEl;
   final DateTime? confirmadoEl;
+  final DateTime? despachadoEl;
+  final DateTime? entregadoEl;
+
+  /// El código que hay que decirle a quien trae el pedido.
+  ///
+  /// Llega recién cuando el pedido se despacha, y sólo en el detalle propio.
+  /// Es lo que impide que el vendedor marque entregado algo que no entregó.
+  final String? codigoDeEntrega;
+
+  /// ¿Hay que mostrar el código?
+  bool get esperaEntrega => codigoDeEntrega != null && entregadoEl == null;
 
   String get total => formatearPesos(grossAmount);
   bool get sePuedePagar => status == 'PENDING_PAYMENT' || status == 'PAYMENT_FAILED';
@@ -428,8 +446,16 @@ class Venta {
         'CONFIRMED' => 'PREPARING',
         'PREPARING' => 'READY_TO_SHIP',
         'READY_TO_SHIP' => 'SHIPPED',
+        // ⛔ SHIPPED no avanza solo: para llegar a DELIVERED hace falta el
+        // código que tiene quien compró. Ver `pideCodigoDeEntrega`.
         _ => null,
       };
+
+  /// El pedido está despachado y espera el código del comprador.
+  ///
+  /// "Entregado" es una afirmación sobre el mundo físico y no puede hacerla
+  /// sola la parte con interés en que sea cierta.
+  bool get pideCodigoDeEntrega => status == 'SHIPPED';
 
   String? get etiquetaSiguiente => switch (siguienteEstado) {
         'PREPARING' => 'Empezar a preparar',
