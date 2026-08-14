@@ -22,6 +22,7 @@ import { RedisModule } from '@/shared/redis/redis.module';
 import { StorageModule } from '@/shared/storage/storage.module';
 import { AdminModule } from '@/modules/admin/admin.module';
 import { SellersModule } from '@/modules/sellers/sellers.module';
+import { LiveModule } from '@/modules/live/live.module';
 
 /**
  * Los módulos de spike solo existen si están explícitamente habilitados.
@@ -57,6 +58,7 @@ function optionalModules(): DynamicModule['imports'] {
     InventoryModule,
     OrdersModule,
     SellersModule,
+    LiveModule,
     AdminModule,
     ...(optionalModules() ?? []),
   ],

@@ -829,6 +829,7 @@ model Seller {
   orders          Order[]
   paymentAccounts SellerPaymentAccount[]
   verification    SellerVerification?
+  liveSessions    LiveSession[]
 
   @@index([status, createdAt])
   @@index([riskLevel, status])
@@ -864,7 +865,8 @@ model Store {
   seller   Seller           @relation(fields: [sellerId], references: [id], onDelete: Cascade)
   products Product[]
   variants ProductVariant[]
-  orders   Order[]
+  orders       Order[]
+  liveSessions LiveSession[]
 
   @@index([sellerId, status])
   @@map("stores")
@@ -929,7 +931,8 @@ model Product {
   category Category?        @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   options  ProductOption[]
   variants ProductVariant[]
-  images   ProductImage[]
+  images       ProductImage[]
+  liveSessions LiveSessionProduct[]
 
   @@unique([storeId, slug])
   @@index([storeId, status, deletedAt])
@@ -1850,4 +1853,115 @@ model SellerVerification {
   @@index([taxIdHash])
   @@index([state, submittedAt])
   @@map("seller_verifications")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SESIONES EN VIVO
+//
+// ─── La separación que ordena todo el bloque ───
+//
+//   VIDEO      → LiveKit
+//   COMERCIO   → backend + capa realtime propia
+//
+// El stock, las órdenes y los pagos **nunca** viven dentro de LiveKit. LiveKit
+// transporta audio y video; si además fuera la fuente de qué producto está
+// destacado o cuánto stock queda, tendríamos estado crítico en un sistema que
+// no es transaccional y que se reinicia solo cuando una sala queda vacía.
+//
+// La capa realtime avisa que algo cambió. Quién decide qué cambió es PostgreSQL.
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum LiveSessionState {
+  /// Creada, con productos preparados, cámara todavía apagada.
+  ///
+  /// Existe porque tocar "Iniciar LIVE" no puede encender la cámara en público
+  /// de una: quien transmite necesita ver el encuadre, elegir productos y
+  /// probar el micrófono antes de que lo vea alguien.
+  SCHEDULED
+  /// Conectando con LiveKit. Todavía no hay video publicado.
+  STARTING
+  LIVE
+  /// El broadcaster perdió la conexión. La sesión sigue existiendo y los
+  /// espectadores siguen en la sala.
+  RECONNECTING
+  /// Cerrando: se calcula el resumen y se desconecta a todo el mundo.
+  ENDING
+  ENDED
+  /// No pudo arrancar. Estado terminal distinto de ENDED para poder contar
+  /// cuántos vivos fallan al iniciar, que es una métrica de producto.
+  FAILED
+}
+
+model LiveSession {
+  id       String @id // liv_<ulid>
+  sellerId String @map("seller_id")
+  storeId  String @map("store_id")
+
+  title    String
+  coverUrl String? @map("cover_url")
+
+  state LiveSessionState @default(SCHEDULED)
+
+  /// Nombre de la sala en LiveKit. Derivado del id, único.
+  roomName String @unique @map("room_name")
+
+  /// Qué producto está mostrando AHORA.
+  ///
+  /// Se guarda la variante y no sólo el producto: lo que se compra es una
+  /// variante, y el panel del comprador necesita precio y stock concretos. Un
+  /// producto con seis talles no tiene "un" stock.
+  featuredVariantId String?   @map("featured_variant_id")
+  featuredAt        DateTime? @map("featured_at")
+
+  startedAt DateTime? @map("started_at")
+  endedAt   DateTime? @map("ended_at")
+
+  // ─── Resumen, calculado al terminar ───
+  //
+  // Se persiste en vez de recalcularse: las órdenes de un vivo se pueden
+  // cancelar o devolver después, y el resumen tiene que decir qué pasó DURANTE
+  // la transmisión. Recalcularlo un mes más tarde daría otro número.
+  peakViewers   Int? @map("peak_viewers")
+  uniqueViewers Int? @map("unique_viewers")
+  totalOrders   Int? @map("total_orders")
+  grossAmount   Int? @map("gross_amount")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  seller   Seller               @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  store    Store                @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  products LiveSessionProduct[]
+
+  /// Para el feed: los vivos activos, primero los más recientes.
+  @@index([state, startedAt])
+  @@index([sellerId, createdAt])
+  @@map("live_sessions")
+}
+
+/// La bandeja de productos del vivo.
+///
+/// Se preparan ANTES de salir al aire. Durante la transmisión, destacar uno es
+/// un toque: buscar en el catálogo entero con la cámara encendida es imposible
+/// de hacer bien.
+model LiveSessionProduct {
+  id            String @id // lsp_<ulid>
+  liveSessionId String @map("live_session_id")
+  productId     String @map("product_id")
+
+  position Int @default(0) @db.SmallInt
+
+  /// Cuántas veces se destacó y cuándo fue la última. Para el resumen final.
+  featuredCount  Int       @default(0) @map("featured_count")
+  lastFeaturedAt DateTime? @map("last_featured_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  session LiveSession @relation(fields: [liveSessionId], references: [id], onDelete: Cascade)
+  product Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  /// Un producto no puede estar dos veces en la misma bandeja.
+  @@unique([liveSessionId, productId])
+  @@index([liveSessionId, position])
+  @@map("live_session_products")
 }

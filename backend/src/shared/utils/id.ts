@@ -47,6 +47,10 @@ export const ID_PREFIX = {
   address: 'adr',
   sellerPaymentAccount: 'spa',
   sellerVerification: 'ver',
+  // Vivos
+  liveSession: 'liv',
+  liveSessionProduct: 'lsp',
+  chatMessage: 'msg',
   auditLog: 'aud',
 } as const;
 

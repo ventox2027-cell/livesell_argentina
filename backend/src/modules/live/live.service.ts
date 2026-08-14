@@ -1,0 +1,596 @@
+import { Injectable, Logger } from '@nestjs/common';
+
+import { LiveKitService } from '@/modules/livekit/livekit.service';
+import { AuditService } from '@/shared/audit/audit.service';
+import { DomainError } from '@/shared/errors/domain.error';
+import { PrismaService } from '@/shared/prisma/prisma.service';
+import { newId } from '@/shared/utils/id';
+
+import { EVENTOS } from './live-events';
+import { puedeTransicionar, type EstadoDeVivo } from './live-state';
+import { LiveGateway } from './live.gateway';
+
+/**
+ * Sesiones en vivo.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * EL VIDEO ES DE LIVEKIT; TODO LO DEMÁS ES NUESTRO
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Este servicio decide en qué estado está un vivo, qué producto se está
+ * mostrando y quién puede hacer qué. LiveKit sólo transporta audio y video.
+ *
+ * La consecuencia práctica: **si LiveKit se cae, el vivo no desaparece**.
+ * Cambia de estado a `RECONNECTING`, el chat sigue, el producto destacado sigue
+ * y —esto es lo importante— **se puede seguir comprando**. El video vuelve
+ * cuando vuelve.
+ */
+
+export class NoEsTuVivoError extends DomainError {
+  constructor() {
+    // 404 y no 403: confirmar que la sesión existe le diría a quien prueba que
+    // acertó un id ajeno. Misma política que el resto del sistema.
+    super('NOT_FOUND', 'No se encontró la transmisión');
+  }
+}
+
+export class TransicionInvalidaError extends DomainError {
+  constructor(desde: string, hacia: string) {
+    super('INVALID_TRANSITION', `No se puede pasar de ${desde} a ${hacia}`, { desde, hacia });
+  }
+}
+
+export class VendedorNoHabilitadoError extends DomainError {
+  constructor(estado: string) {
+    // `SELLER_NOT_ACTIVE` ya existe y ya está mapeado a 403. Inventar un código
+    // nuevo para lo mismo obliga a mantener dos entradas que pueden divergir.
+    super('SELLER_NOT_ACTIVE', 'Tu cuenta de vendedor no está habilitada para transmitir', {
+      estado,
+    });
+  }
+}
+
+@Injectable()
+export class LiveService {
+  private readonly logger = new Logger(LiveService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly livekit: LiveKitService,
+    private readonly gateway: LiveGateway,
+    private readonly audit: AuditService,
+  ) {}
+
+  /**
+   * Prepara una transmisión. La cámara **no** se enciende todavía.
+   *
+   * ─── Por qué existe este paso ───
+   *
+   * Tocar "Iniciar LIVE" no puede encender la cámara en público de una. Quien
+   * transmite necesita ver su encuadre, elegir los productos y probar el
+   * micrófono antes de que alguien lo vea. Un vendedor que aparece en pantalla
+   * acomodándose el pelo con veinte personas mirando no vuelve a transmitir.
+   *
+   * En `SCHEDULED` la sala de LiveKit ya existe y el token ya está emitido, así
+   * que salir al aire es instantáneo: sólo se publica lo que ya estaba
+   * conectado.
+   */
+  async preparar(
+    userId: string,
+    datos: { title: string; coverUrl?: string; productIds: string[] },
+  ) {
+    const vendedor = await this.prisma.seller.findUnique({
+      where: { userId },
+      include: { stores: { where: { isPrimary: true }, take: 1 } },
+    });
+
+    if (!vendedor) throw new NoEsTuVivoError();
+
+    /**
+     * Suspendido o bloqueado no transmite.
+     *
+     * Es el único punto donde el estado del vendedor frena algo del vivo, y
+     * tiene que estar acá: una transmisión es la superficie más visible de la
+     * plataforma, y alguien suspendido por estafar no puede tener una.
+     */
+    if (vendedor.status !== 'ACTIVE') {
+      throw new VendedorNoHabilitadoError(vendedor.status);
+    }
+
+    const tienda = vendedor.stores[0];
+    if (!tienda) throw new NoEsTuVivoError();
+
+    /**
+     * Un vivo activo a la vez por vendedor.
+     *
+     * Dos transmisiones simultáneas del mismo vendedor partirían a su audiencia
+     * y dejarían el stock repartido entre dos salas sin que ninguna sepa de la
+     * otra. Si hay una abierta, se devuelve esa en vez de crear otra: es lo que
+     * quiere alguien que cerró la app y volvió a entrar.
+     */
+    const abierta = await this.prisma.liveSession.findFirst({
+      where: { sellerId: vendedor.id, state: { in: ['SCHEDULED', 'STARTING', 'LIVE', 'RECONNECTING'] } },
+      include: { products: true },
+    });
+    if (abierta) return this.conToken(abierta, userId, 'broadcaster');
+
+    const id = newId('liv');
+    const roomName = `live-${id}`;
+
+    // Los productos se validan contra la tienda del vendedor: mandar el id de
+    // un producto ajeno no puede meterlo en la bandeja.
+    const productos = await this.prisma.product.findMany({
+      where: {
+        id: { in: datos.productIds.slice(0, 50) },
+        store: { sellerId: vendedor.id },
+        deletedAt: null,
+      },
+      select: { id: true },
+    });
+
+    const sesion = await this.prisma.liveSession.create({
+      data: {
+        id,
+        sellerId: vendedor.id,
+        storeId: tienda.id,
+        title: datos.title,
+        coverUrl: datos.coverUrl ?? null,
+        roomName,
+        state: 'SCHEDULED',
+        products: {
+          create: productos.map((p, i) => ({
+            id: newId('lsp'),
+            productId: p.id,
+            position: i,
+          })),
+        },
+      },
+      include: { products: true },
+    });
+
+    // La sala se crea desde el backend para que los tiempos y el máximo de
+    // participantes sean nuestros y no de quien se conecte primero.
+    await this.livekit.ensureRoom(roomName, { emptyTimeoutS: 300 });
+
+    await this.audit.log({
+      action: 'live.prepared',
+      entityType: 'live_session',
+      entityId: sesion.id,
+      actorId: userId,
+      after: { title: datos.title, productos: productos.length },
+    });
+
+    return this.conToken(sesion, userId, 'broadcaster');
+  }
+
+  /**
+   * Sale al aire.
+   *
+   * ─── Por qué pasa por `STARTING` y no salta directo a `LIVE` ───
+   *
+   * `LIVE` significa "hay video publicado". Entre que el vendedor toca el botón
+   * y que su cámara está efectivamente transmitiendo pasan uno o dos segundos —
+   * la conexión con LiveKit, la negociación, el primer cuadro. Marcar `LIVE` al
+   * recibir el toque haría que el vivo apareciera en el feed antes de que
+   * hubiera algo que ver, y quien entrara en esa ventana vería una pantalla
+   * negra.
+   *
+   * Hoy las dos transiciones ocurren en esta misma llamada: en `SCHEDULED` la
+   * sala ya existe y la app ya está conectada desde la vista previa, así que la
+   * ventana es mínima. El estado intermedio existe y se emite igual, para que
+   * el día que se enganche el webhook `track_published` de LiveKit —que es
+   * cuando `LIVE` va a significar "hay video de verdad"— no haya que cambiar la
+   * máquina de estados ni el contrato de la app.
+   *
+   * ⚠️ El primer intento de esto saltaba `SCHEDULED → LIVE` directo. La máquina
+   * lo rechazaba, `transicionar` lo registraba y devolvía, y el endpoint
+   * respondía `ok: true` con el vivo todavía en `SCHEDULED`: un fallo
+   * silencioso. Lo encontró un test que comprobaba el estado en la base después
+   * de iniciar.
+   */
+  async iniciar(userId: string, liveSessionId: string) {
+    const sesion = await this.deVendedor(userId, liveSessionId);
+
+    if (sesion.state === 'LIVE') return { ok: true as const, estado: 'LIVE' as const };
+
+    await this.transicionar(sesion.id, sesion.state, 'STARTING');
+    await this.transicionar(sesion.id, 'STARTING', 'LIVE', { startedAt: new Date() });
+
+    await this.audit.log({
+      action: 'live.started',
+      entityType: 'live_session',
+      entityId: sesion.id,
+      actorId: userId,
+    });
+
+    return { ok: true as const, estado: 'LIVE' as const };
+  }
+
+  /**
+   * Termina la transmisión.
+   *
+   * ─── El resumen se calcula ACÁ y se guarda ───
+   *
+   * Y no se recalcula después. Las órdenes de un vivo se pueden cancelar o
+   * devolver más adelante, y el resumen tiene que decir qué pasó **durante** la
+   * transmisión. Calcularlo un mes más tarde daría otro número, y el vendedor
+   * vería que su vivo "vendió menos" con el tiempo.
+   */
+  async terminar(userId: string, liveSessionId: string) {
+    const sesion = await this.deVendedor(userId, liveSessionId);
+
+    if (sesion.state === 'ENDED') return { ok: true as const, yaEstaba: true };
+
+    const ahora = new Date();
+    const desde = sesion.startedAt ?? sesion.createdAt;
+
+    const ventas = await this.prisma.order.aggregate({
+      where: {
+        sellerId: sesion.sellerId,
+        createdAt: { gte: desde, lte: ahora },
+        status: { notIn: ['CANCELLED', 'EXPIRED', 'PAYMENT_FAILED'] },
+      },
+      _count: true,
+      _sum: { grossAmount: true },
+    });
+
+    const duracionSegundos = sesion.startedAt
+      ? Math.floor((ahora.getTime() - sesion.startedAt.getTime()) / 1000)
+      : null;
+
+    await this.prisma.liveSession.update({
+      where: { id: sesion.id },
+      data: {
+        state: 'ENDED',
+        endedAt: ahora,
+        totalOrders: ventas._count,
+        grossAmount: ventas._sum.grossAmount ?? 0,
+      },
+    });
+
+    /**
+     * La sala de LiveKit se borra, la sesión NO.
+     *
+     * El vivo terminado sigue existiendo en la base con su vendedor, su tienda
+     * y sus productos. Es lo que permite que quien estaba mirando siga
+     * comprando después de que se cortó el video — el momento de más intención
+     * de compra suele ser justo cuando el vivo termina.
+     */
+    await this.livekit.deleteRoom(sesion.roomName).catch(() => {
+      // Si LiveKit no responde, la sala se limpia sola por inactividad. No
+      // puede frenar el cierre.
+    });
+
+    this.gateway.emitir(sesion.id, EVENTOS.fin, {
+      // Por ahora siempre true: los horarios de tienda son del bloque siguiente.
+      tiendaAbierta: true,
+      resumen: {
+        duracionSegundos,
+        espectadoresPico: sesion.peakViewers,
+        ordenes: ventas._count,
+      },
+      fecha: ahora.toISOString(),
+    });
+
+    await this.audit.log({
+      action: 'live.ended',
+      entityType: 'live_session',
+      entityId: sesion.id,
+      actorId: userId,
+      after: { duracionSegundos, ordenes: ventas._count },
+    });
+
+    return {
+      ok: true as const,
+      resumen: {
+        duracionSegundos,
+        ordenes: ventas._count,
+        brutoCentavos: ventas._sum.grossAmount ?? 0,
+      },
+    };
+  }
+
+  /**
+   * Destaca un producto.
+   *
+   * Un toque durante la transmisión. Por eso la bandeja se prepara antes:
+   * buscar en el catálogo entero con la cámara encendida es imposible de hacer
+   * bien.
+   */
+  async destacar(userId: string, liveSessionId: string, variantId: string | null) {
+    const sesion = await this.deVendedor(userId, liveSessionId);
+
+    if (variantId === null) {
+      await this.prisma.liveSession.update({
+        where: { id: sesion.id },
+        data: { featuredVariantId: null, featuredAt: new Date() },
+      });
+
+      this.gateway.emitir(sesion.id, EVENTOS.productoDestacado, {
+        variantId: null,
+        productId: null,
+        nombre: null,
+        variante: null,
+        imagenUrl: null,
+        precioCentavos: null,
+        disponible: null,
+        fecha: new Date().toISOString(),
+      });
+
+      return { ok: true as const, destacado: null };
+    }
+
+    /**
+     * La variante tiene que ser de un producto de ESTE vendedor.
+     *
+     * La pertenencia va en el `where` y no en un `if` posterior: es la misma
+     * disciplina que el resto del sistema. Una variante ajena simplemente no se
+     * encuentra, y el 404 sale solo.
+     */
+    const variante = await this.prisma.productVariant.findFirst({
+      where: {
+        id: variantId,
+        product: { store: { sellerId: sesion.sellerId }, deletedAt: null },
+        deletedAt: null,
+      },
+      include: {
+        inventory: true,
+        product: {
+          include: { images: { where: { position: 0 }, take: 1 } },
+        },
+      },
+    });
+
+    if (!variante) throw new NoEsTuVivoError();
+
+    await this.prisma.$transaction([
+      this.prisma.liveSession.update({
+        where: { id: sesion.id },
+        data: { featuredVariantId: variantId, featuredAt: new Date() },
+      }),
+      // Se lleva la cuenta de cuántas veces se destacó cada producto: sirve
+      // para el resumen del vivo y para saber qué funcionó.
+      this.prisma.liveSessionProduct.updateMany({
+        where: { liveSessionId: sesion.id, productId: variante.productId },
+        data: { featuredCount: { increment: 1 }, lastFeaturedAt: new Date() },
+      }),
+    ]);
+
+    const disponible = variante.inventory
+      ? variante.inventory.onHand - variante.inventory.reserved
+      : null;
+
+    this.gateway.emitir(sesion.id, EVENTOS.productoDestacado, {
+      variantId: variante.id,
+      productId: variante.productId,
+      nombre: variante.product.name,
+      variante: variante.title,
+      imagenUrl: variante.product.images[0]?.url ?? null,
+      precioCentavos: variante.priceOverrideCents ?? variante.product.basePriceCents,
+      disponible,
+      fecha: new Date().toISOString(),
+    });
+
+    return { ok: true as const, destacado: variante.id };
+  }
+
+  /**
+   * Avisa que cambió el stock de una variante.
+   *
+   * Lo llama el módulo de inventario cuando una reserva se crea o se libera.
+   * **Es un aviso, no una autorización**: la app lo usa para mostrar "últimas 3"
+   * y deshabilitar el botón. Quien decide si hay stock sigue siendo el UPDATE
+   * condicional de PostgreSQL.
+   */
+  async avisarStock(variantId: string, disponible: number): Promise<void> {
+    const sesiones = await this.prisma.liveSession.findMany({
+      where: { featuredVariantId: variantId, state: { in: ['LIVE', 'RECONNECTING'] } },
+      select: { id: true },
+    });
+
+    for (const s of sesiones) {
+      this.gateway.emitir(s.id, EVENTOS.stock, {
+        variantId,
+        disponible,
+        fecha: new Date().toISOString(),
+      });
+    }
+  }
+
+  /** Marca que el broadcaster perdió la conexión. Lo dispara el webhook de LiveKit. */
+  async marcarReconectando(liveSessionId: string): Promise<void> {
+    const sesion = await this.prisma.liveSession.findUnique({
+      where: { id: liveSessionId },
+      select: { id: true, state: true },
+    });
+    if (!sesion || sesion.state !== 'LIVE') return;
+
+    await this.transicionar(sesion.id, 'LIVE', 'RECONNECTING');
+  }
+
+  /** Lo que ve un espectador al entrar. */
+  async paraEspectador(liveSessionId: string, userId: string) {
+    const sesion = await this.prisma.liveSession.findUnique({
+      where: { id: liveSessionId },
+      include: {
+        seller: { select: { id: true, displayName: true, verificationStatus: true } },
+        store: { select: { id: true, name: true } },
+      },
+    });
+
+    if (!sesion) throw new NoEsTuVivoError();
+
+    const destacado = sesion.featuredVariantId
+      ? await this.variantePublica(sesion.featuredVariantId)
+      : null;
+
+    const base = {
+      id: sesion.id,
+      titulo: sesion.title,
+      portada: sesion.coverUrl,
+      estado: sesion.state,
+      vendedor: {
+        id: sesion.seller.id,
+        nombre: sesion.seller.displayName,
+        identidadVerificada: sesion.seller.verificationStatus === 'VERIFIED',
+      },
+      tienda: { id: sesion.store.id, nombre: sesion.store.name },
+      destacado,
+      iniciadoEl: sesion.startedAt,
+      terminadoEl: sesion.endedAt,
+    };
+
+    /**
+     * Un vivo terminado NO devuelve token de video.
+     *
+     * Devuelve todo lo demás: vendedor, tienda, producto destacado. Es lo que
+     * permite que quien llega tarde —o quien vuelve de pagar— siga viendo el
+     * contexto comercial en vez de una pantalla negra.
+     */
+    if (sesion.state === 'ENDED' || sesion.state === 'FAILED') {
+      return { ...base, video: null };
+    }
+
+    const token = await this.livekit.issueToken({
+      roomName: sesion.roomName,
+      identity: userId,
+      role: 'viewer',
+    });
+
+    return { ...base, video: { token: token.token, wsUrl: token.wsUrl, sala: token.roomName } };
+  }
+
+  /** Los vivos activos, para el feed. */
+  async activos(limite = 20) {
+    const sesiones = await this.prisma.liveSession.findMany({
+      where: { state: { in: ['LIVE', 'RECONNECTING'] } },
+      orderBy: { startedAt: 'desc' },
+      take: limite,
+      include: {
+        seller: { select: { id: true, displayName: true, verificationStatus: true } },
+        store: { select: { id: true, name: true } },
+      },
+    });
+
+    return sesiones.map((s) => ({
+      id: s.id,
+      titulo: s.title,
+      portada: s.coverUrl,
+      estado: s.state,
+      vendedor: {
+        id: s.seller.id,
+        nombre: s.seller.displayName,
+        identidadVerificada: s.seller.verificationStatus === 'VERIFIED',
+      },
+      tienda: { id: s.store.id, nombre: s.store.name },
+      iniciadoEl: s.startedAt,
+    }));
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Interno
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * La sesión con su token de LiveKit para quien transmite.
+   *
+   * El token se emite **cada vez** en vez de guardarse: tiene vencimiento, y
+   * uno guardado en la base sería un token válido esperando a que alguien lea
+   * esa fila. Emitirlo cuesta una firma HMAC.
+   */
+  private async conToken(
+    sesion: { id: string; title: string; coverUrl: string | null; state: string; roomName: string; featuredVariantId: string | null; products?: Array<{ productId: string; position: number }> },
+    userId: string,
+    rol: 'broadcaster' | 'viewer',
+  ) {
+    const token = await this.livekit.issueToken({
+      roomName: sesion.roomName,
+      identity: userId,
+      role: rol,
+    });
+
+    return {
+      id: sesion.id,
+      titulo: sesion.title,
+      portada: sesion.coverUrl,
+      estado: sesion.state,
+      productos: (sesion.products ?? [])
+        .slice()
+        .sort((a, b) => a.position - b.position)
+        .map((p) => p.productId),
+      destacado: sesion.featuredVariantId,
+      video: {
+        token: token.token,
+        wsUrl: token.wsUrl,
+        sala: token.roomName,
+        venceEl: token.expiresAt,
+      },
+    };
+  }
+
+  private async deVendedor(userId: string, liveSessionId: string) {
+    // La pertenencia va en el WHERE: una sesión ajena no se encuentra, y no hay
+    // forma de escribir mal el `if` que la comprueba porque no hay `if`.
+    const sesion = await this.prisma.liveSession.findFirst({
+      where: { id: liveSessionId, seller: { userId } },
+    });
+    if (!sesion) throw new NoEsTuVivoError();
+    return sesion;
+  }
+
+  /**
+   * Cambia de estado, con la guarda adentro.
+   *
+   * La condición va en el `where` del `update`: si otro proceso ya cambió el
+   * estado, esto afecta cero filas y lo sabemos. Leer, decidir y escribir en
+   * tres pasos dejaría una ventana donde dos peticiones concurrentes —el
+   * vendedor cerrando y el webhook de LiveKit avisando una desconexión— podrían
+   * pisarse.
+   */
+  private async transicionar(
+    id: string,
+    desde: EstadoDeVivo,
+    hacia: EstadoDeVivo,
+    extra: Record<string, unknown> = {},
+  ): Promise<void> {
+    if (!puedeTransicionar(desde, hacia)) throw new TransicionInvalidaError(desde, hacia);
+
+    const { count } = await this.prisma.liveSession.updateMany({
+      where: { id, state: desde },
+      data: { state: hacia, ...extra },
+    });
+
+    if (count === 0) {
+      // Otro cambió el estado en el medio. No es un error del que llamó: se
+      // registra y se sigue.
+      this.logger.warn({ msg: 'la transición no se aplicó: el estado cambió', id, desde, hacia });
+      return;
+    }
+
+    this.gateway.emitir(id, EVENTOS.estado, {
+      estado: hacia,
+      fecha: new Date().toISOString(),
+    });
+  }
+
+  private async variantePublica(variantId: string) {
+    const v = await this.prisma.productVariant.findUnique({
+      where: { id: variantId },
+      include: {
+        inventory: true,
+        product: { include: { images: { where: { position: 0 }, take: 1 } } },
+      },
+    });
+    if (!v) return null;
+
+    return {
+      variantId: v.id,
+      productId: v.productId,
+      nombre: v.product.name,
+      variante: v.title,
+      imagenUrl: v.product.images[0]?.url ?? null,
+      precioCentavos: v.priceOverrideCents ?? v.product.basePriceCents,
+      disponible: v.inventory ? v.inventory.onHand - v.inventory.reserved : null,
+    };
+  }
+}
