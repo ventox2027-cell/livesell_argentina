@@ -20,6 +20,7 @@ import { ObservabilityModule } from '@/shared/observability/observability.module
 import { PrismaModule } from '@/shared/prisma/prisma.module';
 import { RedisModule } from '@/shared/redis/redis.module';
 import { StorageModule } from '@/shared/storage/storage.module';
+import { AdminModule } from '@/modules/admin/admin.module';
 
 /**
  * Los módulos de spike solo existen si están explícitamente habilitados.
@@ -54,6 +55,7 @@ function optionalModules(): DynamicModule['imports'] {
     CommerceModule,
     InventoryModule,
     OrdersModule,
+    AdminModule,
     ...(optionalModules() ?? []),
   ],
   providers: [

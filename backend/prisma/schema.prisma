@@ -1095,6 +1095,20 @@ model AuditLog {
   before Json?
   after  Json?
 
+  /// Por qué se hizo.
+  ///
+  /// ─── Por qué esto es una columna y no un campo más dentro de `after` ───
+  ///
+  /// Porque es lo primero que se busca cuando algo se investiga. "¿Por qué
+  /// suspendieron a este vendedor?" se responde leyendo esta columna, no
+  /// arqueando un JSON.
+  ///
+  /// Obligatorio en toda acción administrativa: el backend rechaza la petición
+  /// sin él. Un registro de auditoría que dice *qué* pasó pero no *por qué* es
+  /// la mitad inútil de la bitácora — seis meses después nadie se acuerda, y
+  /// la persona que lo hizo puede no estar más en el equipo.
+  reason String?
+
   ip        String?
   userAgent String? @map("user_agent")
   traceId   String? @map("trace_id")
@@ -1104,6 +1118,8 @@ model AuditLog {
   @@index([entityType, entityId, createdAt])
   @@index([actorId, createdAt])
   @@index([action, createdAt])
+  /// Para el listado general del panel, que ordena por fecha sin filtrar.
+  @@index([createdAt])
   @@map("audit_logs")
 }
 

@@ -58,6 +58,8 @@ import { OrdersWebhookService } from './webhook.service';
     AuditService,
     DomainEventBus,
   ],
-  exports: [OrdersService, OrderPaymentsService],
+  // OrdersReconciler se exporta para que el panel de administración pueda
+  // conciliar un pago puntual con la MISMA lógica que corre en el worker.
+  exports: [OrdersService, OrderPaymentsService, OrdersReconciler],
 })
 export class OrdersModule {}

@@ -36,7 +36,8 @@
     "start:worker": "node dist/main-worker.js",
     "jobs:una-vez": "node dist/jobs-once.js",
     "dev:worker": "nest start --watch --entryFile main-worker",
-    "migrate:deploy": "prisma migrate deploy"
+    "migrate:deploy": "prisma migrate deploy",
+    "admin:create": "tsx scripts/crear-admin.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1110.0",

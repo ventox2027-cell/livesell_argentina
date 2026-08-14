@@ -24,10 +24,30 @@ if (!TEST_DATABASE_URL.includes('_test')) {
 
 console.log(`→ migrando ${TEST_DATABASE_URL.replace(/:\/\/[^@]*@/, '://***@')}`);
 
+/**
+ * ⚠️ `DIRECT_URL` también, y esto no es redundante.
+ *
+ * Desde que el esquema declara `directUrl`, **`prisma migrate deploy` usa esa
+ * variable y no `DATABASE_URL`**. Pisar sólo la primera dejaba a Prisma
+ * migrando contra lo que hubiera en `DIRECT_URL`, que en el `.env` local apunta
+ * a la base de DESARROLLO.
+ *
+ * O sea: este script decía "migrando livesell_test", respondía "no hay
+ * migraciones pendientes", y le aplicaba las migraciones a la base equivocada.
+ * Es precisamente el accidente que la nota de arriba dice que ya pasó una vez,
+ * reaparecido por otra puerta.
+ *
+ * Se descubrió cuando los tests de integración fallaron con "la columna
+ * `reason` no existe" justo después de que este script informara éxito.
+ */
 const result = spawnSync('prisma', ['migrate', 'deploy'], {
   stdio: 'inherit',
   shell: true,
-  env: { ...process.env, DATABASE_URL: TEST_DATABASE_URL },
+  env: {
+    ...process.env,
+    DATABASE_URL: TEST_DATABASE_URL,
+    DIRECT_URL: TEST_DATABASE_URL,
+  },
 });
 
 process.exit(result.status ?? 1);

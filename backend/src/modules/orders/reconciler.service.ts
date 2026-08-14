@@ -150,61 +150,94 @@ export class OrdersReconciler implements OnModuleInit, OnModuleDestroy {
     let resueltos = 0;
 
     for (const intento of inciertos) {
-      try {
-        const pago = intento.providerPaymentId
-          ? await this.provider.consultar(intento.providerPaymentId)
-          : (await this.provider.buscarPorReferencia(intento.orderId))[0];
+      const { resuelto, error } = await this.conciliarIntento(intento);
+      if (resuelto) resueltos += 1;
 
-        if (!pago) {
-          /**
-           * El proveedor no conoce ningún pago para esta orden.
-           *
-           * Entonces el cobro nunca llegó a existir: la red se cortó antes. Se
-           * cancela el intento y la orden vuelve a poder pagarse, que es lo que
-           * el comprador necesita.
-           */
-          await this.prisma.$transaction([
-            this.prisma.paymentAttempt.update({
-              where: { id: intento.id },
-              data: { status: 'CANCELLED', lastCheckedAt: new Date() },
-            }),
-            this.prisma.order.updateMany({
-              where: { id: intento.orderId, status: 'PROCESSING_PAYMENT' },
-              data: { status: 'PENDING_PAYMENT', statusReason: null },
-            }),
-          ]);
-          resueltos += 1;
-          continue;
-        }
-
-        await this.payments.aplicarResultado(intento.id, pago, 'reconciler');
-        resueltos += 1;
-      } catch (err) {
-        if (err instanceof ProviderPaymentNotFoundError) {
-          // Igual que arriba: ese pago no existe del otro lado.
-          await this.prisma.paymentAttempt.update({
-            where: { id: intento.id },
-            data: { status: 'CANCELLED', lastCheckedAt: new Date() },
-          });
-          continue;
-        }
-
-        // Se marca la consulta para no volver a este intento en el mismo
-        // barrido, y se sigue: uno que falla no puede frenar a los demás.
-        await this.prisma.paymentAttempt.update({
-          where: { id: intento.id },
-          data: { lastCheckedAt: new Date() },
-        });
-
+      if (error) {
+        // Uno que falla no puede frenar a los demás.
         this.logger.error({
           msg: 'no se pudo conciliar un cobro',
           attemptId: intento.id,
-          error: err instanceof Error ? err.message : String(err),
+          error,
         });
       }
     }
 
     return resueltos;
+  }
+
+  /**
+   * Concilia UN intento contra el proveedor.
+   *
+   * ─── Por qué es público ───
+   *
+   * Lo llama el panel de administración cuando alguien de soporte aprieta
+   * "conciliar ahora" sobre un pago trabado. Ese botón **no puede tener su
+   * propia lógica**: si el panel decidiera por su cuenta qué hacer con un pago
+   * en estado desconocido, habría dos sistemas de conciliación con dos
+   * criterios, y el día que difieran nadie va a saber cuál tiene razón.
+   *
+   * Es la misma función que corre cada minuto en el worker. La diferencia
+   * entre el barrido automático y el botón es sólo quién la dispara.
+   *
+   * ─── Idempotente ───
+   *
+   * Se le puede pegar al botón diez veces seguidas. No decide nada por su
+   * cuenta: le pregunta al proveedor y aplica lo que responda, por el mismo
+   * camino que usa la respuesta directa del cobro. Preguntar dos veces da la
+   * misma respuesta, y `aplicarResultado` tiene su propia guarda de monotonía.
+   */
+  async conciliarIntento(intento: {
+    id: string;
+    orderId: string;
+    providerPaymentId: string | null;
+  }): Promise<{ resuelto: boolean; error?: string }> {
+    try {
+      const pago = intento.providerPaymentId
+        ? await this.provider.consultar(intento.providerPaymentId)
+        : (await this.provider.buscarPorReferencia(intento.orderId))[0];
+
+      if (!pago) {
+        /**
+         * El proveedor no conoce ningún pago para esta orden.
+         *
+         * Entonces el cobro nunca llegó a existir: la red se cortó antes. Se
+         * cancela el intento y la orden vuelve a poder pagarse, que es lo que
+         * el comprador necesita.
+         */
+        await this.prisma.$transaction([
+          this.prisma.paymentAttempt.update({
+            where: { id: intento.id },
+            data: { status: 'CANCELLED', lastCheckedAt: new Date() },
+          }),
+          this.prisma.order.updateMany({
+            where: { id: intento.orderId, status: 'PROCESSING_PAYMENT' },
+            data: { status: 'PENDING_PAYMENT', statusReason: null },
+          }),
+        ]);
+        return { resuelto: true };
+      }
+
+      await this.payments.aplicarResultado(intento.id, pago, 'reconciler');
+      return { resuelto: true };
+    } catch (err) {
+      if (err instanceof ProviderPaymentNotFoundError) {
+        // Igual que arriba: ese pago no existe del otro lado.
+        await this.prisma.paymentAttempt.update({
+          where: { id: intento.id },
+          data: { status: 'CANCELLED', lastCheckedAt: new Date() },
+        });
+        return { resuelto: true };
+      }
+
+      // Se marca la consulta para no volver a este intento en el mismo barrido.
+      await this.prisma.paymentAttempt.update({
+        where: { id: intento.id },
+        data: { lastCheckedAt: new Date() },
+      });
+
+      return { resuelto: false, error: err instanceof Error ? err.message : String(err) };
+    }
   }
 
   /**

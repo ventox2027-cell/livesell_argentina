@@ -39,6 +39,11 @@ export interface AuditInput {
   actorType?: 'user' | 'system' | 'admin';
   before?: Record<string, unknown> | null;
   after?: Record<string, unknown> | null;
+  /**
+   * Por qué se hizo. Obligatorio en las acciones administrativas — el
+   * controlador lo exige antes de llegar acá.
+   */
+  reason?: string | null;
   ip?: string | null;
   userAgent?: string | null;
 }
@@ -61,6 +66,7 @@ export class AuditService {
           actorType: input.actorType ?? 'user',
           before: this.limpiar(input.before),
           after: this.limpiar(input.after),
+          reason: input.reason ?? null,
           ip: input.ip ?? null,
           userAgent: input.userAgent ?? null,
         },
