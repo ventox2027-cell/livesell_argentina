@@ -291,3 +291,15 @@ export const PageQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).default(20),
 });
 export type PageQueryDto = z.infer<typeof PageQuerySchema>;
+
+/**
+ * El feed, con búsqueda opcional.
+ *
+ * El tope de 100 caracteres no es una restricción de producto: una búsqueda de
+ * mil caracteres es un intento de hacer trabajar a la base, no una persona
+ * buscando una remera.
+ */
+export const DiscoverQuerySchema = PageQuerySchema.extend({
+  q: z.string().trim().max(100).optional(),
+});
+export type DiscoverQueryDto = z.infer<typeof DiscoverQuerySchema>;

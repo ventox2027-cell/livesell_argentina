@@ -19,6 +19,8 @@ import type {
   UpdateVariantDto,
 } from './dto/commerce.dto';
 import { OwnershipService } from './ownership.service';
+import { ordenarPorPuntaje } from './ranking';
+import { SearchService } from './search.service';
 import {
   calcularOptionsKey,
   generarCombinaciones,
@@ -126,6 +128,7 @@ export class ProductsService {
     private readonly ownership: OwnershipService,
     private readonly audit: AuditService,
     private readonly events: DomainEventBus,
+    private readonly search: SearchService,
   ) {}
 
   /**
@@ -430,21 +433,49 @@ export class ProductsService {
    *
    * ─── Orden ───
    *
-   * Por id descendente, o sea lo más nuevo primero. No es un algoritmo de
-   * recomendación y no pretende serlo: con el catálogo que hay hoy, cualquier
-   * ranking sería ruido sobre una muestra de diez productos. Cuando haya señal
-   * —vistas, compras, sesiones en vivo— se reemplaza acá y nada más cambia.
+   * **Frescura con un empujón por interés**, no al revés. Ver `ranking.ts`,
+   * que explica por qué: un feed ordenado por popularidad se convierte en una
+   * máquina de hacer ricos a los ricos, y a las dos semanas hay cinco
+   * vendedores en pantalla y el resto no existe.
+   *
+   * ─── Por qué el ranking se aplica DESPUÉS de traer la página ───
+   *
+   * La paginación por cursor necesita un orden estable en la base. Un puntaje
+   * que depende de la hora actual no lo es: entre dos scrolls, un producto
+   * puede cambiar de posición y aparecer dos veces o no aparecer nunca.
+   *
+   * Así que la base ordena por fecha —estable, indexado— y el ranking reordena
+   * dentro de la página. El efecto es el que se busca: lo de hoy con más
+   * interés sube dentro de lo de hoy, y nada se pierde entre páginas.
+   *
+   * Cuando el catálogo crezca lo suficiente como para que eso no alcance, el
+   * cambio es materializar el puntaje en una columna y ordenar por ahí. La
+   * fórmula ya está aparte, así que no habría que reescribirla.
    */
-  async listDiscover(query: PageQueryDto) {
+  async listDiscover(query: PageQueryDto & { q?: string }) {
+    /**
+     * Con texto, la búsqueda manda.
+     *
+     * El orden lo da la relevancia del texto, no la frescura: alguien que
+     * escribió "buzo negro" quiere buzos negros, no lo último publicado.
+     */
+    const idsBuscados = query.q ? await this.search.idsQueCoinciden(query.q) : null;
+    if (idsBuscados !== null && idsBuscados.length === 0) {
+      return { items: [], nextCursor: null };
+    }
+
     const filas = await this.prisma.product.findMany({
       where: {
         status: 'ACTIVE',
         deletedAt: null,
         store: { status: 'ACTIVE', seller: { status: 'ACTIVE' } },
-        ...(query.cursor ? { id: { lt: query.cursor } } : {}),
+        ...(idsBuscados ? { id: { in: idsBuscados } } : {}),
+        ...(query.cursor && !idsBuscados ? { id: { lt: query.cursor } } : {}),
       },
       select: {
         ...PRODUCT_SELECT,
+        likesCount: true,
+        createdAt: true,
         images: { orderBy: { position: 'asc' }, take: 1, select: { id: true, url: true, position: true } },
         // Un solo join en vez de una consulta por producto. Con 20 productos
         // por página, el N+1 serían 41 viajes a la base para armar un scroll.
@@ -505,7 +536,43 @@ export class ProductsService {
       }),
     }));
 
-    return this.paginar(conDisponibilidad, query.limit);
+    /**
+     * El ranking reordena DENTRO de la página, no entre páginas.
+     *
+     * Con una búsqueda de texto no se aplica: ahí el orden lo da la relevancia,
+     * y reordenar por frescura pondría arriba lo más nuevo aunque no sea lo que
+     * la persona buscó.
+     */
+    const pagina = this.paginar(conDisponibilidad, query.limit);
+    if (idsBuscados) return pagina;
+
+    const vivos = await this.vendedoresEnVivo(pagina.items.map((p) => p.store.seller.id));
+
+    return {
+      ...pagina,
+      items: ordenarPorPuntaje(pagina.items, (p) => ({
+        creadoEl: p.createdAt,
+        likes: p.likesCount,
+        enVivo: vivos.has(p.store.seller.id),
+        verificado: p.store.seller.verificationStatus === 'VERIFIED',
+      })),
+    };
+  }
+
+  /**
+   * Qué vendedores de esta página están transmitiendo ahora.
+   *
+   * Una consulta para toda la página, no una por producto: con veinte
+   * productos, el N+1 serían veinte viajes más para pintar un scroll.
+   */
+  private async vendedoresEnVivo(sellerIds: string[]): Promise<Set<string>> {
+    if (sellerIds.length === 0) return new Set();
+
+    const filas = await this.prisma.liveSession.findMany({
+      where: { sellerId: { in: sellerIds }, state: { in: ['LIVE', 'RECONNECTING'] } },
+      select: { sellerId: true },
+    });
+    return new Set(filas.map((f) => f.sellerId));
   }
 
   // ─── Variantes ────────────────────────────────────────────────────────────

@@ -63,7 +63,7 @@ beforeAll(async () => {
     throw new Error('Los tests de integración borran datos y sólo corren contra una base *_test');
   }
   await prisma.$executeRawUnsafe(
-    'TRUNCATE audit_logs, product_variant_options, product_images, product_variants, ' +
+    'TRUNCATE live_sessions, likes, audit_logs, product_variant_options, product_images, product_variants, ' +
       'product_option_values, product_options, products, stores, sellers, ' +
       'auth_events, refresh_tokens, devices, user_identities, users CASCADE',
   );
@@ -1304,5 +1304,193 @@ describe('Ejes de variación', () => {
       // Sin fila de inventario, la variante no se podría vender ni consultar.
       expect(inv, `la variante ${v.id} quedó sin inventario`).not.toBeNull();
     }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BÚSQUEDA Y RANKING DEL FEED
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * La búsqueda, contra PostgreSQL de verdad.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * EL STEMMER NO SE PUEDE PROBAR CON UN MOCK
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Lo que hace útil esta búsqueda es que "zapatos" encuentre "zapato" y que
+ * "remeras" encuentre "remera". Eso lo hace `to_tsvector('spanish', ...)`
+ * adentro de PostgreSQL: cualquier prueba que no consulte la base de verdad
+ * estaría probando otra cosa.
+ */
+describe('Búsqueda en el catálogo', () => {
+  /** Un producto publicado con nombre y descripción concretos. */
+  async function publicar(
+    vendedor: { token: string },
+    nombre: string,
+    descripcion?: string,
+  ) {
+    n += 1;
+    const r = await call('POST', '/api/v1/products', {
+      token: vendedor.token,
+      body: {
+        name: nombre,
+        slug: `busq-${n}-${Date.now().toString(36)}`,
+        description: descripcion,
+        basePriceCents: 500_000,
+        status: 'ACTIVE',
+      },
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    return r.body.id as string;
+  }
+
+  async function buscar(q: string) {
+    const r = await call('GET', `/api/v1/discover/products?q=${encodeURIComponent(q)}`);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    return (r.body.items as Array<{ id: string; name: string }>).map((p) => p.name);
+  }
+
+  it('encuentra por el nombre', async () => {
+    const v = await nuevoVendedor();
+    await publicar(v, 'Buzo oversize de algodón');
+
+    expect(await buscar('buzo')).toContain('Buzo oversize de algodón');
+  });
+
+  it('⛔ el plural encuentra el singular', async () => {
+    /**
+     * Es lo que hace útil la búsqueda en castellano. Sin el stemmer, alguien
+     * que escribe "zapatos" no encuentra un producto llamado "Zapato de cuero"
+     * y cree que no vendemos eso.
+     */
+    const v = await nuevoVendedor();
+    await publicar(v, 'Zapato de cuero marrón');
+
+    expect(await buscar('zapatos')).toContain('Zapato de cuero marrón');
+  });
+
+  it('encuentra sin acentos', async () => {
+    // Nadie escribe con acentos desde el teléfono.
+    const v = await nuevoVendedor();
+    await publicar(v, 'Camisa de algodón');
+
+    expect(await buscar('algodon')).toContain('Camisa de algodón');
+  });
+
+  it('busca también en la descripción', async () => {
+    const v = await nuevoVendedor();
+    await publicar(v, 'Prenda tejida a mano', 'Hecha con lana merino patagónica');
+
+    expect(await buscar('merino')).toContain('Prenda tejida a mano');
+  });
+
+  it('el nombre pesa más que la descripción', async () => {
+    // Alguien que busca "buzo" quiere productos que SE LLAMAN buzo, no los que
+    // lo mencionan al pasar.
+    const v = await nuevoVendedor();
+    await publicar(v, 'Campera de lana', 'Combina bien con un buzo');
+    await publicar(v, 'Buzo de lana');
+
+    const resultados = await buscar('buzo');
+    expect(resultados[0]).toBe('Buzo de lana');
+  });
+
+  it('⛔ no encuentra productos pausados', async () => {
+    const v = await nuevoVendedor();
+    const id = await publicar(v, 'Pantalón cargo verde');
+    await call('PATCH', `/api/v1/products/${id}`, {
+      token: v.token,
+      body: { status: 'PAUSED' },
+    });
+
+    expect(await buscar('cargo')).not.toContain('Pantalón cargo verde');
+  });
+
+  it('⛔ una búsqueda con símbolos no rompe la consulta', async () => {
+    /**
+     * `to_tsquery` respondería con un error de sintaxis ante `&` o `|`.
+     * `websearch_to_tsquery` los trata como texto. Lo que se verifica es que
+     * llegue un 200 con una lista, no un 500.
+     */
+    for (const q of ["remera & short", "'; DROP TABLE products; --", 'zapato | bota']) {
+      const r = await call('GET', `/api/v1/discover/products?q=${encodeURIComponent(q)}`);
+      expect(r.status, `${q} → ${JSON.stringify(r.body)}`).toBe(200);
+      expect(Array.isArray(r.body.items)).toBe(true);
+    }
+
+    // Y la tabla sigue ahí.
+    expect(await prisma.product.count()).toBeGreaterThan(0);
+  });
+
+  it('una búsqueda sin resultados devuelve una lista vacía, no un error', async () => {
+    const r = await call('GET', '/api/v1/discover/products?q=xilofonoinexistente');
+    expect(r.status).toBe(200);
+    expect(r.body.items).toHaveLength(0);
+    expect(r.body.nextCursor).toBeNull();
+  });
+
+  it('sin q devuelve el feed completo', async () => {
+    const v = await nuevoVendedor();
+    await publicar(v, 'Producto del feed sin búsqueda');
+
+    const r = await call('GET', '/api/v1/discover/products');
+    expect(r.status).toBe(200);
+    expect((r.body.items as unknown[]).length).toBeGreaterThan(0);
+  });
+});
+
+describe('Ranking del feed', () => {
+  it('un vivo en curso sube el producto de ese vendedor', async () => {
+    /**
+     * No es favoritismo: un producto que se está mostrando en vivo AHORA se
+     * puede comprar con el vendedor explicándolo, que es literalmente el
+     * producto que estamos construyendo.
+     */
+    const conVivo = await nuevoVendedor();
+    const sinVivo = await nuevoVendedor();
+
+    n += 1;
+    await call('POST', '/api/v1/products', {
+      token: conVivo.token,
+      body: {
+        name: `Producto con vivo ${n}`,
+        slug: `rank-vivo-${n}-${Date.now().toString(36)}`,
+        basePriceCents: 500_000,
+        status: 'ACTIVE',
+      },
+    });
+
+    // El otro se publica DESPUÉS, así que por frescura iría primero.
+    n += 1;
+    await call('POST', '/api/v1/products', {
+      token: sinVivo.token,
+      body: {
+        name: `Producto sin vivo ${n}`,
+        slug: `rank-sin-${n}-${Date.now().toString(36)}`,
+        basePriceCents: 500_000,
+        status: 'ACTIVE',
+      },
+    });
+
+    const antes = await call('GET', '/api/v1/discover/products');
+    const ordenAntes = (antes.body.items as Array<{ name: string }>).map((p) => p.name);
+    expect(ordenAntes[0]).toContain('sin vivo');
+
+    // Ahora el primero arranca un vivo.
+    await prisma.liveSession.create({
+      data: {
+        id: `liv_rank${String(n).padStart(21, '0')}`,
+        sellerId: conVivo.seller.id as string,
+        storeId: conVivo.store.id as string,
+        title: 'Vivo de ranking',
+        state: 'LIVE',
+        roomName: `rank-${n}`,
+      },
+    });
+
+    const despues = await call('GET', '/api/v1/discover/products');
+    const ordenDespues = (despues.body.items as Array<{ name: string }>).map((p) => p.name);
+    expect(ordenDespues[0]).toContain('con vivo');
   });
 });

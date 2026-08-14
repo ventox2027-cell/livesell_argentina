@@ -1021,6 +1021,37 @@ model Product {
   /// Cuántos "me gusta" tiene. Denormalizado, igual que en el vivo.
   likesCount Int @default(0) @map("likes_count")
 
+  /// El vector de búsqueda. **Lo mantiene PostgreSQL, no Prisma.**
+  ///
+  /// Es una columna generada (`GENERATED ALWAYS AS ... STORED`) que combina el
+  /// nombre y la descripción con el stemmer en castellano. Se declara acá para
+  /// que Prisma sepa que existe y no la borre en la próxima migración: sin esta
+  /// línea, `migrate dev` la ve como deriva y genera un DROP.
+  ///
+  /// No se lee ni se escribe desde el código: la búsqueda usa `$queryRaw` con
+  /// `websearch_to_tsquery`. Ver `ranking.ts`.
+  ///
+  /// ⚠️ **Prisma no entiende las columnas generadas.** Lee la expresión como si
+  /// fuera un DEFAULT, así que `prisma migrate dev` va a proponer siempre:
+  ///
+  ///     ALTER TABLE "products" ALTER COLUMN "search_vector" DROP DEFAULT;
+  ///
+  /// Esa sentencia FALLA en PostgreSQL —una columna generada no tiene default—
+  /// así que hay que **borrarla a mano** del SQL de cualquier migración futura
+  /// antes de aplicarla. Si no, la migración se cae a la mitad.
+  ///
+  /// La alternativa era mantener el vector con un trigger, que Prisma tampoco
+  /// representa y encima hay que acordarse de que existe. Esto al menos está
+  /// escrito acá, que es donde alguien va a mirar.
+  searchVector Unsupported("tsvector")? @map("search_vector")
+
+  /// Índice del feed: lo activo y visible, por fecha. Es la consulta más
+  /// frecuente de toda la aplicación.
+  @@index([status, deletedAt, createdAt(sort: Desc)], map: "products_feed_idx")
+
+  /// GIN sobre el vector de búsqueda. Declarado para que Prisma no lo borre.
+  @@index([searchVector(ops: raw("tsvector_ops"))], type: Gin, map: "products_search_vector_idx")
+
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
   /// Borrado lógico.

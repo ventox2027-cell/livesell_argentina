@@ -12,13 +12,24 @@ class FeedRepository {
   FeedRepository(this._ref);
   final Ref _ref;
 
+  /// El feed, con búsqueda opcional.
+  ///
+  /// El mismo endpoint sirve para las dos cosas: con `q` el orden lo da la
+  /// relevancia del texto, sin `q` lo da la frescura con un empujón por
+  /// interés. Un endpoint aparte para buscar duplicaría el armado de la tarjeta
+  /// del producto, que es lo más complejo de la respuesta.
   Future<({List<PublicacionFeed> items, String? nextCursor})> descubrir({
     String? cursor,
     int limit = 20,
+    String? q,
   }) async {
     final res = await _ref.read(apiClientProvider).get<Map<String, dynamic>>(
       '/discover/products',
-      query: {'limit': limit, if (cursor != null) 'cursor': cursor},
+      query: {
+        'limit': limit,
+        if (cursor != null) 'cursor': cursor,
+        if (q != null && q.trim().length >= 2) 'q': q.trim(),
+      },
       sinAuth: true,
     );
 

@@ -23,6 +23,7 @@ import {
   CreateProductSchema,
   CreateSellerSchema,
   CreateVariantSchema,
+  DiscoverQuerySchema,
   PageQuerySchema,
   ReorderImagesSchema,
   UpdateProductSchema,
@@ -35,6 +36,7 @@ import {
   type CreateProductDto,
   type CreateSellerDto,
   type CreateVariantDto,
+  type DiscoverQueryDto,
   type PageQueryDto,
   type ReorderImagesDto,
   type UpdateProductDto,
@@ -190,7 +192,7 @@ export class CommerceController {
    */
   @Public()
   @Get('discover/products')
-  discover(@Query(new ZodValidationPipe(PageQuerySchema)) query: PageQueryDto) {
+  discover(@Query(new ZodValidationPipe(DiscoverQuerySchema)) query: DiscoverQueryDto) {
     return this.products.listDiscover(query);
   }
 

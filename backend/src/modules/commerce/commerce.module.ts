@@ -7,6 +7,7 @@ import { CommerceController } from './commerce.controller';
 import { ImagesService } from './images.service';
 import { OwnershipService } from './ownership.service';
 import { ProductsService } from './products.service';
+import { SearchService } from './search.service';
 import { SellersService } from './sellers.service';
 
 /**
@@ -29,6 +30,7 @@ import { SellersService } from './sellers.service';
   providers: [
     SellersService,
     ProductsService,
+    SearchService,
     ImagesService,
     OwnershipService,
     AuditService,
