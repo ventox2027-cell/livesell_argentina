@@ -2,7 +2,11 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Prisma, type PaymentAttemptStatus } from '@prisma/client';
 
 import { env } from '@/config/env.schema';
-import { asString, verifyMpSignature } from '@/modules/payments/mp-signature';
+import {
+  asString,
+  parseSignatureHeader,
+  verifyMpSignature,
+} from '@/modules/payments/mp-signature';
 import { scrubMpPayment } from '@/modules/payments/mp.client';
 import { MetricsService } from '@/shared/observability/metrics.service';
 import { PrismaService } from '@/shared/prisma/prisma.service';
@@ -10,6 +14,21 @@ import { newId } from '@/shared/utils/id';
 
 import { PaymentProvider, ProviderPaymentNotFoundError } from './payment-provider';
 import { OrderPaymentsService } from './payments.service';
+
+/**
+ * `ts=1704908010,v1=618c8534...` → `ts=1704908010,v1=618c8534…`
+ *
+ * Conserva lo que sirve para identificar la notificación y descarta el resto
+ * del HMAC. Cualquier par que no sea `ts` o `v1` se descarta entero: si algún
+ * día Mercado Pago agrega un campo, no queremos guardarlo sin haberlo mirado.
+ */
+export function recortarFirma(firma: string): string {
+  const partes = parseSignatureHeader(firma);
+  const salida: string[] = [];
+  if (partes.ts) salida.push(`ts=${partes.ts}`);
+  if (partes.v1) salida.push(`v1=${partes.v1.slice(0, 8)}…`);
+  return salida.join(',');
+}
 
 /**
  * Notificaciones de Mercado Pago, en producción.
@@ -57,10 +76,30 @@ export class OrdersWebhookService {
 
     const topic = asString(body.type) ?? asString(body.topic) ?? 'unknown';
     const action = asString(body.action);
+
+    /**
+     * ⚠️ LA QUERY STRING MANDA. El cuerpo es sólo el respaldo.
+     *
+     * Mercado Pago pone el id del recurso en la URL de notificación
+     * (`?data.id=123456`), y **el manifiesto de la firma se arma con ese
+     * valor**. Si acá se tomara primero el del cuerpo y los dos difirieran, el
+     * HMAC se calcularía sobre un id distinto del que firmó Mercado Pago y la
+     * verificación fallaría con `HASH_MISMATCH` — un síntoma indistinguible de
+     * una clave mal configurada.
+     *
+     * El orden estaba al revés. No se notaba porque el simulador del panel
+     * manda los dos con el mismo valor; con notificaciones reales, donde el
+     * cuerpo a veces no trae `data.id`, funcionaba de casualidad por el
+     * encadenamiento.
+     *
+     * El respaldo se conserva porque el simulador de Mercado Pago sí manda
+     * avisos con el id sólo en el cuerpo, y sirve para probar sin armar la URL
+     * a mano.
+     */
     const resourceId =
-      asString((body.data as Record<string, unknown> | undefined)?.id) ??
       asString(query['data.id']) ??
-      asString(query.id);
+      asString(query.id) ??
+      asString((body.data as Record<string, unknown> | undefined)?.id);
 
     /**
      * Id de la notificación, para deduplicar.
@@ -242,15 +281,28 @@ export class OrdersWebhookService {
    * Sólo las cabeceras que sirven para depurar.
    *
    * Enumeradas y no filtradas: guardar todas metería `authorization` y
-   * cualquier cookie en una tabla que se lee entera cuando se investiga algo.
+   * cualquier cookie en una tabla que el panel de administración lee entera
+   * cuando alguien investiga un pago.
+   *
+   * ─── La firma se guarda recortada ───
+   *
+   * De `x-signature` se conserva el `ts` completo y sólo los primeros ocho
+   * caracteres del `v1`. Con eso alcanza para lo único que se hace con ese
+   * dato: comparar dos notificaciones y ver si son la misma. El HMAC entero no
+   * agrega nada para depurar y es material derivado de `MP_WEBHOOK_SECRET`
+   * guardado en claro en una tabla que se exporta y se mira desde el admin.
    */
   private cabecerasSeguras(headers: Record<string, unknown>): Prisma.InputJsonValue {
-    const permitidas = ['x-signature', 'x-request-id', 'user-agent', 'content-type'];
+    const permitidas = ['x-request-id', 'user-agent', 'content-type'];
     const salida: Record<string, string> = {};
     for (const clave of permitidas) {
       const valor = asString(headers[clave]);
       if (valor) salida[clave] = valor;
     }
+
+    const firma = asString(headers['x-signature']);
+    if (firma) salida['x-signature'] = recortarFirma(firma);
+
     return salida;
   }
 }

@@ -1,7 +1,13 @@
+import { RequestMethod, VersioningType } from '@nestjs/common';
 import multipart from '@fastify/multipart';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 
 import { env } from '@/config/env.schema';
+import {
+  RUTA_WEBHOOK_LIVEKIT,
+  RUTA_WEBHOOK_MERCADOPAGO,
+  RUTA_WEBHOOK_SPIKE,
+} from '@/shared/http/rutas-webhook';
 
 /**
  * Configuración del servidor HTTP, en un solo lugar.
@@ -134,6 +140,58 @@ export function configurarAdaptador(adapter: FastifyAdapter): void {
         }
       },
     );
+}
+
+/**
+ * Prefijo global y versionado.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * ESTA FUNCIÓN EXISTE POR LA CUARTA REPETICIÓN DEL MISMO ERROR
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Las tres primeras están contadas arriba. La cuarta fue ésta, y fue peor
+ * porque el archivo que la evita ya existía:
+ *
+ * `main.ts` enumeraba las exclusiones una por una; el helper de tests usaba el
+ * comodín `'webhooks/(.*)'`. O sea: **en los tests TODOS los webhooks quedaban
+ * fuera del prefijo, y en producción sólo los dos enumerados.**
+ *
+ * El resultado concreto: `orders-flow.spec.ts` probaba
+ * `POST /webhooks/orders/mercadopago` y pasaba en verde, mientras el servidor
+ * real servía esa ruta en `/api/webhooks/orders/mercadopago`. La URL que
+ * habríamos cargado en el panel de Mercado Pago era la probada, y habría
+ * devuelto 404 en cada notificación — con la suite entera en verde y sin un
+ * solo pago acreditado.
+ *
+ * Por eso la lista es una sola, vive acá, y la llaman los dos.
+ *
+ * ─── Qué queda fuera, y por qué ───
+ *
+ *   · health/ready/metrics — los consumen el balanceador y Prometheus, que no
+ *     negocian versiones. Su URL no puede cambiar nunca.
+ *   · webhooks — la URL se carga a mano en el panel del proveedor. Si mañana
+ *     saliera /api/v2/, nadie va a ir a actualizarla.
+ *   · media — las URLs se PERSISTEN en la base, incluidos los snapshots
+ *     históricos de pedidos. Esas filas seguirían apuntando acá.
+ *   · checkout — la carga un WebView desde una URL que arma la app.
+ *
+ * Excluir del prefijo NO excluye del versionado: los controladores llevan
+ * además `VERSION_NEUTRAL`. Sin eso, `/health` respondería en `/v1/health`.
+ */
+export function configurarPrefijoYVersionado(app: NestFastifyApplication): void {
+  app.setGlobalPrefix('api', {
+    exclude: [
+      { path: 'health', method: RequestMethod.GET },
+      { path: 'ready', method: RequestMethod.GET },
+      { path: 'metrics', method: RequestMethod.GET },
+      { path: RUTA_WEBHOOK_LIVEKIT, method: RequestMethod.POST },
+      { path: RUTA_WEBHOOK_MERCADOPAGO, method: RequestMethod.POST },
+      { path: RUTA_WEBHOOK_SPIKE, method: RequestMethod.POST },
+      { path: 'media/*', method: RequestMethod.GET },
+      { path: 'checkout', method: RequestMethod.GET },
+    ],
+  });
+  app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
 }
 
 /**

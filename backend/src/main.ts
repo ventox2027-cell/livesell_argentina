@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 
-import { RequestMethod, VersioningType } from '@nestjs/common';
+
 import { NestFactory } from '@nestjs/core';
 import fastifyStatic from '@fastify/static';
 import { type NestFastifyApplication } from '@nestjs/platform-fastify';
@@ -8,7 +8,7 @@ import { Logger } from 'nestjs-pino';
 
 import { AppModule } from './app.module';
 import { env, isLocalEnv } from './config/env.schema';
-import { crearAdaptador, registrarMultipart } from './http-setup';
+import { configurarPrefijoYVersionado, crearAdaptador, registrarMultipart } from './http-setup';
 import { resolverDeIp } from './shared/http/client-ip';
 import { registrarApagadoOrdenado } from './shutdown';
 
@@ -56,33 +56,13 @@ async function bootstrap(): Promise<void> {
     });
   }
 
-  // /api/v1/... desde el día 1.
+  // /api/v1/... desde el día 1, con las exclusiones que define `http-setup.ts`.
   //
-  // Quedan fuera del prefijo Y del versionado:
-  //   · health/ready/metrics → los consumen el balanceador y Prometheus, que
-  //     no negocian versiones. Su URL no puede cambiar nunca.
-  //   · webhooks → la URL se configura en el panel del proveedor. Si un día
-  //     saliera /api/v2/, nadie va a ir a actualizarla a mano.
-  //
-  // Excluir del prefijo NO excluye del versionado: los controladores llevan
-  // además VERSION_NEUTRAL. Sin eso, /health responde en /v1/health.
-  app.setGlobalPrefix('api', {
-    exclude: [
-      { path: 'health', method: RequestMethod.GET },
-      { path: 'ready', method: RequestMethod.GET },
-      { path: 'metrics', method: RequestMethod.GET },
-      { path: 'webhooks/livekit', method: RequestMethod.POST },
-      { path: 'webhooks/mercadopago', method: RequestMethod.POST },
-      // Las URLs de las imágenes se PERSISTEN en la base, incluidas las de los
-      // snapshots históricos de pedidos. Si algún día saliera /api/v2/, esas
-      // filas seguirían apuntando acá. Fuera del prefijo y del versionado.
-      { path: 'media/*', method: RequestMethod.GET },
-      // La carga un WebView desde una URL que arma la app. Fuera del prefijo
-      // para que no dependa de la versión de la API.
-      { path: 'checkout', method: RequestMethod.GET },
-    ],
-  });
-  app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
+  // ⚠️ La lista NO se escribe acá. Estuvo duplicada entre este archivo y el
+  // helper de tests, las dos copias se separaron, y la suite terminó probando
+  // una URL de webhook que en producción no existía. Ver la nota de
+  // `configurarPrefijoYVersionado`.
+  configurarPrefijoYVersionado(app);
 
   // La app móvil no usa CORS. Solo el futuro Admin Lite.
   app.enableCors({

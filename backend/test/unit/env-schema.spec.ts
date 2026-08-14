@@ -369,6 +369,62 @@ describe('envSchema', () => {
     expect(r.data?.MP_API_BASE_URL).toBe('https://api.mercadopago.com');
   });
 
+  /**
+   * La URL de notificación tiene que apuntar a la ruta que el servidor registra.
+   *
+   * ═══════════════════════════════════════════════════════════════════════════
+   * ES EL ERROR QUE NO DA NINGUNA SEÑAL
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * `MP_NOTIFICATION_URL` viaja en cada cobro y Mercado Pago la guarda. Con la
+   * ruta equivocada **todo sigue funcionando**: el cobro se crea, la tarjeta se
+   * debita, la app dice "aprobado". Lo único que pasa es que la notificación da
+   * 404 y la orden se queda en `PENDING_PAYMENT`.
+   *
+   * No hay log, no hay excepción y no hay alerta. Hay que ir a mirar el panel
+   * de Mercado Pago para enterarse.
+   *
+   * Y no era hipotético: los tres `.env` del repositorio apuntaban a
+   * `/webhooks/mercadopago` —la ruta del spike— cuando se escribió esto.
+   */
+  describe('MP_NOTIFICATION_URL', () => {
+    const con = (url: string) => envSchema.safeParse({ ...VALID, MP_NOTIFICATION_URL: url });
+
+    it('acepta la ruta canónica', () => {
+      expect(con('https://api.vendox.ar/webhooks/orders/mercadopago').success).toBe(true);
+    });
+
+    it('⛔ rechaza la ruta del spike', () => {
+      // La que tenían los tres .env del repositorio.
+      expect(con('https://api.vendox.ar/webhooks/mercadopago').success).toBe(false);
+    });
+
+    it('⛔ rechaza el prefijo /api', () => {
+      expect(con('https://api.vendox.ar/api/webhooks/orders/mercadopago').success).toBe(false);
+    });
+
+    it('⛔ rechaza el versionado', () => {
+      expect(con('https://api.vendox.ar/api/v1/webhooks/orders/mercadopago').success).toBe(false);
+    });
+
+    it('⛔ rechaza una barra final de más', () => {
+      // Mercado Pago llamaría a esa URL tal cual y Fastify daría 404.
+      expect(con('https://api.vendox.ar/webhooks/orders/mercadopago/').success).toBe(false);
+    });
+
+    it('el mensaje dice cuál es la ruta correcta', () => {
+      const r = con('https://api.vendox.ar/webhooks/mercadopago');
+      expect(
+        r.error?.issues.some((i) => i.message.includes('/webhooks/orders/mercadopago')),
+      ).toBe(true);
+    });
+
+    it('sin configurar no molesta: es opcional', () => {
+      expect(envSchema.safeParse({ ...VALID }).success).toBe(true);
+      expect(con('').success).toBe(true);
+    });
+  });
+
   it('trata una variable vacía como ausente, no como valor inválido', () => {
     // `MP_ACCESS_TOKEN=` en el .env entrega "" y no undefined. Sin este
     // tratamiento el proceso no arranca y culpa a la longitud del token,

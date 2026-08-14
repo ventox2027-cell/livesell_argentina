@@ -270,7 +270,7 @@ function webhookFirmado(params: {
   const v1 = createHmac('sha256', params.secreto ?? WEBHOOK_SECRET).update(manifest).digest('hex');
 
   return {
-    url: `/webhooks/mercadopago?data.id=${params.mpPaymentId}&type=payment`,
+    url: `/webhooks/spike/mercadopago?data.id=${params.mpPaymentId}&type=payment`,
     headers: { 'x-signature': `ts=${ts},v1=${v1}`, 'x-request-id': requestId },
     body: {
       id: params.notificationId ?? `notif-${params.mpPaymentId}-${Date.now()}`,

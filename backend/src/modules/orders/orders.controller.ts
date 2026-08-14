@@ -19,6 +19,7 @@ import { OwnershipService } from '@/modules/commerce/ownership.service';
 import { IdempotencyKeySchema } from '@/modules/inventory/dto/inventory.dto';
 import { DomainError } from '@/shared/errors/domain.error';
 import { RateLimit } from '@/shared/http/rate-limit.guard';
+import { RUTA_WEBHOOK_MERCADOPAGO } from '@/shared/http/rutas-webhook';
 import { ZodValidationPipe } from '@/shared/http/zod-validation.pipe';
 
 import { AddressesService } from './addresses.service';
@@ -264,9 +265,16 @@ export class OrdersController {
  *
  * La URL se carga a mano en el panel de Mercado Pago. Si algún día saliera
  * `/api/v2/`, nadie va a ir a actualizarla.
+ *
+ * ⚠️ La ruta se arma con `RUTA_WEBHOOK_MERCADOPAGO`, la misma constante que
+ * `http-setup.ts` excluye del prefijo y que `env.schema.ts` exige en
+ * `MP_NOTIFICATION_URL`. Escribirla a mano acá fue exactamente el origen del
+ * problema: el controlador decía `webhooks/orders/mercadopago`, la exclusión
+ * del prefijo sólo listaba `webhooks/mercadopago`, y la ruta real terminó
+ * siendo `/api/webhooks/orders/mercadopago` sin que nadie lo notara.
  */
 @Public()
-@Controller({ path: 'webhooks', version: VERSION_NEUTRAL })
+@Controller({ path: RUTA_WEBHOOK_MERCADOPAGO, version: VERSION_NEUTRAL })
 export class OrdersWebhookController {
   constructor(private readonly webhooks: OrdersWebhookService) {}
 
@@ -279,7 +287,9 @@ export class OrdersWebhookController {
    * consulta a su API falló: ahí el aviso era bueno y el problema es
    * transitorio de este lado.
    */
-  @Post('orders/mercadopago')
+  // La ruta completa ya está en el `@Controller`. Acá va vacío para que exista
+  // un solo lugar donde leerla.
+  @Post()
   @HttpCode(200)
   async handle(@Req() req: FastifyRequest) {
     const resultado = await this.webhooks.recibir({

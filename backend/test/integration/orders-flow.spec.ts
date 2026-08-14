@@ -9,6 +9,8 @@ import type { OrdersReconciler } from '@/modules/orders/reconciler.service';
 import type { PrismaService } from '@/shared/prisma/prisma.service';
 import type { RedisService } from '@/shared/redis/redis.service';
 
+import { RUTA_WEBHOOK_MERCADOPAGO } from '@/shared/http/rutas-webhook';
+
 import { crearAppDePrueba } from '../helpers/app';
 import { ProveedorFalso } from '../helpers/proveedor-falso';
 
@@ -928,7 +930,7 @@ describe('⛔ Webhook duplicado', () => {
       .getInstance()
       .inject({
         method: 'POST',
-        url: '/webhooks/orders/mercadopago',
+        url: URL_WEBHOOK,
         headers: {
           'content-type': 'application/json',
           'x-signature': 'ts=123,v1=firmafalsa',
@@ -954,6 +956,289 @@ describe('⛔ Webhook duplicado', () => {
     expect(r.status).toBe(200);
     expect(r.body.status).toBe('ORPHAN');
   });
+});
+
+/**
+ * La URL del webhook, como la va a llamar Mercado Pago.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * POR QUÉ ESTE BLOQUE EXISTE
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Porque no había ninguno, y por eso el defecto sobrevivió: los tests de
+ * webhook probaban el COMPORTAMIENTO —firma, deduplicación, huérfanos— y
+ * ninguno probaba **en qué URL responde**. El helper de tests excluía
+ * `webhooks/(.*)` del prefijo global y `main.ts` enumeraba dos rutas: la suite
+ * pasaba contra `/webhooks/orders/mercadopago` mientras el servidor real
+ * servía `/api/webhooks/orders/mercadopago`.
+ *
+ * Habríamos cargado la URL probada en el panel de Mercado Pago y cada
+ * notificación habría dado 404. Sin un solo test en rojo.
+ */
+describe('La ruta del webhook', () => {
+  const pegar = (url: string) =>
+    (app as NestFastifyApplication)
+      .getHttpAdapter()
+      .getInstance()
+      .inject({
+        method: 'POST',
+        url,
+        headers: { 'content-type': 'application/json' },
+        payload: { type: 'payment', data: { id: 'mp_x' } },
+      });
+
+  it('responde en /webhooks/orders/mercadopago', async () => {
+    // La URL EXACTA que se carga en el panel. Sin /api y sin /v1.
+    const res = await pegar('/webhooks/orders/mercadopago');
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('⛔ NO responde con el prefijo /api', async () => {
+    // Era la ruta real antes del arreglo, y la que ningún test miraba.
+    expect((await pegar('/api/webhooks/orders/mercadopago')).statusCode).toBe(404);
+  });
+
+  it('⛔ NO responde con versionado', async () => {
+    expect((await pegar('/api/v1/webhooks/orders/mercadopago')).statusCode).toBe(404);
+    expect((await pegar('/v1/webhooks/orders/mercadopago')).statusCode).toBe(404);
+  });
+
+  it('⛔ la ruta genérica "webhooks/mercadopago" no existe', async () => {
+    /**
+     * Es la que un humano apurado escribe de memoria en el panel.
+     *
+     * La ocupaba el webhook del spike, que acredita contra `SpikeOrder` — una
+     * tabla que el flujo real de pedidos no usa. Pegarla en el panel habría
+     * dejado todos los pedidos reales sin confirmar mientras el spike anotaba
+     * pagos que nadie mira. Ahora da 404, que es un error que se nota.
+     */
+    expect((await pegar('/webhooks/mercadopago')).statusCode).toBe(404);
+    expect((await pegar('/api/webhooks/mercadopago')).statusCode).toBe(404);
+  });
+
+  it('el webhook del spike vive en una URL que se anuncia como tal', async () => {
+    /**
+     * En la suite el spike está encendido (`test/setup.ts`), así que su ruta
+     * responde. Lo que se verifica es que responde **en la suya**: si alguien
+     * la devolviera a `webhooks/mercadopago`, el test de arriba se pondría en
+     * rojo.
+     *
+     * Que no exista en producción no se prueba acá sino donde se decide:
+     * `env-schema.spec.ts` verifica que `PAYMENTS_SPIKE_ENABLED=true` con
+     * `NODE_ENV=production` no arranca.
+     */
+    const res = await pegar('/webhooks/spike/mercadopago');
+    expect(res.statusCode).toBe(200);
+    expect(RUTA_WEBHOOK_MERCADOPAGO).not.toContain('spike');
+  });
+});
+
+/**
+ * De dónde sale `data.id`, que es con lo que se arma el manifiesto de la firma.
+ *
+ * Si se tomara de un lugar distinto del que usó Mercado Pago para firmar, el
+ * HMAC se calcularía sobre otro id y la verificación fallaría con
+ * `HASH_MISMATCH` — indistinguible de una clave mal configurada, y un día
+ * entero de depuración.
+ */
+describe('El origen de data.id', () => {
+  it('la query string tiene prioridad sobre el cuerpo', async () => {
+    const { variantId } = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, variantId));
+
+    proveedor.proximo = { status: 'approved', id: 'mp_query_gana' };
+    await pagar(comprador.token, orden.body.id);
+    proveedor.alConsultar = { status: 'approved', id: 'mp_query_gana' };
+
+    /**
+     * Los dos vienen y son DISTINTOS.
+     *
+     * La firma se calculó sobre el de la query, que es lo que hace Mercado
+     * Pago. Si el código prefiriera el del cuerpo, el manifiesto no coincidiría
+     * y esto respondería INVALID_SIGNATURE.
+     */
+    const r = await enviarWebhook('mp_query_gana', `prioridad-${Date.now()}`, {
+      donde: 'ambos',
+      idEnElCuerpo: 'mp_cuerpo_distinto',
+    });
+
+    expect(r.status).toBe(200);
+    expect(r.body.status).not.toBe('INVALID_SIGNATURE');
+
+    // Y lo que quedó registrado es el de la query.
+    const evento = await prisma.mpWebhookEvent.findFirst({
+      where: { resourceId: 'mp_query_gana' },
+      orderBy: { receivedAt: 'desc' },
+    });
+    expect(evento).not.toBeNull();
+  });
+
+  it('el cuerpo sigue funcionando como respaldo, para el simulador', async () => {
+    // El simulador del panel manda avisos con el id sólo en el cuerpo. Sirve
+    // para probar sin armar la URL a mano.
+    proveedor.alConsultar = { status: 'approved', id: 'mp_solo_cuerpo', externalReference: null };
+
+    const r = await enviarWebhook('mp_solo_cuerpo', `respaldo-${Date.now()}`, { donde: 'body' });
+
+    expect(r.status).toBe(200);
+    // Llega a consultar el pago: la firma validó y el id se resolvió.
+    expect(r.body.status).toBe('ORPHAN');
+  });
+
+  it('sin data.id en ningún lado se ignora con 200', async () => {
+    const requestId = `req-sin-id-${Date.now()}`;
+    const { createHmac } = await import('node:crypto');
+    const ts = Math.floor(Date.now() / 1000);
+    // Sin `data.id`, el manifiesto omite ese segmento entero.
+    const manifest = `request-id:${requestId};ts:${ts};`;
+    const v1 = createHmac('sha256', TEST_ENV.MP_WEBHOOK_SECRET).update(manifest).digest('hex');
+
+    const res = await (app as NestFastifyApplication)
+      .getHttpAdapter()
+      .getInstance()
+      .inject({
+        method: 'POST',
+        url: URL_WEBHOOK,
+        headers: {
+          'content-type': 'application/json',
+          'x-signature': `ts=${ts},v1=${v1}`,
+          'x-request-id': requestId,
+        },
+        payload: { id: `sin-id-${Date.now()}`, type: 'payment' },
+      });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).status).toBe('IGNORED');
+  });
+});
+
+describe('La firma del webhook', () => {
+  it('un timestamp vencido se rechaza aunque el HMAC sea correcto', async () => {
+    /**
+     * Una firma vieja sigue siendo válida criptográficamente para siempre.
+     *
+     * Sin ventana de tolerancia, quien capture una notificación puede
+     * repetirla cuando quiera. Seis minutos: la tolerancia son cinco.
+     */
+    const viejo = Math.floor(Date.now() / 1000) - 6 * 60;
+    const requestId = `req-viejo-${Date.now()}`;
+    const firma = await firmar({ dataId: 'mp_viejo', requestId, ts: viejo });
+
+    const res = await (app as NestFastifyApplication)
+      .getHttpAdapter()
+      .getInstance()
+      .inject({
+        method: 'POST',
+        url: `${URL_WEBHOOK}?data.id=mp_viejo&type=payment`,
+        headers: {
+          'content-type': 'application/json',
+          'x-signature': firma,
+          'x-request-id': requestId,
+        },
+        payload: { id: `viejo-${Date.now()}`, type: 'payment' },
+      });
+
+    expect(res.statusCode).toBe(200);
+    const cuerpo = JSON.parse(res.body);
+    expect(cuerpo.status).toBe('INVALID_SIGNATURE');
+    // El motivo distingue "aviso viejo" de "firma falsa": son dos incidentes
+    // distintos y se investigan distinto.
+    expect(cuerpo.detail).toBe('STALE_TIMESTAMP');
+  });
+
+  it('una firma calculada con otra clave se rechaza', async () => {
+    const requestId = `req-otraclave-${Date.now()}`;
+    const firma = await firmar({
+      dataId: 'mp_otra',
+      requestId,
+      secret: 'una-clave-que-no-es-la-nuestra',
+    });
+
+    const res = await (app as NestFastifyApplication)
+      .getHttpAdapter()
+      .getInstance()
+      .inject({
+        method: 'POST',
+        url: `${URL_WEBHOOK}?data.id=mp_otra&type=payment`,
+        headers: {
+          'content-type': 'application/json',
+          'x-signature': firma,
+          'x-request-id': requestId,
+        },
+        payload: { id: `otra-${Date.now()}`, type: 'payment' },
+      });
+
+    expect(JSON.parse(res.body).status).toBe('INVALID_SIGNATURE');
+    expect(JSON.parse(res.body).detail).toBe('HASH_MISMATCH');
+  });
+
+  it('sin cabecera de firma se rechaza', async () => {
+    const res = await (app as NestFastifyApplication)
+      .getHttpAdapter()
+      .getInstance()
+      .inject({
+        method: 'POST',
+        url: `${URL_WEBHOOK}?data.id=mp_sinfirma&type=payment`,
+        headers: { 'content-type': 'application/json' },
+        payload: { id: `sinfirma-${Date.now()}`, type: 'payment' },
+      });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).detail).toBe('MISSING_SIGNATURE');
+  });
+
+  it('la firma se guarda RECORTADA, nunca entera', async () => {
+    proveedor.alConsultar = { status: 'approved', id: 'mp_recorte', externalReference: null };
+    const notificationId = `recorte-${Date.now()}`;
+
+    await enviarWebhook('mp_recorte', notificationId, { donde: 'query' });
+
+    const evento = await prisma.mpWebhookEvent.findFirst({ where: { notificationId } });
+    const guardada = (evento?.headers as Record<string, string>)['x-signature'] ?? '';
+
+    // El HMAC entero es material derivado de MP_WEBHOOK_SECRET, guardado en
+    // claro en una tabla que el admin lee entera. Ocho caracteres alcanzan para
+    // comparar dos notificaciones, que es lo único que se hace con ese dato.
+    expect(guardada).toMatch(/^ts=\d+,v1=[0-9a-f]{8}…$/);
+    expect(guardada.length).toBeLessThan(40);
+  });
+});
+
+describe('Los topics que no son de pago', () => {
+  for (const topic of ['merchant_order', 'plan', 'subscription', 'point_integration_wh']) {
+    it(`"${topic}" se registra y se ignora con 200`, async () => {
+      const requestId = `req-${topic}-${Date.now()}`;
+      const firma = await firmar({ dataId: `res_${topic}`, requestId });
+      const notificationId = `${topic}-${Date.now()}`;
+
+      const res = await (app as NestFastifyApplication)
+        .getHttpAdapter()
+        .getInstance()
+        .inject({
+          method: 'POST',
+          url: `${URL_WEBHOOK}?data.id=res_${topic}&type=${topic}`,
+          headers: {
+            'content-type': 'application/json',
+            'x-signature': firma,
+            'x-request-id': requestId,
+          },
+          payload: { id: notificationId, type: topic, data: { id: `res_${topic}` } },
+        });
+
+      expect(res.statusCode).toBe(200);
+      expect(JSON.parse(res.body).status).toBe('IGNORED');
+
+      // Queda registrado y marcado como procesado: si mañana hay que soportar
+      // merchant_order, el histórico está.
+      const evento = await prisma.mpWebhookEvent.findFirst({ where: { notificationId } });
+      expect(evento?.topic).toBe(topic);
+      expect(evento?.processedAt).not.toBeNull();
+
+      // Y no se consultó la API por algo que no es un pago.
+      expect(proveedor.llamadasAConsultar).toBe(0);
+    });
+  }
 });
 
 describe('Devoluciones', () => {
@@ -1257,29 +1542,71 @@ describe('Mis pedidos', () => {
 // ─── Webhook ────────────────────────────────────────────────────────────────
 
 /**
+ * La URL exacta que se carga en el panel de Mercado Pago.
+ *
+ * Se arma con la constante y no con una cadena escrita a mano. La copia
+ * literal fue justamente el defecto: el test decía
+ * `/webhooks/orders/mercadopago` y pasaba en verde mientras el servidor real
+ * servía `/api/webhooks/orders/mercadopago`, porque el helper de tests excluía
+ * `webhooks/(.*)` del prefijo y `main.ts` sólo excluía dos rutas enumeradas.
+ */
+const URL_WEBHOOK = `/${RUTA_WEBHOOK_MERCADOPAGO}`;
+
+/** Arma la cabecera `x-signature` como la manda Mercado Pago. */
+async function firmar(params: {
+  dataId: string;
+  requestId: string;
+  ts?: number;
+  secret?: string;
+}) {
+  const { createHmac } = await import('node:crypto');
+  const ts = params.ts ?? Math.floor(Date.now() / 1000);
+  const manifest = `id:${params.dataId};request-id:${params.requestId};ts:${ts};`;
+  const v1 = createHmac('sha256', params.secret ?? TEST_ENV.MP_WEBHOOK_SECRET)
+    .update(manifest)
+    .digest('hex');
+  return `ts=${ts},v1=${v1}`;
+}
+
+/**
  * Manda una notificación FIRMADA como lo hace Mercado Pago.
  *
  * La firma se calcula igual que del otro lado: sin esto, todos los tests de
  * webhook probarían nada más que el rechazo por firma inválida.
+ *
+ * `donde` decide si el `data.id` viaja en la query string —como en las
+ * notificaciones reales— o sólo en el cuerpo, como en el simulador del panel.
  */
-async function enviarWebhook(paymentId: string, notificationId: string) {
-  const { createHmac } = await import('node:crypto');
-  const ts = Math.floor(Date.now() / 1000);
-  const manifest = `id:${paymentId};request-id:req-${notificationId};ts:${ts};`;
-  const v1 = createHmac('sha256', TEST_ENV.MP_WEBHOOK_SECRET).update(manifest).digest('hex');
+async function enviarWebhook(
+  paymentId: string,
+  notificationId: string,
+  opts: { donde?: 'query' | 'body' | 'ambos'; idEnElCuerpo?: string } = {},
+) {
+  const donde = opts.donde ?? 'body';
+  const requestId = `req-${notificationId}`;
+  const firma = await firmar({ dataId: paymentId, requestId });
+
+  const query = donde === 'query' || donde === 'ambos' ? `?data.id=${paymentId}&type=payment` : '';
+  const idDelCuerpo =
+    donde === 'query' ? undefined : (opts.idEnElCuerpo ?? paymentId);
 
   const res = await (app as NestFastifyApplication)
     .getHttpAdapter()
     .getInstance()
     .inject({
       method: 'POST',
-      url: '/webhooks/orders/mercadopago',
+      url: `${URL_WEBHOOK}${query}`,
       headers: {
         'content-type': 'application/json',
-        'x-signature': `ts=${ts},v1=${v1}`,
-        'x-request-id': `req-${notificationId}`,
+        'x-signature': firma,
+        'x-request-id': requestId,
       },
-      payload: { id: notificationId, type: 'payment', action: 'payment.updated', data: { id: paymentId } },
+      payload: {
+        id: notificationId,
+        type: 'payment',
+        action: 'payment.updated',
+        ...(idDelCuerpo ? { data: { id: idDelCuerpo } } : {}),
+      },
     });
 
   return { status: res.statusCode, body: res.body ? JSON.parse(res.body) : null };

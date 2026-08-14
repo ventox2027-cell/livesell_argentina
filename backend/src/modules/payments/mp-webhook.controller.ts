@@ -2,13 +2,36 @@ import { Controller, HttpCode, Logger, Post, Req, VERSION_NEUTRAL } from '@nestj
 import type { FastifyRequest } from 'fastify';
 
 import { Public } from '@/modules/auth/auth.guard';
+import { RUTA_WEBHOOK_SPIKE } from '@/shared/http/rutas-webhook';
 import { MetricsService } from '@/shared/observability/metrics.service';
 
 import { asString } from './mp-signature';
 import { PaymentsService } from './payments.service';
 
 /**
- * Receptor de notificaciones de Mercado Pago.
+ * ⚠️ WEBHOOK DEL SPIKE. **NO ES EL DE PRODUCCIÓN.**
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * NO CARGAR ESTA URL EN EL PANEL DE MERCADO PAGO
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * El webhook productivo es `OrdersWebhookController`, en
+ * `modules/orders/orders.controller.ts`, sobre la ruta
+ * `POST /webhooks/orders/mercadopago` — la constante
+ * `RUTA_WEBHOOK_MERCADOPAGO` de `shared/http/rutas-webhook.ts`. Éste opera
+ * sobre `SpikeOrder`, una tabla que el flujo real de pedidos no usa.
+ *
+ * Existe sólo para que `payments-flow.spec.ts` siga cubriendo el spike. El
+ * módulo entero está detrás de `PAYMENTS_SPIKE_ENABLED`, y `env.schema.ts`
+ * impide que esa bandera sea `true` en producción: esta ruta **no puede
+ * existir** en el entorno real.
+ *
+ * ─── Por qué la URL dice "spike" ───
+ *
+ * Antes vivía en `webhooks/mercadopago`: la más corta, la más obvia y la más
+ * creíble de las dos. Era la que alguien iba a pegar en el panel por error, y
+ * habría acreditado pagos contra la tabla equivocada. El segmento está en la
+ * ruta para que ese error sea imposible de cometer distraído.
  *
  * ─── Sin guard, a propósito ───
  *
@@ -24,11 +47,11 @@ import { PaymentsService } from './payments.service';
  * cuando el fallo es NUESTRO y transitorio —la API de Mercado Pago no responde
  * al consultar el estado—: ahí sí queremos el reintento.
  */
-// VERSION_NEUTRAL: la URL se carga a mano en el panel de Mercado Pago. Si
-// mañana saliera /api/v2/, nadie va a ir a actualizarla.
-// Quien llama es Mercado Pago. Su credencial es la firma HMAC.
+// VERSION_NEUTRAL para que la ruta coincida con la exclusión del prefijo, que
+// vive en `http-setup.ts`. Quien llama es Mercado Pago; su credencial es la
+// firma HMAC.
 @Public()
-@Controller({ path: 'webhooks', version: VERSION_NEUTRAL })
+@Controller({ path: RUTA_WEBHOOK_SPIKE, version: VERSION_NEUTRAL })
 export class MpWebhookController {
   private readonly logger = new Logger(MpWebhookController.name);
 
@@ -37,7 +60,8 @@ export class MpWebhookController {
     private readonly metrics: MetricsService,
   ) {}
 
-  @Post('mercadopago')
+  // La ruta completa está en el @Controller.
+  @Post()
   @HttpCode(200)
   async handle(@Req() req: FastifyRequest): Promise<{ received: boolean; status?: string }> {
     const body = (req.body ?? {}) as Record<string, unknown>;

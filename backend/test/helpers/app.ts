@@ -1,8 +1,11 @@
-import { VersioningType } from '@nestjs/common';
 import { type NestFastifyApplication } from '@nestjs/platform-fastify';
 import type { TestingModule } from '@nestjs/testing';
 
-import { crearAdaptador, registrarMultipart } from '@/http-setup';
+import {
+  configurarPrefijoYVersionado,
+  crearAdaptador,
+  registrarMultipart,
+} from '@/http-setup';
 
 /**
  * Arranca la aplicación EXACTAMENTE como lo hace `main.ts`.
@@ -25,18 +28,28 @@ import { crearAdaptador, registrarMultipart } from '@/http-setup';
  *     Cualquier test del límite por IP corría en un servidor que ignora
  *     `X-Forwarded-For` mientras el de verdad lo obedecía.
  *
+ *   · Y la cuarta, la peor, porque este archivo ya existía para evitarla: el
+ *     prefijo global. Acá decía `exclude: [..., 'webhooks/(.*)', ...]` y
+ *     `main.ts` enumeraba las rutas una por una. En los tests TODOS los
+ *     webhooks quedaban fuera del prefijo; en producción, sólo dos.
+ *
+ *     `orders-flow.spec.ts` probaba `POST /webhooks/orders/mercadopago` en
+ *     verde mientras el servidor real la servía en
+ *     `/api/webhooks/orders/mercadopago`. Esa es la URL que se carga a mano en
+ *     el panel de Mercado Pago: habríamos pegado la probada y cada
+ *     notificación de pago habría dado 404, con la suite entera pasando.
+ *
  * El arreglo no es acordarse de copiar: es que haya un solo lugar. Lo que
- * cambie el comportamiento del servidor —opciones incluidas— va en
- * `src/http-setup.ts`, y esto llama a la misma función que `main.ts`.
+ * cambie el comportamiento del servidor —opciones y exclusiones incluidas— va
+ * en `src/http-setup.ts`, y esto llama a las mismas funciones que `main.ts`.
  */
 export async function crearAppDePrueba(
   moduleRef: TestingModule,
 ): Promise<NestFastifyApplication> {
   const app = moduleRef.createNestApplication<NestFastifyApplication>(crearAdaptador());
-  app.setGlobalPrefix('api', {
-    exclude: ['health', 'ready', 'metrics', 'webhooks/(.*)', 'media/(.*)'],
-  });
-  app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
+
+  // ⚠️ La misma función que llama `main.ts`. No escribir la lista acá.
+  configurarPrefijoYVersionado(app);
 
   await registrarMultipart(app);
   await app.init();

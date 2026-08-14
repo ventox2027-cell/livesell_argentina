@@ -2,6 +2,7 @@ import { config as loadDotenv } from 'dotenv';
 import { z } from 'zod';
 
 import { PROVEEDORES } from '@/shared/http/deployment-provider';
+import { RUTA_WEBHOOK_MERCADOPAGO } from '@/shared/http/rutas-webhook';
 
 /**
  * Carga `.env` en process.env ANTES de validar.
@@ -528,6 +529,39 @@ export const envSchema = z
       message:
         'PAYMENTS_SPIKE_ENABLED=true requiere MP_ACCESS_TOKEN, MP_PUBLIC_KEY y MP_WEBHOOK_SECRET',
       path: ['MP_ACCESS_TOKEN'],
+    },
+  )
+  /**
+   * La URL de notificación tiene que apuntar a la ruta que realmente existe.
+   *
+   * ═══════════════════════════════════════════════════════════════════════════
+   * ES UN ERROR QUE NO DA NINGUNA SEÑAL
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * `MP_NOTIFICATION_URL` es texto libre y viaja en cada cobro: Mercado Pago la
+   * guarda y le manda ahí las notificaciones. Si tiene la ruta equivocada
+   * —`/api/` de más, la ruta vieja del spike, un `/v1/`— **todo sigue
+   * funcionando**: el cobro se crea, la tarjeta se debita, la app muestra
+   * "aprobado".
+   *
+   * Lo único que pasa es que la notificación da 404 y la orden se queda en
+   * `PENDING_PAYMENT` para siempre. El conciliador termina rescatándola, pero
+   * recién en su próxima pasada y sin que nadie sepa por qué hizo falta.
+   *
+   * No hay log, no hay excepción y no hay alerta: hay que ir a mirar el panel
+   * de Mercado Pago para enterarse. Por eso se valida al arrancar, que es el
+   * único momento en que el error es barato.
+   */
+  .refine(
+    (e) =>
+      !e.MP_NOTIFICATION_URL ||
+      new URL(e.MP_NOTIFICATION_URL).pathname === `/${RUTA_WEBHOOK_MERCADOPAGO}`,
+    {
+      message:
+        `MP_NOTIFICATION_URL debe terminar exactamente en "/${RUTA_WEBHOOK_MERCADOPAGO}" ` +
+        '(sin "/api" y sin "/v1"): es la única ruta que el servidor registra. ' +
+        'Con otra ruta el cobro funciona igual y la notificación se pierde en un 404.',
+      path: ['MP_NOTIFICATION_URL'],
     },
   )
   /**
