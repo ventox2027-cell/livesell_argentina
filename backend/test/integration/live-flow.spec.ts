@@ -769,3 +769,107 @@ describe('Vivo — panel del vendedor', () => {
     expect(r.body.resumen.espectadoresPico).toBeNull();
   });
 });
+
+describe('Vivo — el precio que ve el comprador', () => {
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * LA TARJETA Y EL COBRO SALEN DEL MISMO LUGAR
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * El cobro ya resolvía el precio de vivo (ver `orders-flow.spec.ts`). La
+   * tarjeta no: mostraba el precio de lista. El comprador se enteraba del
+   * descuento en el resumen de pago, que es el único momento en que un
+   * descuento no sirve para nada.
+   */
+
+  /** Un vivo al aire con el producto destacado. */
+  async function vivoConDestacado() {
+    const v = await nuevoVendedorConProducto();
+    const c = await call('POST', '/api/v1/live', {
+      token: v.token,
+      body: { title: 'Vivo', productIds: [v.productId] },
+    });
+    await call('POST', `/api/v1/live/${c.body.id}/start`, { token: v.token });
+    await call('POST', `/api/v1/live/${c.body.id}/feature`, {
+      token: v.token,
+      body: { variantId: v.variantId },
+    });
+    return { ...v, liveId: c.body.id as string };
+  }
+
+  it('con descuento activo, la tarjeta muestra el precio de vivo y el tachado', async () => {
+    const v = await vivoConDestacado();
+
+    await call('PUT', `/api/v1/live/${v.liveId}/products/${v.productId}/price`, {
+      token: v.token,
+      body: { precioCentavos: 620_000 },
+    });
+
+    const espectador = await nuevoUsuario();
+    const vista = await call('GET', `/api/v1/live/${v.liveId}`, { token: espectador.token });
+
+    expect(vista.body.destacado.precioCentavos).toBe(620_000);
+    expect(vista.body.destacado.hayDescuento).toBe(true);
+    expect(vista.body.destacado.precioDeListaCentavos).toBe(890_000);
+    expect(vista.body.destacado.porcentajeDescuento).toBe(30);
+  });
+
+  it('⛔ sin descuento, no viaja nada que la app pueda tachar', async () => {
+    /**
+     * `hayDescuento: false` es lo que la app mira. Si en cambio comparara los
+     * dos números por su cuenta, cualquier producto tacharía su propio precio.
+     */
+    const v = await vivoConDestacado();
+
+    const espectador = await nuevoUsuario();
+    const vista = await call('GET', `/api/v1/live/${v.liveId}`, { token: espectador.token });
+
+    expect(vista.body.destacado.precioCentavos).toBe(890_000);
+    expect(vista.body.destacado.hayDescuento).toBe(false);
+  });
+
+  it('⛔ una oferta que todavía no empezó no se muestra como descuento', async () => {
+    // El vendedor la deja programada. Hasta que arranque, la tarjeta dice el
+    // precio de siempre — y el cobro también.
+    const v = await vivoConDestacado();
+
+    await call('PUT', `/api/v1/live/${v.liveId}/products/${v.productId}/price`, {
+      token: v.token,
+      body: {
+        precioCentavos: 620_000,
+        desde: new Date(Date.now() + 30 * 60_000).toISOString(),
+      },
+    });
+
+    const espectador = await nuevoUsuario();
+    const vista = await call('GET', `/api/v1/live/${v.liveId}`, { token: espectador.token });
+
+    expect(vista.body.destacado.precioCentavos).toBe(890_000);
+    expect(vista.body.destacado.hayDescuento).toBe(false);
+  });
+
+  it('el panel del vendedor SÍ ve la oferta programada, para poder corregirla', async () => {
+    /**
+     * La única vista que no resuelve la ventana.
+     *
+     * Si el panel escondiera la oferta hasta que arranca, el vendedor no
+     * tendría dónde ver que la cargó mal.
+     */
+    const v = await vivoConDestacado();
+    const desde = new Date(Date.now() + 30 * 60_000);
+
+    await call('PUT', `/api/v1/live/${v.liveId}/products/${v.productId}/price`, {
+      token: v.token,
+      body: { precioCentavos: 620_000, desde: desde.toISOString() },
+    });
+
+    const panel = await call('GET', `/api/v1/live/${v.liveId}/panel`, { token: v.token });
+    const enBandeja = panel.body.bandeja.find(
+      (b: { productId: string }) => b.productId === v.productId,
+    );
+
+    expect(enBandeja.precioDeVivoCentavos).toBe(620_000);
+    // Cargada pero todavía no vigente: las dos cosas a la vez.
+    expect(enBandeja.precioDeVivoActivo).toBe(false);
+  });
+});

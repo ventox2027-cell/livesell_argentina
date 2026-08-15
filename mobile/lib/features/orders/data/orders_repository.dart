@@ -40,12 +40,20 @@ class OrdersRepository {
     required String idempotencyKey,
     String? addressId,
     bool retiraEnPersona = false,
+    String? liveSessionId,
   }) async {
     final res = await _api.raw.post<Map<String, dynamic>>(
       '/orders',
       data: {
         'reservationId': reservationId,
         if (addressId != null) 'addressId': addressId,
+        /// Desde qué vivo se está comprando.
+        ///
+        /// ⚠️ Se manda el **id del vivo**, nunca el precio. El backend busca el
+        /// descuento en su propia base y valida que el vivo sea del mismo
+        /// vendedor y esté al aire. Si el cuerpo pudiera decir cuánto sale
+        /// algo, cualquiera compraría a un peso.
+        if (liveSessionId != null) 'liveSessionId': liveSessionId,
         // Lo único del envío que aporta quien compra. El backend sólo lo
         // respeta si la tienda ofrece retiro: mandarlo en una tienda que no lo
         // ofrece NO evita el costo.

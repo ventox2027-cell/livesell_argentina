@@ -34,6 +34,19 @@ export const CreateOrderSchema = z.object({
    * paquete que nadie pagó.
    */
   retiraEnPersona: z.boolean().optional(),
+
+  /**
+   * Desde qué vivo se está comprando.
+   *
+   * ⚠️ Es el ÚNICO campo nuevo relacionado con el precio, y **no es un
+   * precio**: es de dónde viene la compra. El servidor busca si ese producto
+   * tiene precio exclusivo en ese vivo, verifica que el vivo sea del mismo
+   * vendedor y esté al aire, y evalúa la ventana con su propio reloj.
+   *
+   * Un campo que dijera cuánto sale algo sería un endpoint donde alguien
+   * compra un televisor por un peso.
+   */
+  liveSessionId: z.string().max(40).optional(),
 });
 export type CreateOrderDto = z.infer<typeof CreateOrderSchema>;
 

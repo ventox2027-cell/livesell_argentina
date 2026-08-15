@@ -49,6 +49,7 @@ class CheckoutSheet extends ConsumerStatefulWidget {
     required this.nombreProducto,
     required this.precio,
     this.retiraEnPersona = false,
+    this.liveSessionId,
   });
 
   final String reservationId;
@@ -58,12 +59,20 @@ class CheckoutSheet extends ConsumerStatefulWidget {
   /// Lo eligió en la hoja de variantes, donde vio el precio de cada opción.
   final bool retiraEnPersona;
 
+  /// Desde qué vivo se está comprando, o `null` si vino del feed.
+  ///
+  /// Es lo que habilita el precio exclusivo del vivo. Va como id: el backend
+  /// busca el descuento en su base y valida que el vivo sea del mismo vendedor
+  /// y esté al aire.
+  final String? liveSessionId;
+
   static Future<Pedido?> mostrar(
     BuildContext context, {
     required String reservationId,
     required String nombreProducto,
     required String precio,
     bool retiraEnPersona = false,
+    String? liveSessionId,
   }) {
     return showModalBottomSheet<Pedido>(
       context: context,
@@ -76,6 +85,7 @@ class CheckoutSheet extends ConsumerStatefulWidget {
         nombreProducto: nombreProducto,
         precio: precio,
         retiraEnPersona: retiraEnPersona,
+        liveSessionId: liveSessionId,
       ),
     );
   }
@@ -116,6 +126,7 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
             idempotencyKey: _claveDePedido,
             addressId: _direccion?.id,
             retiraEnPersona: widget.retiraEnPersona,
+            liveSessionId: widget.liveSessionId,
           );
       if (!mounted) return;
       setState(() {

@@ -83,12 +83,56 @@ class ProductoDestacadoCard extends StatelessWidget {
                   children: [
                     Text(
                       _plata(producto.precioCentavos),
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w800,
-                        color: AppColor.texto,
+                        // Con descuento el precio se pinta, para que el ojo
+                        // vaya al número que se paga y no al tachado.
+                        color: producto.hayDescuento ? AppColor.vivo : AppColor.texto,
                       ),
                     ),
+                    /**
+                     * El tachado y el porcentaje salen JUNTOS y sólo con
+                     * `hayDescuento`.
+                     *
+                     * La app no compara los dos precios por su cuenta: una
+                     * oferta vencida o todavía no empezada tiene los dos
+                     * cargados y no es un descuento. Quien resuelve la ventana
+                     * es el servidor, que es el mismo que después cobra.
+                     */
+                    if (producto.hayDescuento &&
+                        producto.precioDeListaCentavos != null) ...[
+                      const SizedBox(width: 6),
+                      Text(
+                        _plata(producto.precioDeListaCentavos),
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: AppColor.textoDebil,
+                          decoration: TextDecoration.lineThrough,
+                          decorationColor: AppColor.textoDebil,
+                        ),
+                      ),
+                      if (producto.porcentajeDescuento != null) ...[
+                        const SizedBox(width: 6),
+                        DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: AppColor.vivo,
+                            borderRadius: BorderRadius.circular(Redondeo.sm),
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                            child: Text(
+                              '-${producto.porcentajeDescuento}%',
+                              style: const TextStyle(
+                                fontSize: 10.5,
+                                fontWeight: FontWeight.w900,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
                     if (producto.variante != null) ...[
                       const SizedBox(width: 6),
                       Flexible(

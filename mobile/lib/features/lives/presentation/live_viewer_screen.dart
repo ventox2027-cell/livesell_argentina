@@ -250,6 +250,7 @@ class _LiveViewerScreenState extends ConsumerState<LiveViewerScreen> {
       context,
       productId: productId,
       storeId: _live?.storeId,
+      liveSessionId: widget.liveId,
     );
 
     if (pedido != null && mounted) {

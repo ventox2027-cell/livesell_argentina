@@ -4316,3 +4316,242 @@ describe('Vivos programados y recordatorios', () => {
     });
   });
 });
+
+describe('Precio exclusivo del vivo', () => {
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * EL DESCUENTO LO DECIDE EL SERVIDOR
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * La app manda desde qué vivo compra. **No manda el precio**, y no podría: si
+   * el cuerpo de la petición pudiera decir cuánto sale algo, cualquiera
+   * compraría a un peso.
+   */
+
+  /** Un vendedor con un vivo al aire y un producto adentro. */
+  async function vivoConProducto(precio = 1_800_000) {
+    const { variantId, sellerToken, sellerId, productId } = await nuevaVarianteConStock(5);
+    const tienda = await prisma.store.findFirstOrThrow({ where: { sellerId } });
+
+    await prisma.product.update({
+      where: { id: productId },
+      data: { basePriceCents: precio },
+    });
+
+    const vivo = await prisma.liveSession.create({
+      data: {
+        id: `liv_pre${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+        sellerId,
+        storeId: tienda.id,
+        title: 'Vendiendo',
+        roomName: `room-pre-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        state: 'LIVE',
+        startedAt: new Date(),
+        products: {
+          create: [
+            {
+              id: `lsp_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+              productId,
+              position: 0,
+            },
+          ],
+        },
+      },
+      select: { id: true },
+    });
+
+    return { variantId, sellerToken, sellerId, productId, liveId: vivo.id, precio };
+  }
+
+  it('⛔ la comisión del 6 % sale sobre lo que se PAGÓ, no sobre el precio de lista', async () => {
+    /**
+     * El invariante comercial de este bloque.
+     *
+     * Cobrarle al vendedor comisión sobre un precio que nadie pagó sería
+     * quedarse con parte de su descuento: pone un producto de $18.000 a
+     * $12.500, y VendoX le cobra $1.080 en vez de $750.
+     */
+    const v = await vivoConProducto(1_800_000);
+    await prisma.liveSessionProduct.updateMany({
+      where: { liveSessionId: v.liveId, productId: v.productId },
+      data: { livePriceCents: 1_250_000 },
+    });
+
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId), {
+      liveSessionId: v.liveId,
+    });
+
+    expect(orden.status, JSON.stringify(orden.body)).toBe(201);
+
+    // Se cobró el precio de vivo.
+    expect(orden.body.itemsSubtotal).toBe(1_250_000);
+
+    // Y la comisión es el 6 % de ESO: $750, no $1.080.
+    expect(orden.body.platformFeeAmount).toBe(75_000);
+    expect(orden.body.platformFeeAmount).not.toBe(108_000);
+  });
+
+  it('⛔ sin mandar el vivo, se cobra el precio de lista', async () => {
+    // Comprar el mismo producto desde el feed no da el descuento del vivo.
+    const v = await vivoConProducto(1_800_000);
+    await prisma.liveSessionProduct.updateMany({
+      where: { liveSessionId: v.liveId, productId: v.productId },
+      data: { livePriceCents: 1_250_000 },
+    });
+
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId));
+
+    expect(orden.body.itemsSubtotal).toBe(1_800_000);
+  });
+
+  it('⛔ el vivo de OTRO vendedor no da su descuento', async () => {
+    /**
+     * El agujero: mandar el id del vivo de otra tienda —donde hay un descuento
+     * del 90 %— y llevarse este producto a ese precio.
+     *
+     * ⚠️ Para probarlo hay que meter el producto de la víctima en la bandeja
+     * del atacante ESCRIBIENDO EN LA BASE, porque por la API no se puede: al
+     * preparar un vivo, los productos se validan contra la tienda del vendedor.
+     *
+     * O sea que esto verifica la SEGUNDA capa. Un sabotaje que quita el filtro
+     * por vendedor no hace fallar nada si el producto no está en la bandeja
+     * ajena — y por eso el test lo pone ahí a mano. Sin este montaje, el test
+     * pasaría con la validación borrada.
+     */
+    const mio = await vivoConProducto(1_800_000);
+    const atacante = await vivoConProducto(1_000_000);
+
+    await prisma.liveSessionProduct.create({
+      data: {
+        id: `lsp_atk${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+        liveSessionId: atacante.liveId,
+        productId: mio.productId,
+        position: 1,
+        livePriceCents: 180_000,
+      },
+    });
+
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, mio.variantId), {
+      liveSessionId: atacante.liveId,
+    });
+
+    // Se cobró el precio real, no el descuento del vivo ajeno.
+    expect(orden.body.itemsSubtotal).toBe(1_800_000);
+  });
+
+  it('⛔ una oferta vencida NO se cobra, aunque la app la siga mostrando', async () => {
+    // El reloj es el del servidor. Una oferta que venció hace treinta segundos
+    // no se aplica.
+    const v = await vivoConProducto(1_800_000);
+    await prisma.liveSessionProduct.updateMany({
+      where: { liveSessionId: v.liveId, productId: v.productId },
+      data: {
+        livePriceCents: 1_250_000,
+        livePriceUntil: new Date(Date.now() - 30_000),
+      },
+    });
+
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId), {
+      liveSessionId: v.liveId,
+    });
+
+    expect(orden.body.itemsSubtotal).toBe(1_800_000);
+  });
+
+  it('la orden guarda de dónde vino y a qué precio estaba en lista', async () => {
+    // Es lo que permite responder, seis meses después, por qué dos órdenes del
+    // mismo producto tienen precios distintos.
+    const v = await vivoConProducto(1_800_000);
+    await prisma.liveSessionProduct.updateMany({
+      where: { liveSessionId: v.liveId, productId: v.productId },
+      data: { livePriceCents: 1_250_000 },
+    });
+
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId), {
+      liveSessionId: v.liveId,
+    });
+
+    const enBase = await prisma.order.findUniqueOrThrow({
+      where: { id: orden.body.id as string },
+    });
+    expect(enBase.liveSessionId).toBe(v.liveId);
+    expect(enBase.listPriceCents).toBe(1_800_000);
+    expect(enBase.itemsSubtotal).toBe(1_250_000);
+  });
+
+  describe('Lo que el vendedor puede cargar', () => {
+    it('pone y saca el precio', async () => {
+      const v = await vivoConProducto(1_800_000);
+
+      const puesto = await call('PUT', `/api/v1/live/${v.liveId}/products/${v.productId}/price`, {
+        token: v.sellerToken,
+        body: { precioCentavos: 1_250_000 },
+      });
+      expect(puesto.status, JSON.stringify(puesto.body)).toBe(200);
+
+      const sacado = await call('PUT', `/api/v1/live/${v.liveId}/products/${v.productId}/price`, {
+        token: v.sellerToken,
+        body: { precioCentavos: null },
+      });
+      expect(sacado.status).toBe(200);
+      expect(sacado.body.precioDeVivo).toBeNull();
+    });
+
+    it('⛔ un precio MAYOR al normal se rechaza', async () => {
+      // El patrón oscuro más viejo: mostrar un precio inflado tachado al lado
+      // de uno que en realidad es el de siempre.
+      const v = await vivoConProducto(1_000_000);
+
+      const r = await call('PUT', `/api/v1/live/${v.liveId}/products/${v.productId}/price`, {
+        token: v.sellerToken,
+        body: { precioCentavos: 1_500_000 },
+      });
+
+      expect(r.status).toBe(422);
+      expect(r.body.error.code).toBe('LIVE_PRICE_INVALID');
+    });
+
+    it('⛔ un vendedor no puede tocar el vivo de otro', async () => {
+      const mio = await vivoConProducto();
+      const ajeno = await vivoConProducto();
+
+      const r = await call(
+        'PUT',
+        `/api/v1/live/${ajeno.liveId}/products/${ajeno.productId}/price`,
+        { token: mio.sellerToken, body: { precioCentavos: 100_000 } },
+      );
+
+      // 404, no 403: confirmar que el vivo existe ya sería información.
+      expect(r.status).toBe(404);
+    });
+
+    it('⛔ queda en la bitácora, con el precio de lista al lado', async () => {
+      /**
+       * Es lo que permite responder «¿este descuento existió de verdad?» meses
+       * después. Sin el precio de lista en el mismo registro, la bitácora diría
+       * que alguien puso $12.500 sin decir contra qué.
+       */
+      const v = await vivoConProducto(1_800_000);
+
+      await call('PUT', `/api/v1/live/${v.liveId}/products/${v.productId}/price`, {
+        token: v.sellerToken,
+        body: { precioCentavos: 1_250_000 },
+      });
+
+      const registro = await prisma.auditLog.findFirst({
+        where: { action: 'live.price_set', entityId: v.liveId },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      expect(registro).not.toBeNull();
+      const datos = JSON.stringify(registro?.after);
+      expect(datos).toContain('1800000');
+      expect(datos).toContain('1250000');
+    });
+  });
+});

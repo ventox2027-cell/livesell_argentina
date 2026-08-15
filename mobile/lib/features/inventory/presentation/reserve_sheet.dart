@@ -30,6 +30,7 @@ class ReserveSheet extends ConsumerStatefulWidget {
     required this.precio,
     this.variante,
     this.retiraEnPersona = false,
+    this.liveSessionId,
   });
 
   final String productVariantId;
@@ -40,6 +41,13 @@ class ReserveSheet extends ConsumerStatefulWidget {
   /// Si eligió retirar en persona en la hoja anterior, donde vio el precio de
   /// cada opción de entrega.
   final bool retiraEnPersona;
+
+  /// Desde qué vivo se está comprando, o `null` si vino del feed.
+  ///
+  /// Sólo se transporta hasta el pedido: acá no se usa para nada más. El
+  /// descuento lo resuelve el backend con este id, y por eso lo que viaja es el
+  /// id y no un precio.
+  final String? liveSessionId;
 
   /// Devuelve el **pedido** si la compra se completó, o `null` si se cerró
   /// antes de pagar.
@@ -58,6 +66,7 @@ class ReserveSheet extends ConsumerStatefulWidget {
     required String precio,
     String? variante,
     bool retiraEnPersona = false,
+    String? liveSessionId,
   }) {
     return showModalBottomSheet<Pedido>(
       context: context,
@@ -69,6 +78,7 @@ class ReserveSheet extends ConsumerStatefulWidget {
         precio: precio,
         variante: variante,
         retiraEnPersona: retiraEnPersona,
+        liveSessionId: liveSessionId,
       ),
     );
   }
@@ -220,6 +230,7 @@ class _ReserveSheetState extends ConsumerState<ReserveSheet> with WidgetsBinding
       nombreProducto: widget.nombreProducto,
       precio: widget.precio,
       retiraEnPersona: widget.retiraEnPersona,
+      liveSessionId: widget.liveSessionId,
     );
 
     if (!mounted) return;

@@ -104,6 +104,7 @@ export class OrdersController {
       reservationId: dto.reservationId,
       addressId: dto.addressId,
       retiraEnPersona: dto.retiraEnPersona,
+      liveSessionId: dto.liveSessionId,
     });
   }
 

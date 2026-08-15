@@ -38,6 +38,14 @@ export const EVENTOS = {
   productoDestacado: 'live.product.featured.v1',
   /** Cambió el stock de algo que se está mostrando. */
   stock: 'live.product.stock_changed.v1',
+  /**
+   * El vendedor puso o sacó un precio exclusivo del vivo.
+   *
+   * Llega en el momento porque un descuento que aparece cuando el vendedor lo
+   * anuncia en cámara —«se los dejo a doce mil quinientos»— y no diez segundos
+   * después es la mitad de lo que hace funcionar una venta en vivo.
+   */
+  precioActualizado: 'live.product.price_changed.v1',
   /** Cambió el estado del vivo. */
   estado: 'live.state_changed.v1',
   /** El vivo terminó. */

@@ -18,6 +18,20 @@ const ProgramarSchema = z.object({
 });
 type ProgramarDto = z.infer<typeof ProgramarSchema>;
 
+/**
+ * El precio exclusivo del vivo.
+ *
+ * ⚠️ En CENTAVOS, como todo el dinero del sistema. Y `null` significa «sacá el
+ * descuento», que es distinto de no mandar el campo: por eso es `nullable` y no
+ * `optional`.
+ */
+const PrecioDeVivoSchema = z.object({
+  precioCentavos: z.number().int().min(100).max(1_000_000_000).nullable(),
+  desde: z.string().datetime().nullish(),
+  hasta: z.string().datetime().nullish(),
+});
+type PrecioDeVivoDto = z.infer<typeof PrecioDeVivoSchema>;
+
 const PrepararSchema = z.object({
   title: z.string().trim().min(3).max(120),
   coverUrl: z.string().url().max(500).optional(),
@@ -199,6 +213,30 @@ export class LiveController {
    * bajo acá se sentiría como que la app no responde.
    */
   @RateLimit({ limit: 120, windowSec: 60, bucket: 'live:feature' })
+  /**
+   * El precio exclusivo de un producto en este vivo.
+   *
+   * Un `precioCentavos` en `null` lo saca y vuelve al precio de lista.
+   *
+   * ⚠️ El límite es alto porque bajar y subir precios EN VIVO es lo que hace un
+   * vendedor durante una transmisión — «los últimos tres a diez mil»— y frenarlo
+   * sería frenar la función.
+   */
+  @RateLimit({ limit: 120, windowSec: 3600, bucket: 'live:price' })
+  @Put(':id/products/:productId/price')
+  ponerPrecioDeVivo(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('productId') productId: string,
+    @Body(new ZodValidationPipe(PrecioDeVivoSchema)) dto: PrecioDeVivoDto,
+  ) {
+    return this.live.ponerPrecioDeVivo(user.id, id, productId, {
+      precioCentavos: dto.precioCentavos,
+      desde: dto.desde ? new Date(dto.desde) : null,
+      hasta: dto.hasta ? new Date(dto.hasta) : null,
+    });
+  }
+
   @Post(':id/feature')
   destacar(
     @CurrentUser() user: AuthenticatedUser,

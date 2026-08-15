@@ -171,6 +171,10 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<string, number>> = {
   // motivo a la persona, no «datos inválidos».
   SCHEDULE_TOO_SOON: 422,
   SCHEDULE_TOO_FAR: 422,
+
+  // 422: el precio está bien formado, lo que falla es la regla del descuento.
+  // La app tiene que mostrarle el motivo al vendedor, no «datos inválidos».
+  LIVE_PRICE_INVALID: 422,
   /**
    * 422 y no 400: el pedido está bien formado, lo que falla es una regla del
    * negocio. La app lo distingue para llevar al selector de categoría en lugar

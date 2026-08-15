@@ -7,6 +7,7 @@ import { AuditService } from '@/shared/audit/audit.service';
 import { exigirHabilitada } from '@/shared/config/banderas';
 
 import { AgendaService } from './agenda.service';
+import { exigirPrecioDeVivoValido, precioDeVivoActivo, resolverPrecio } from './precio-de-vivo';
 import { DomainError } from '@/shared/errors/domain.error';
 import { PrismaService } from '@/shared/prisma/prisma.service';
 import { newId } from '@/shared/utils/id';
@@ -335,6 +336,123 @@ export class LiveService {
    * buscar en el catálogo entero con la cámara encendida es imposible de hacer
    * bien.
    */
+
+  /**
+   * El vendedor pone —o saca— el precio exclusivo de un producto en su vivo.
+   *
+   * ═══════════════════════════════════════════════════════════════════════════
+   * UN DESCUENTO ES UNA PROMESA
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * «$12.500 ~~$18.000~~» le dice a alguien que si compra ahora paga menos que
+   * mañana. Todo lo que se valida acá existe para que eso sea cierto:
+   *
+   *   · el precio de vivo tiene que ser MENOR que el de lista;
+   *   · el tachado es el precio real, el que estaba antes;
+   *   · fuera de la ventana no se muestra ni se cobra nada distinto.
+   *
+   * Ver `precio-de-vivo.ts`.
+   */
+  async ponerPrecioDeVivo(
+    userId: string,
+    liveSessionId: string,
+    productId: string,
+    datos: { precioCentavos: number | null; desde?: Date | null; hasta?: Date | null },
+  ) {
+    const sesion = await this.deVendedor(userId, liveSessionId);
+
+    // La pertenencia va en el WHERE: un producto de otra tienda simplemente no
+    // está en la bandeja de este vivo.
+    const enBandeja = await this.prisma.liveSessionProduct.findFirst({
+      where: { liveSessionId: sesion.id, productId },
+      select: {
+        id: true,
+        product: { select: { basePriceCents: true, name: true } },
+      },
+    });
+
+    if (!enBandeja) {
+      throw new DomainError('PRODUCT_NOT_FOUND', 'Ese producto no está en este vivo');
+    }
+
+    // Sacar el descuento: se vuelve al precio de lista.
+    if (datos.precioCentavos === null) {
+      await this.prisma.liveSessionProduct.update({
+        where: { id: enBandeja.id },
+        data: { livePriceCents: null, livePriceFrom: null, livePriceUntil: null },
+      });
+
+      await this.audit.log({
+        action: 'live.price_removed',
+        entityType: 'live_session',
+        entityId: sesion.id,
+        actorId: userId,
+        after: { productId },
+      });
+
+      return { productId, precioDeVivo: null };
+    }
+
+    exigirPrecioDeVivoValido({
+      precioDeLista: enBandeja.product.basePriceCents,
+      precioDeVivo: datos.precioCentavos,
+      desde: datos.desde,
+      hasta: datos.hasta,
+    });
+
+    await this.prisma.liveSessionProduct.update({
+      where: { id: enBandeja.id },
+      data: {
+        livePriceCents: datos.precioCentavos,
+        livePriceFrom: datos.desde ?? null,
+        livePriceUntil: datos.hasta ?? null,
+      },
+    });
+
+    /**
+     * ⚠️ Se audita SIEMPRE, con el precio de lista al lado.
+     *
+     * Es lo que permite responder «¿este descuento existió de verdad?» meses
+     * después. Sin el precio de lista en el mismo registro, la bitácora diría
+     * que alguien puso $12.500 sin decir contra qué.
+     */
+    await this.audit.log({
+      action: 'live.price_set',
+      entityType: 'live_session',
+      entityId: sesion.id,
+      actorId: userId,
+      after: {
+        productId,
+        precioDeLista: enBandeja.product.basePriceCents,
+        precioDeVivo: datos.precioCentavos,
+        desde: datos.desde?.toISOString() ?? null,
+        hasta: datos.hasta?.toISOString() ?? null,
+      },
+    });
+
+    /**
+     * Y se avisa a la sala en el momento.
+     *
+     * Un descuento que aparece cuando el vendedor lo anuncia en cámara —«se los
+     * dejo a doce mil quinientos»— y no diez segundos después es la mitad de lo
+     * que hace funcionar una venta en vivo.
+     */
+    this.gateway.emitir(sesion.id, EVENTOS.precioActualizado, {
+      productId,
+      ...resolverPrecio(enBandeja.product.basePriceCents, {
+        livePriceCents: datos.precioCentavos,
+        livePriceFrom: datos.desde ?? null,
+        livePriceUntil: datos.hasta ?? null,
+      }),
+    });
+
+    return {
+      productId,
+      precioDeVivo: datos.precioCentavos,
+      precioDeLista: enBandeja.product.basePriceCents,
+    };
+  }
+
   async destacar(userId: string, liveSessionId: string, variantId: string | null) {
     const sesion = await this.deVendedor(userId, liveSessionId);
 
@@ -351,6 +469,9 @@ export class LiveService {
         variante: null,
         imagenUrl: null,
         precioCentavos: null,
+        hayDescuento: false,
+        precioDeListaCentavos: null,
+        porcentajeDescuento: null,
         disponible: null,
         fecha: new Date().toISOString(),
       });
@@ -416,6 +537,13 @@ export class LiveService {
       ? variante.inventory.onHand - variante.inventory.reserved
       : null;
 
+    // El mismo precio que verá quien entre al vivo un segundo después.
+    const precio = await this.precioEnEsteVivo(
+      sesion.id,
+      variante.productId,
+      variante.priceOverrideCents ?? variante.product.basePriceCents,
+    );
+
     this.gateway.emitir(sesion.id, EVENTOS.productoDestacado, {
       variantId: variante.id,
       productId: variante.productId,
@@ -423,7 +551,10 @@ export class LiveService {
       // `null` si la variante es la interna del producto. Ver `variantePublica`.
       variante: variante.options.length === 0 ? null : variante.title,
       imagenUrl: variante.product.images[0]?.url ?? null,
-      precioCentavos: variante.priceOverrideCents ?? variante.product.basePriceCents,
+      precioCentavos: precio.precioCentavos,
+      hayDescuento: precio.hayDescuento,
+      precioDeListaCentavos: precio.precioDeListaCentavos,
+      porcentajeDescuento: precio.porcentaje,
       disponible,
       fecha: new Date().toISOString(),
     });
@@ -480,7 +611,7 @@ export class LiveService {
     if (!sesion) throw new NoEsTuVivoError();
 
     const destacado = sesion.featuredVariantId
-      ? await this.variantePublica(sesion.featuredVariantId)
+      ? await this.variantePublica(sesion.featuredVariantId, sesion.id)
       : null;
 
     const base = {
@@ -607,6 +738,7 @@ export class LiveService {
 
     const desde = sesion.startedAt ?? sesion.createdAt;
     const ventas = await this.ventasDesde(sesion.sellerId, desde);
+    const ahora = new Date();
 
     return {
       id: sesion.id,
@@ -633,6 +765,17 @@ export class LiveService {
          * entendería por qué desapareció. Se muestra apagado, con el motivo.
          */
         vendible: b.product.status === 'ACTIVE' && b.product.deletedAt === null,
+        /**
+         * Lo que el vendedor cargó, tal cual, para poder editarlo.
+         *
+         * Acá NO se resuelve la ventana: el panel tiene que mostrar la oferta
+         * programada aunque todavía no haya empezado, o el vendedor no podría
+         * corregirla. Quien resuelve es la tarjeta del comprador.
+         */
+        precioDeVivoCentavos: b.livePriceCents,
+        precioDeVivoDesde: b.livePriceFrom,
+        precioDeVivoHasta: b.livePriceUntil,
+        precioDeVivoActivo: precioDeVivoActivo(b, ahora),
         variantes: b.product.variants.map((v) => ({
           id: v.id,
           // `null` cuando es la variante interna. Ver `variantePublica`.
@@ -872,7 +1015,35 @@ export class LiveService {
     });
   }
 
-  private async variantePublica(variantId: string) {
+  /**
+   * El precio de un producto **dentro de este vivo**.
+   *
+   * Existe para que la tarjeta y el cobro salgan del mismo lugar. Cuando no
+   * salían, la tarjeta decía $18.000, la orden cobraba $12.500 y el comprador
+   * se enteraba del descuento en el resumen de pago — que es el único momento
+   * en que un descuento no sirve para nada.
+   *
+   * Ver `precio-de-vivo.ts`. Acá sólo se busca la fila de la bandeja.
+   */
+  private async precioEnEsteVivo(
+    liveSessionId: string,
+    productId: string,
+    precioDeLista: number,
+  ) {
+    const enBandeja = await this.prisma.liveSessionProduct.findFirst({
+      where: { liveSessionId, productId },
+      select: { livePriceCents: true, livePriceFrom: true, livePriceUntil: true },
+    });
+
+    // Un producto que no está en la bandeja no tiene precio de vivo: se cobra
+    // el de lista. `resolverPrecio` ya devuelve eso con la ventana vacía.
+    return resolverPrecio(
+      precioDeLista,
+      enBandeja ?? { livePriceCents: null, livePriceFrom: null, livePriceUntil: null },
+    );
+  }
+
+  private async variantePublica(variantId: string, liveSessionId: string) {
     const v = await this.prisma.productVariant.findUnique({
       where: { id: variantId },
       include: {
@@ -882,6 +1053,12 @@ export class LiveService {
       },
     });
     if (!v) return null;
+
+    const precio = await this.precioEnEsteVivo(
+      liveSessionId,
+      v.productId,
+      v.priceOverrideCents ?? v.product.basePriceCents,
+    );
 
     return {
       variantId: v.id,
@@ -901,7 +1078,19 @@ export class LiveService {
        */
       variante: v.options.length === 0 ? null : v.title,
       imagenUrl: v.product.images[0]?.url ?? null,
-      precioCentavos: v.priceOverrideCents ?? v.product.basePriceCents,
+      precioCentavos: precio.precioCentavos,
+      /**
+       * El tachado sale sólo cuando hay descuento de verdad.
+       *
+       * `hayDescuento` es `false` si la oferta venció, si todavía no empezó o
+       * si el precio de lista bajó por debajo del de vivo. En esos casos
+       * `precioDeListaCentavos` viaja igual, pero la app no lo muestra: es la
+       * regla de veracidad, y la app la respeta mirando esta bandera y no
+       * comparando los dos números por su cuenta.
+       */
+      hayDescuento: precio.hayDescuento,
+      precioDeListaCentavos: precio.precioDeListaCentavos,
+      porcentajeDescuento: precio.porcentaje,
       disponible: v.inventory ? v.inventory.onHand - v.inventory.reserved : null,
     };
   }

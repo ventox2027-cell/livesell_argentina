@@ -3,6 +3,7 @@ import { Prisma, type OrderStatus } from '@prisma/client';
 
 import { env } from '@/config/env.schema';
 import { AuditService } from '@/shared/audit/audit.service';
+import { resolverPrecio } from '@/modules/live/precio-de-vivo';
 import { exigirHabilitada } from '@/shared/config/banderas';
 import { DomainError } from '@/shared/errors/domain.error';
 import { DomainEvent, DomainEventBus } from '@/shared/events/domain-events';
@@ -188,6 +189,14 @@ export class OrdersService {
     addressId?: string;
     /** Sólo se respeta si la tienda ofrece retiro. Ver `costoDeEnvio`. */
     retiraEnPersona?: boolean;
+    /**
+     * Desde qué vivo se está comprando.
+     *
+     * Sirve para dos cosas: aplicar el precio exclusivo si lo hay, y poder
+     * decir después cuánto vendió cada transmisión. No lleva el precio: eso lo
+     * decide el servidor.
+     */
+    liveSessionId?: string;
   }): Promise<OrdenPublica> {
     const { buyerId, reservationId } = params;
 
@@ -316,7 +325,46 @@ export class OrdersService {
     // 5 · Los números. Una sola función los calcula, y se comprueban antes de
     // escribir: la base tiene los mismos CHECK, pero fallar acá permite decir
     // QUÉ no cierra en vez de devolver el nombre de una restricción.
-    const unitPrice = variante.priceOverrideCents ?? producto.basePriceCents;
+    /**
+     * ═══════════════════════════════════════════════════════════════════════
+     * EL PRECIO DE VIVO SE RESUELVE ACÁ, EN EL SERVIDOR
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * La app manda `liveSessionId` para decir DESDE DÓNDE está comprando. No
+     * manda el precio, y no podría: si el cuerpo de la petición pudiera decir
+     * cuánto sale algo, cualquiera compraría a un peso.
+     *
+     * Con ese id se busca la fila de `live_session_products` y se evalúa la
+     * ventana **con el reloj del servidor**. Una oferta que venció hace treinta
+     * segundos no se aplica aunque la app todavía la esté mostrando.
+     *
+     * ⚠️ Y se valida que el vivo sea del MISMO vendedor que el producto. Sin
+     * eso, alguien podría mandar el id del vivo de otra tienda —donde hay un
+     * descuento del 80 %— y llevarse este producto a ese precio.
+     */
+    const precioDeLista = variante.priceOverrideCents ?? producto.basePriceCents;
+
+    const enElVivo = params.liveSessionId
+      ? await this.prisma.liveSessionProduct.findFirst({
+          where: {
+            liveSessionId: params.liveSessionId,
+            productId: producto.id,
+            // El vivo tiene que ser de este vendedor y estar al aire.
+            session: {
+              sellerId: tienda.seller.id,
+              state: { in: ['LIVE', 'RECONNECTING'] },
+            },
+          },
+          select: { livePriceCents: true, livePriceFrom: true, livePriceUntil: true },
+        })
+      : null;
+
+    const precioResuelto = resolverPrecio(
+      precioDeLista,
+      enElVivo ?? { livePriceCents: null, livePriceFrom: null, livePriceUntil: null },
+    );
+
+    const unitPrice = precioResuelto.precioCentavos;
 
     /**
      * El envío y el recargo salen de la política de la tienda, no del cliente.
@@ -390,6 +438,20 @@ export class OrdersService {
             shippingModeSnapshot: tienda.shippingMode,
             processorFeeModeSnapshot: tienda.processorFeeMode,
             pickupSelected: retira && permiteRetiro(tienda.shippingMode),
+
+            /**
+             * De dónde vino la compra y a qué precio estaba en lista.
+             *
+             * ⚠️  se guarda sólo si el vivo se VALIDÓ arriba
+             * —del mismo vendedor y al aire—. Guardar el que mandó la app sin
+             * validar dejaría que cualquiera atribuyera sus compras al vivo
+             * que quisiera, y las estadísticas del vendedor serían inventadas.
+             *
+             *  responde, seis meses después, por qué dos
+             * órdenes del mismo producto tienen precios distintos.
+             */
+            liveSessionId: enElVivo ? (params.liveSessionId ?? null) : null,
+            listPriceCents: precioDeLista,
             // Fotos: nada de esto se vuelve a leer de su tabla original.
             shippingAddress: direccion,
             buyerSnapshot: {

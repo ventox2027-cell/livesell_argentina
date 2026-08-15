@@ -1701,6 +1701,20 @@ model Order {
   ///
   /// Los pedidos despachados antes de ese cambio tienen seis dígitos en claro y
   /// se siguen leyendo. La restricción de la base acepta las dos formas.
+  /// En qué vivo se compró. `null` = compra desde el feed o la tienda.
+  ///
+  /// Sin clave foránea a propósito: un vivo se puede borrar y la orden tiene
+  /// que sobrevivir con su historia intacta. Mismo criterio que
+  /// `shippingAddress`, que guarda una copia y no una referencia.
+  liveSessionId String? @map("live_session_id")
+
+  /// El precio de LISTA al momento de comprar.
+  ///
+  /// Si difiere del unitario del ítem, hubo precio de vivo. Se guarda para
+  /// poder responder, seis meses después, por qué dos órdenes del mismo
+  /// producto tienen precios distintos.
+  listPriceCents Int? @map("list_price_cents")
+
   deliveryCode         String?   @map("delivery_code")
   deliveryCodeIssuedAt DateTime? @map("delivery_code_issued_at")
   /// Intentos fallidos seguidos. Se reinicia al confirmar.
@@ -2259,6 +2273,27 @@ model LiveSessionProduct {
   /// Cuántas veces se destacó y cuándo fue la última. Para el resumen final.
   featuredCount  Int       @default(0) @map("featured_count")
   lastFeaturedAt DateTime? @map("last_featured_at")
+
+  /// El precio exclusivo de ESTE producto en ESTE vivo. `null` = sin descuento.
+  ///
+  /// ─── Por qué vive acá y no en el producto ───
+  ///
+  /// Un producto puede estar en dos vivos —el de hoy y el del jueves— con
+  /// precios distintos. Y sobre todo: un campo en el producto se pisa y no deja
+  /// rastro, así que un reclamo de «me cobraron más de lo que decía» se
+  /// respondería con la palabra de uno contra la del otro.
+  ///
+  /// ⛔ Un CHECK de la base exige que sea de al menos 100 centavos. Que sea
+  /// MENOR que el precio de lista se valida en `precio-de-vivo.ts`: el precio
+  /// de lista vive en otra tabla y un CHECK no puede cruzarlas.
+  livePriceCents Int? @map("live_price_cents")
+
+  /// La ventana. Sin fechas, el descuento vale mientras dure el vivo.
+  ///
+  /// Existe para «esta oferta dura hasta las 22», que el vendedor anuncia en
+  /// cámara y tiene que cumplirse aunque el vivo siga.
+  livePriceFrom  DateTime? @map("live_price_from")
+  livePriceUntil DateTime? @map("live_price_until")
 
   createdAt DateTime @default(now()) @map("created_at")
 

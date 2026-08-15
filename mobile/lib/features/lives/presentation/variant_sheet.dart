@@ -44,7 +44,12 @@ import 'widgets/envio_y_politicas.dart';
 /// Como la de la tienda: es una hoja, la pantalla del vivo sigue montada y
 /// LiveKit no se toca.
 class VariantSheet extends ConsumerStatefulWidget {
-  const VariantSheet({super.key, required this.productId, this.storeId});
+  const VariantSheet({
+    super.key,
+    required this.productId,
+    this.storeId,
+    this.liveSessionId,
+  });
 
   final String productId;
 
@@ -52,11 +57,19 @@ class VariantSheet extends ConsumerStatefulWidget {
   /// ahí se asume abierta y decide el backend.
   final String? storeId;
 
+  /// Desde qué vivo se abrió, o `null` si vino del feed, del buscador o del
+  /// perfil de la tienda.
+  ///
+  /// Es lo que habilita el precio exclusivo del vivo al comprar. Sólo se
+  /// transporta: el descuento lo resuelve el backend.
+  final String? liveSessionId;
+
   /// Devuelve el pedido si la compra se completó, o `null` si se cerró antes.
   static Future<Pedido?> mostrar(
     BuildContext context, {
     required String productId,
     String? storeId,
+    String? liveSessionId,
   }) {
     return showModalBottomSheet<Pedido>(
       context: context,
@@ -66,7 +79,11 @@ class VariantSheet extends ConsumerStatefulWidget {
       builder: (ctx) => Padding(
         // La hoja se apoya arriba del teclado si aparece alguno.
         padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(ctx).bottom),
-        child: VariantSheet(productId: productId, storeId: storeId),
+        child: VariantSheet(
+          productId: productId,
+          storeId: storeId,
+          liveSessionId: liveSessionId,
+        ),
       ),
     );
   }
@@ -189,6 +206,9 @@ class _VariantSheetState extends ConsumerState<VariantSheet> {
       // Sólo se manda si la tienda ofrece las dos opciones: en los demás modos
       // el backend lo ignora y mandarlo igual confundiría al leer los logs.
       retiraEnPersona: producto.envio.hayQueElegir && _retira,
+      // Si la compra arrancó en un vivo, el pedido lo tiene que saber: es lo
+      // único que habilita el precio exclusivo.
+      liveSessionId: widget.liveSessionId,
     );
 
     if (!mounted) return;

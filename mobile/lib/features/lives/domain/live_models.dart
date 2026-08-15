@@ -69,6 +69,9 @@ class ProductoDestacado {
     this.imagenUrl,
     this.precioCentavos,
     this.disponible,
+    this.hayDescuento = false,
+    this.precioDeListaCentavos,
+    this.porcentajeDescuento,
   });
 
   factory ProductoDestacado.fromJson(Map<String, dynamic> j) => ProductoDestacado(
@@ -79,6 +82,9 @@ class ProductoDestacado {
         imagenUrl: j['imagenUrl'] as String?,
         precioCentavos: (j['precioCentavos'] as num?)?.toInt(),
         disponible: (j['disponible'] as num?)?.toInt(),
+        hayDescuento: j['hayDescuento'] as bool? ?? false,
+        precioDeListaCentavos: (j['precioDeListaCentavos'] as num?)?.toInt(),
+        porcentajeDescuento: (j['porcentajeDescuento'] as num?)?.toInt(),
       );
 
   final String variantId;
@@ -86,7 +92,26 @@ class ProductoDestacado {
   final String nombre;
   final String? variante;
   final String? imagenUrl;
+
+  /// Lo que se va a cobrar. Ya tiene el descuento del vivo aplicado, si hay.
   final int? precioCentavos;
+
+  /// Si hay que tachar el precio de lista al lado.
+  ///
+  /// ⚠️ Lo decide el servidor y la app **no lo recalcula**. Comparar
+  /// `precioCentavos` con `precioDeListaCentavos` acá sería reimplementar la
+  /// ventana de vigencia en el cliente: una oferta vencida o todavía no
+  /// empezada tiene los dos precios cargados y no es un descuento.
+  ///
+  /// Con `false`, no se muestra ni el tachado ni el porcentaje. Es la regla de
+  /// veracidad: un descuento que no existe no se dibuja.
+  final bool hayDescuento;
+
+  /// El precio de antes. Sólo se muestra cuando [hayDescuento].
+  final int? precioDeListaCentavos;
+
+  /// Cuánto baja, redondeado hacia abajo por el servidor. Sólo con [hayDescuento].
+  final int? porcentajeDescuento;
 
   /// Cuánto queda.
   ///
@@ -106,6 +131,9 @@ class ProductoDestacado {
         imagenUrl: imagenUrl,
         precioCentavos: precioCentavos,
         disponible: nuevo,
+        hayDescuento: hayDescuento,
+        precioDeListaCentavos: precioDeListaCentavos,
+        porcentajeDescuento: porcentajeDescuento,
       );
 }
 
