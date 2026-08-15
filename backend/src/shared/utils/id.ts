@@ -57,6 +57,7 @@ export const ID_PREFIX = {
   follow: 'flw',
   review: 'rev',
   reviewImage: 'rvi',
+  recentlyViewed: 'vst',
   purchaseIntent: 'pin',
   notification: 'ntf',
   like: 'lik',

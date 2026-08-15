@@ -16,6 +16,7 @@ import '../../../shared/widgets/app_snack.dart';
 import '../../auth/domain/session.dart';
 import '../../auth/state/auth_providers.dart';
 import '../../seller/presentation/seller_home_screen.dart';
+import '../../social/presentation/guardados_screen.dart';
 import '../../spike/presentation/home_screen.dart';
 import 'complete_profile_sheet.dart';
 
@@ -109,6 +110,14 @@ class ProfileScreen extends ConsumerWidget {
             // segundo en algo permanente por accidente.
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute<void>(builder: (_) => const BloqueadosScreen()),
+            ),
+          ),
+          _Fila(
+            icono: Icons.bookmark_border_rounded,
+            texto: 'Guardados',
+            detalle: 'Lo que marcaste y lo que viste',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const GuardadosScreen()),
             ),
           ),
           _Fila(

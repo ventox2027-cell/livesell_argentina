@@ -591,6 +591,7 @@ model User {
   mensajesDeChat    LiveChatMessage[]
   silencios         LiveChatMute[]    @relation("silenciado")
   bloqueosRecibidos UserBlock[] @relation("bloqueosRecibidos")
+  vistosRecientes   RecentlyViewed[]
 
   @@index([phoneE164])
   @@index([status, createdAt])
@@ -2999,6 +3000,43 @@ model Like {
 // La única excepción es el umbral de reportes distintos sobre lo mismo, que
 // oculta preventivamente. Ver `ReportTarget`.
 // ═══════════════════════════════════════════════════════════════════════════
+
+/// Algo que alguien vio, para poder volver.
+///
+/// ─── Lo mínimo que sirve, y nada más ───
+///
+/// Resuelve un problema chico y concreto: alguien vio un producto en un vivo,
+/// no lo compró en el momento, y media hora después no lo encuentra. En una app
+/// donde el contenido pasa —los vivos terminan, el feed cambia— volver a algo
+/// que uno vio es difícil de verdad.
+///
+/// ⛔ Es lo ÚNICO que se guarda. No cuánto miró, no en qué orden, no de dónde
+/// vino, no cuántas veces. Eso ya no es una lista para volver: es un registro
+/// de comportamiento, y la diferencia entre las dos cosas la marca lo que se
+/// guarda, no lo que uno prometa hacer con ello.
+///
+/// Retención: 30 días. Ver `VISTOS_RETENCION_DIAS` en `social/vistos.ts`.
+model RecentlyViewed {
+  id     String @id // vst_<ulid>
+  userId String @map("user_id")
+
+  /// Reutiliza el enum de los «me gusta»: es el mismo concepto —una cosa que se
+  /// puede señalar— y dos enums paralelos garantizan que alguien agregue un
+  /// valor a uno y se olvide del otro.
+  targetType LikeTarget @map("target_type")
+  targetId   String     @map("target_id")
+
+  /// La ÚLTIMA vez. Volver a ver algo actualiza la fila, no agrega otra: sin
+  /// eso, quien mira un producto diez veces lo ve diez veces en su lista.
+  viewedAt DateTime @default(now()) @map("viewed_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, targetType, targetId])
+  @@index([userId, viewedAt(sort: Desc)])
+  @@index([viewedAt])
+  @@map("recently_viewed")
+}
 
 enum ReportTarget {
   PRODUCT

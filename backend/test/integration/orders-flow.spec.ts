@@ -3749,3 +3749,245 @@ describe('Reseñas y reputación', () => {
     });
   });
 });
+
+describe('Guardados y vistos recientemente', () => {
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * DOS LISTAS QUE PARECEN LA MISMA Y NO LO SON
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * Guardados la arma la persona a propósito; vistos los arma el sistema
+   * mirando. La diferencia que importa: sobre un guardado se puede notificar
+   * —«volvió al stock» es un favor— y sobre un visto no. El mismo aviso sobre
+   * algo que alguien apenas miró es perseguirlo por la app.
+   */
+
+  describe('Guardados', () => {
+    it('⛔ es la MISMA tabla que los «me gusta», no un sistema paralelo', async () => {
+      /**
+       * El corazón de un producto y la lista de guardados son el mismo gesto
+       * con dos nombres. Si fueran dos tablas, la persona tendría que decidir
+       * la diferencia entre «me gusta» y «guardar» —una distinción que existe
+       * en el modelo de datos y no en la cabeza de nadie— y nosotros
+       * mantendríamos dos contadores que se desincronizan.
+       */
+      const { productId } = await nuevaVarianteConStock(3);
+      const persona = await nuevoUsuario();
+
+      // Se guarda tocando el corazón de siempre.
+      const like = await call('POST', `/api/v1/products/${productId}/like`, {
+        token: persona.token,
+      });
+      expect(like.status, JSON.stringify(like.body)).toBe(201);
+
+      const guardados = await call('GET', '/api/v1/me/saved', { token: persona.token });
+      expect(guardados.status).toBe(200);
+      expect(guardados.body.items).toHaveLength(1);
+      expect(guardados.body.items[0].id).toBe(productId);
+
+      // Y se quita con el mismo interruptor.
+      await call('POST', `/api/v1/products/${productId}/like`, { token: persona.token });
+      const vacio = await call('GET', '/api/v1/me/saved', { token: persona.token });
+      expect(vacio.body.items).toHaveLength(0);
+    });
+
+    it('trae el stock REAL, que es lo que hace útil la lista', async () => {
+      // Sin eso, «guardados» es una lista de nombres. Con eso, es una lista de
+      // lo que se puede comprar ahora.
+      const { productId, variantId } = await nuevaVarianteConStock(2);
+      const persona = await nuevoUsuario();
+      await call('POST', `/api/v1/products/${productId}/like`, { token: persona.token });
+
+      const conStock = await call('GET', '/api/v1/me/saved', { token: persona.token });
+      expect(conStock.body.items[0].hayStock).toBe(true);
+
+      await prisma.inventory.update({
+        where: { productVariantId: variantId },
+        data: { onHand: 0 },
+      });
+
+      const sinStock = await call('GET', '/api/v1/me/saved', { token: persona.token });
+      expect(sinStock.body.items[0].hayStock).toBe(false);
+    });
+
+    it('⛔ un producto despublicado se saltea, no aparece roto', async () => {
+      /**
+       * `Like` es polimórfico y no tiene clave foránea: la fila sobrevive al
+       * producto. La lista tiene que tolerar huecos.
+       *
+       * Se saltea en silencio: «este producto ya no está disponible» ocupando
+       * un lugar en la lista de guardados es peor que no mostrarlo.
+       */
+      const { productId, sellerToken } = await nuevaVarianteConStock(1);
+      const persona = await nuevoUsuario();
+      await call('POST', `/api/v1/products/${productId}/like`, { token: persona.token });
+
+      await call('PATCH', `/api/v1/products/${productId}`, {
+        token: sellerToken,
+        body: { status: 'PAUSED' },
+      });
+
+      const r = await call('GET', '/api/v1/me/saved', { token: persona.token });
+      expect(r.status).toBe(200);
+      expect(r.body.items).toHaveLength(0);
+    });
+
+    it('⛔ nadie ve los guardados de otro', async () => {
+      const { productId } = await nuevaVarianteConStock(1);
+      const a = await nuevoUsuario();
+      const b = await nuevoUsuario();
+      await call('POST', `/api/v1/products/${productId}/like`, { token: a.token });
+
+      const r = await call('GET', '/api/v1/me/saved', { token: b.token });
+      expect(r.body.items).toHaveLength(0);
+    });
+  });
+
+  describe('Vistos recientemente', () => {
+    it('ver un producto lo deja en la lista', async () => {
+      const { productId } = await nuevaVarianteConStock(1);
+      const persona = await nuevoUsuario();
+
+      const marca = await call('POST', `/api/v1/products/${productId}/viewed`, {
+        token: persona.token,
+      });
+      expect(marca.status).toBe(204);
+
+      const r = await call('GET', '/api/v1/me/recently-viewed', { token: persona.token });
+      expect(r.body.items).toHaveLength(1);
+      expect(r.body.items[0].id).toBe(productId);
+    });
+
+    it('⛔ verlo diez veces no lo repite diez veces', async () => {
+      // Sin la restricción única, quien mira un producto varias veces lo ve
+      // varias veces en su lista y tapa todo lo demás.
+      const { productId } = await nuevaVarianteConStock(1);
+      const persona = await nuevoUsuario();
+
+      for (let i = 0; i < 10; i++) {
+        await call('POST', `/api/v1/products/${productId}/viewed`, { token: persona.token });
+      }
+
+      const r = await call('GET', '/api/v1/me/recently-viewed', { token: persona.token });
+      expect(r.body.items).toHaveLength(1);
+
+      const filas = await prisma.recentlyViewed.count({ where: { userId: persona.userId } });
+      expect(filas).toBe(1);
+    });
+
+    it('el más reciente va primero', async () => {
+      const a = await nuevaVarianteConStock(1);
+      const b = await nuevaVarianteConStock(1);
+      const persona = await nuevoUsuario();
+
+      await call('POST', `/api/v1/products/${a.productId}/viewed`, { token: persona.token });
+      await call('POST', `/api/v1/products/${b.productId}/viewed`, { token: persona.token });
+
+      const r = await call('GET', '/api/v1/me/recently-viewed', { token: persona.token });
+      expect(r.body.items[0].id).toBe(b.productId);
+      expect(r.body.items[1].id).toBe(a.productId);
+    });
+
+    it('⛔ volver a ver algo lo sube al principio', async () => {
+      /**
+       * Es lo que el `upsert` aporta por encima del índice único.
+       *
+       * Con un `create` a secas, el índice rebota el duplicado y la fila vieja
+       * queda con su fecha original: el producto que la persona acaba de mirar
+       * sigue enterrado al final de la lista. La lista deja de estar ordenada
+       * por «lo último que viste», que es su único motivo de existir.
+       *
+       * Un sabotaje que cambia el upsert por un create NO hace fallar el test
+       * de duplicados —lo ataja la base— pero sí hace fallar éste.
+       */
+      const a = await nuevaVarianteConStock(1);
+      const b = await nuevaVarianteConStock(1);
+      const persona = await nuevoUsuario();
+
+      await call('POST', `/api/v1/products/${a.productId}/viewed`, { token: persona.token });
+      await call('POST', `/api/v1/products/${b.productId}/viewed`, { token: persona.token });
+
+      // Y ahora vuelve al primero.
+      await call('POST', `/api/v1/products/${a.productId}/viewed`, { token: persona.token });
+
+      const r = await call('GET', '/api/v1/me/recently-viewed', { token: persona.token });
+      expect(r.body.items).toHaveLength(2);
+      expect(r.body.items[0].id).toBe(a.productId);
+    });
+
+    it('⛔ la lista tiene tope: no crece para siempre', async () => {
+      /**
+       * Sin tope, la tabla crece con cada scroll de cada persona. Con cien mil
+       * usuarios navegando sería la tabla más grande del sistema por varios
+       * órdenes de magnitud, y el 99 % de las filas no las leería nadie porque
+       * sólo se muestran veinte.
+       */
+      const persona = await nuevoUsuario();
+
+      // Se escriben directo: crear 55 productos por HTTP tardaría un minuto y
+      // lo que se prueba es la poda, no el alta.
+      const { productId } = await nuevaVarianteConStock(1);
+      for (let i = 0; i < 55; i++) {
+        await prisma.recentlyViewed.create({
+          data: {
+            id: `vst_test${CORRIDA}${String(i).padStart(14, '0')}`,
+            userId: persona.userId,
+            targetType: 'PRODUCT',
+            targetId: `prd_inventado_${i}`,
+            viewedAt: new Date(Date.now() - i * 60_000),
+          },
+        });
+      }
+
+      // Una vista más dispara la poda.
+      await call('POST', `/api/v1/products/${productId}/viewed`, { token: persona.token });
+
+      const filas = await prisma.recentlyViewed.count({ where: { userId: persona.userId } });
+      expect(filas).toBeLessThanOrEqual(50);
+    }, 30_000);
+
+    it('⛔ se puede borrar el historial', async () => {
+      // Es una lista de lo que alguien miró. Poder borrarla es la diferencia
+      // entre una comodidad y algo que la persona no controla.
+      const { productId } = await nuevaVarianteConStock(1);
+      const persona = await nuevoUsuario();
+      await call('POST', `/api/v1/products/${productId}/viewed`, { token: persona.token });
+
+      const r = await call('DELETE', '/api/v1/me/recently-viewed', { token: persona.token });
+      expect(r.status).toBe(200);
+      expect(r.body.borrados).toBe(1);
+
+      const despues = await call('GET', '/api/v1/me/recently-viewed', { token: persona.token });
+      expect(despues.body.items).toHaveLength(0);
+    });
+
+    it('⛔ lo más viejo que la retención no se muestra', async () => {
+      // 30 días. A partir de ahí deja de ser una ayuda y pasa a ser un
+      // historial de navegación de meses.
+      const { productId } = await nuevaVarianteConStock(1);
+      const persona = await nuevoUsuario();
+      await call('POST', `/api/v1/products/${productId}/viewed`, { token: persona.token });
+
+      await prisma.recentlyViewed.updateMany({
+        where: { userId: persona.userId },
+        data: { viewedAt: new Date(Date.now() - 45 * 24 * 3_600_000) },
+      });
+
+      const r = await call('GET', '/api/v1/me/recently-viewed', { token: persona.token });
+      expect(r.body.items).toHaveLength(0);
+    });
+
+    it('⛔ registrar una vista NUNCA rompe la pantalla', async () => {
+      /**
+       * Es una comodidad, no parte de la operación. Un producto que no existe
+       * —o cualquier otro fallo— no puede impedir que la app siga.
+       */
+      const persona = await nuevoUsuario();
+
+      const r = await call('POST', '/api/v1/products/prd_no_existe/viewed', {
+        token: persona.token,
+      });
+      expect(r.status).toBe(204);
+    });
+  });
+});

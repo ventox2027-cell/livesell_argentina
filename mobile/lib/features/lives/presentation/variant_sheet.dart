@@ -9,6 +9,7 @@ import '../../../core/design/tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../../shared/widgets/aviso_de_pausa.dart';
 import '../../auth/data/banderas.dart';
+import '../../social/data/guardados_api.dart';
 import '../../inventory/presentation/reserve_sheet.dart';
 import '../../orders/domain/order_models.dart';
 import '../data/live_api.dart';
@@ -102,6 +103,16 @@ class _VariantSheetState extends ConsumerState<VariantSheet> {
   void initState() {
     super.initState();
     unawaited(_cargar());
+
+    /**
+     * Se registra que lo vio, sin esperar.
+     *
+     * Es lo que llena «vistos recientemente». No se espera ni se maneja el
+     * error a propósito: registrar la visita es una comodidad, no parte de
+     * abrir el producto, y un viaje de red más antes de mostrar la hoja se
+     * nota en la acción más frecuente de toda la app.
+     */
+    ref.read(guardadosApiProvider).marcarVisto(widget.productId);
   }
 
   Future<void> _cargar() async {
