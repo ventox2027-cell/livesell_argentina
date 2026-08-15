@@ -5,8 +5,18 @@ import { CurrentUser, Public, type AuthenticatedUser } from '@/modules/auth/auth
 import { RateLimit } from '@/shared/http/rate-limit.guard';
 import { ZodValidationPipe } from '@/shared/http/zod-validation.pipe';
 
+import { AgendaService } from './agenda.service';
 import { ChatModeracionService } from './chat-moderacion.service';
 import { LiveService } from './live.service';
+
+/** Programar un vivo. La fecha viaja en ISO: es lo que no se malinterpreta. */
+const ProgramarSchema = z.object({
+  title: z.string().trim().min(2).max(120),
+  cuando: z.string().datetime(),
+  coverUrl: z.string().url().max(500).optional(),
+  productIds: z.array(z.string().max(40)).max(50).optional(),
+});
+type ProgramarDto = z.infer<typeof ProgramarSchema>;
 
 const PrepararSchema = z.object({
   title: z.string().trim().min(3).max(120),
@@ -30,7 +40,10 @@ type BandejaDto = z.infer<typeof BandejaSchema>;
 
 @Controller({ path: 'live', version: '1' })
 export class LiveController {
-  constructor(private readonly live: LiveService) {}
+  constructor(
+    private readonly live: LiveService,
+    private readonly agenda: AgendaService,
+  ) {}
 
   // ─── Espectador ────────────────────────────────────────────────────────────
 
@@ -74,6 +87,51 @@ export class LiveController {
    * la vista previa. Salir al aire es el paso siguiente.
    */
   @RateLimit({ limit: 20, windowSec: 3600, bucket: 'live:prepare' })
+  // ─── Vivos programados ─────────────────────────────────────────────────────
+
+  /**
+   * Anunciar un vivo para más adelante.
+   *
+   * Un vivo sin anuncio arranca con quien justo estaba en la app; uno anunciado
+   * arranca con quien decidió estar. Para el vendedor es la diferencia entre
+   * transmitirle a tres personas y a treinta.
+   */
+  @RateLimit({ limit: 20, windowSec: 3600, bucket: 'live:schedule' })
+  @Post('scheduled')
+  programar(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body(new ZodValidationPipe(ProgramarSchema)) dto: ProgramarDto,
+  ) {
+    return this.agenda.programar(user.id, {
+      title: dto.title,
+      cuando: new Date(dto.cuando),
+      coverUrl: dto.coverUrl,
+      productIds: dto.productIds,
+    });
+  }
+
+  /** Los próximos vivos de un vendedor. Público: es su cartelera. */
+  @Public()
+  @Get('scheduled/seller/:sellerId')
+  proximosDe(
+    @CurrentUser() user: AuthenticatedUser | null,
+    @Param('sellerId') sellerId: string,
+  ) {
+    return this.agenda.proximosDe(sellerId, user?.id);
+  }
+
+  /**
+   * «Recordarme». Interruptor, igual que el corazón.
+   *
+   * ⚠️ Es distinto de seguir al vendedor: alguien puede querer ver ESTE vivo
+   * sin querer que le suene el teléfono en cada transmisión de esa tienda.
+   */
+  @RateLimit({ limit: 60, windowSec: 3600, bucket: 'live:remind' })
+  @Post('scheduled/:id/remind')
+  recordarme(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.agenda.alternarRecordatorio(user.id, id);
+  }
+
   @Post()
   preparar(
     @CurrentUser() user: AuthenticatedUser,

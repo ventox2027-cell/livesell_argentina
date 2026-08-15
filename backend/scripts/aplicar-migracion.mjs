@@ -74,8 +74,8 @@ const sentencias = readFileSync(archivo, 'utf8')
   .filter(Boolean);
 
 const BASES = [
-  ['desarrollo', 'postgresql://livesell:livesell@localhost:5433/livesell?schema=public'],
-  ['tests', 'postgresql://livesell:livesell@localhost:5433/livesell_test?schema=public'],
+  ['desarrollo', 'postgresql://livesell:livesell@127.0.0.1:5433/livesell?schema=public'],
+  ['tests', 'postgresql://livesell:livesell@127.0.0.1:5433/livesell_test?schema=public'],
 ];
 
 let hubo = false;

@@ -5,6 +5,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 
 import type { JwtService } from '@/modules/auth/jwt.service';
 import type { InventoryService } from '@/modules/inventory/inventory.service';
+import { AgendaService } from '@/modules/live/agenda.service';
+import { NotificationsService } from '@/modules/notifications/notifications.service';
 import type { OrdersReconciler } from '@/modules/orders/reconciler.service';
 import type { PrismaService } from '@/shared/prisma/prisma.service';
 import type { RedisService } from '@/shared/redis/redis.service';
@@ -37,8 +39,8 @@ import { ProveedorFalso } from '../helpers/proveedor-falso';
 const TEST_ENV = {
   NODE_ENV: 'development',
   DATABASE_URL:
-    process.env.DATABASE_URL ?? 'postgresql://livesell:livesell@localhost:5433/livesell_test',
-  REDIS_URL: process.env.REDIS_URL ?? 'redis://localhost:6380/1',
+    process.env.DATABASE_URL ?? 'postgresql://livesell:livesell@127.0.0.1:5433/livesell_test',
+  REDIS_URL: process.env.REDIS_URL ?? 'redis://127.0.0.1:6380/1',
   LIVEKIT_API_KEY: 'APItest',
   LIVEKIT_API_SECRET: 'test-secret-at-least-16-chars-long',
   LIVEKIT_WS_URL: 'wss://test.livekit.cloud',
@@ -3988,6 +3990,329 @@ describe('Guardados y vistos recientemente', () => {
         token: persona.token,
       });
       expect(r.status).toBe(204);
+    });
+  });
+});
+
+describe('Vivos programados y recordatorios', () => {
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * PARA QUÉ SIRVE ANUNCIAR CON ANTICIPACIÓN
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * Un vivo sin anuncio arranca con quien justo estaba en la app. Uno anunciado
+   * arranca con quien decidió estar. Para el vendedor es la diferencia entre
+   * transmitirle a tres personas y a treinta.
+   */
+
+  const enHoras = (h: number) => new Date(Date.now() + h * 3_600_000).toISOString();
+
+  it('el vendedor programa un vivo', async () => {
+    const v = await nuevaVarianteConStock(3);
+
+    const r = await call('POST', '/api/v1/live/scheduled', {
+      token: v.sellerToken,
+      body: { title: 'Liquidación de invierno', cuando: enHoras(3) },
+    });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(r.body.cuando).toContain('3 horas');
+    expect(r.body.recordatorios).toBe(0);
+  });
+
+  it('⛔ no se puede programar para dentro de cinco minutos', async () => {
+    // El aviso previo se mandaría casi junto con el vivo. Y hay un camino
+    // mejor para eso: Iniciar LIVE.
+    const v = await nuevaVarianteConStock(1);
+
+    const r = await call('POST', '/api/v1/live/scheduled', {
+      token: v.sellerToken,
+      body: { title: 'Ya', cuando: new Date(Date.now() + 5 * 60_000).toISOString() },
+    });
+
+    expect(r.status).toBe(422);
+    expect(r.body.error.code).toBe('SCHEDULE_TOO_SOON');
+  });
+
+  it('⛔ ni dos veces para la misma hora', async () => {
+    // Casi siempre significa que alguien tocó dos veces.
+    const v = await nuevaVarianteConStock(1);
+    const cuando = enHoras(5);
+
+    expect(
+      (await call('POST', '/api/v1/live/scheduled', {
+        token: v.sellerToken,
+        body: { title: 'Primero', cuando },
+      })).status,
+    ).toBe(201);
+
+    const segundo = await call('POST', '/api/v1/live/scheduled', {
+      token: v.sellerToken,
+      body: { title: 'Segundo', cuando },
+    });
+    expect(segundo.status).toBe(409);
+  });
+
+  it('la cartelera del vendedor es pública', async () => {
+    // Quien todavía no se registró tiene que poder ver que hay un vivo el
+    // jueves: es parte de decidir si le interesa la tienda.
+    const v = await nuevaVarianteConStock(1);
+    await call('POST', '/api/v1/live/scheduled', {
+      token: v.sellerToken,
+      body: { title: 'Ofertas del jueves', cuando: enHoras(30) },
+    });
+
+    const r = await call('GET', `/api/v1/live/scheduled/seller/${v.sellerId}`);
+    expect(r.status).toBe(200);
+    expect(r.body.items).toHaveLength(1);
+    expect(r.body.items[0].titulo).toBe('Ofertas del jueves');
+    // Sin sesión no se muestra el botón de recordar.
+    expect(r.body.items[0].loVoyAVer).toBeUndefined();
+  });
+
+  describe('Recordarme', () => {
+    it('es un interruptor', async () => {
+      const v = await nuevaVarianteConStock(1);
+      const programado = await call('POST', '/api/v1/live/scheduled', {
+        token: v.sellerToken,
+        body: { title: 'Con recordatorio', cuando: enHoras(4) },
+      });
+      const liveId = programado.body.id as string;
+      const persona = await nuevoUsuario();
+
+      const marca = await call('POST', `/api/v1/live/scheduled/${liveId}/remind`, {
+        token: persona.token,
+      });
+      expect(marca.status, JSON.stringify(marca.body)).toBe(201);
+      expect(marca.body.loVoyAVer).toBe(true);
+
+      const desmarca = await call('POST', `/api/v1/live/scheduled/${liveId}/remind`, {
+        token: persona.token,
+      });
+      expect(desmarca.body.loVoyAVer).toBe(false);
+    });
+
+    it('⛔ es DISTINTO de seguir al vendedor', async () => {
+      /**
+       * Alguien puede querer ver ESTE vivo sin querer que le suene el teléfono
+       * en cada transmisión de esa tienda. Si fueran lo mismo, marcar un
+       * recordatorio lo convertiría en seguidor sin que lo pidiera.
+       */
+      const v = await nuevaVarianteConStock(1);
+      const programado = await call('POST', '/api/v1/live/scheduled', {
+        token: v.sellerToken,
+        body: { title: 'Sin seguir', cuando: enHoras(4) },
+      });
+      const persona = await nuevoUsuario();
+
+      await call('POST', `/api/v1/live/scheduled/${programado.body.id}/remind`, {
+        token: persona.token,
+      });
+
+      const sigue = await prisma.follow.count({
+        where: { userId: persona.userId, sellerId: v.sellerId },
+      });
+      expect(sigue).toBe(0);
+    });
+
+    it('el contador de interesados es real', async () => {
+      const v = await nuevaVarianteConStock(1);
+      const programado = await call('POST', '/api/v1/live/scheduled', {
+        token: v.sellerToken,
+        body: { title: 'Contar', cuando: enHoras(4) },
+      });
+
+      for (let i = 0; i < 3; i++) {
+        const p = await nuevoUsuario();
+        await call('POST', `/api/v1/live/scheduled/${programado.body.id}/remind`, {
+          token: p.token,
+        });
+      }
+
+      const r = await call('GET', `/api/v1/live/scheduled/seller/${v.sellerId}`);
+      expect(r.body.items[0].interesados).toBe(3);
+    });
+  });
+
+  describe('El aviso de «está por empezar»', () => {
+    it('le llega a quien se anotó', async () => {
+      const v = await nuevaVarianteConStock(1);
+      const programado = await call('POST', '/api/v1/live/scheduled', {
+        token: v.sellerToken,
+        body: { title: 'En cinco minutos', cuando: enHoras(1) },
+      });
+      const liveId = programado.body.id as string;
+
+      const persona = await nuevoUsuario();
+      await call('POST', `/api/v1/live/scheduled/${liveId}/remind`, { token: persona.token });
+
+      // Se adelanta el reloj moviendo la fecha, no esperando una hora.
+      await prisma.liveSession.update({
+        where: { id: liveId },
+        data: { scheduledFor: new Date(Date.now() + 5 * 60_000) },
+      });
+
+      const { avisos } = await app.get(AgendaService).avisarLosQueEmpiezanPronto();
+      expect(avisos).toBeGreaterThanOrEqual(1);
+
+      const aviso = await prisma.notification.findFirst({
+        where: { userId: persona.userId, type: 'LIVE_SOON' },
+      });
+      expect(aviso).not.toBeNull();
+      // Con el deep link, para que la app abra el vivo y no el feed.
+      expect(JSON.stringify(aviso?.data)).toContain(liveId);
+    });
+
+    it('⛔ no se manda dos veces', async () => {
+      // El barrido corre cada dos minutos y la ventana es de diez: sin la
+      // marca, la misma persona recibiría cinco avisos del mismo vivo.
+      const v = await nuevaVarianteConStock(1);
+      const programado = await call('POST', '/api/v1/live/scheduled', {
+        token: v.sellerToken,
+        body: { title: 'Una sola vez', cuando: enHoras(1) },
+      });
+      const persona = await nuevoUsuario();
+      await call('POST', `/api/v1/live/scheduled/${programado.body.id}/remind`, {
+        token: persona.token,
+      });
+
+      await prisma.liveSession.update({
+        where: { id: programado.body.id as string },
+        data: { scheduledFor: new Date(Date.now() + 5 * 60_000) },
+      });
+
+      const agenda = app.get(AgendaService);
+      await agenda.avisarLosQueEmpiezanPronto();
+      await agenda.avisarLosQueEmpiezanPronto();
+      await agenda.avisarLosQueEmpiezanPronto();
+
+      const cuantos = await prisma.notification.count({
+        where: { userId: persona.userId, type: 'LIVE_SOON' },
+      });
+      expect(cuantos).toBe(1);
+    });
+
+    it('⛔ a quien NO se anotó, no le llega', async () => {
+      const v = await nuevaVarianteConStock(1);
+      const programado = await call('POST', '/api/v1/live/scheduled', {
+        token: v.sellerToken,
+        body: { title: 'Sin anotarse', cuando: enHoras(1) },
+      });
+      const ajeno = await nuevoUsuario();
+
+      await prisma.liveSession.update({
+        where: { id: programado.body.id as string },
+        data: { scheduledFor: new Date(Date.now() + 5 * 60_000) },
+      });
+      await app.get(AgendaService).avisarLosQueEmpiezanPronto();
+
+      const cuantos = await prisma.notification.count({
+        where: { userId: ajeno.userId, type: 'LIVE_SOON' },
+      });
+      expect(cuantos).toBe(0);
+    });
+  });
+
+  describe('Preferencias de aviso', () => {
+    it('las categorías vienen encendidas', async () => {
+      const persona = await nuevoUsuario();
+
+      const r = await call('GET', '/api/v1/notifications/preferences', { token: persona.token });
+      expect(r.status).toBe(200);
+      expect(r.body.categorias.length).toBeGreaterThanOrEqual(4);
+      expect(r.body.categorias.every((c: { activa: boolean }) => c.activa)).toBe(true);
+    });
+
+    it('⛔ apagar una categoría impide que el aviso se CREE, no sólo que se mande', async () => {
+      /**
+       * Es la parte que hace que la preferencia signifique algo.
+       *
+       * Si el aviso se creara igual y sólo no se mandara por push, quien apagó
+       * «vivos» abriría la campana y encontraría veinte avisos de vivos
+       * esperándolo — o sea, exactamente lo que pidió no ver.
+       */
+      const v = await nuevaVarianteConStock(1);
+      const programado = await call('POST', '/api/v1/live/scheduled', {
+        token: v.sellerToken,
+        body: { title: 'No me avises', cuando: enHoras(1) },
+      });
+      const persona = await nuevoUsuario();
+      await call('POST', `/api/v1/live/scheduled/${programado.body.id}/remind`, {
+        token: persona.token,
+      });
+
+      const apagar = await call('PATCH', '/api/v1/notifications/preferences/vivos', {
+        token: persona.token,
+        body: { activa: false },
+      });
+      expect(apagar.status, JSON.stringify(apagar.body)).toBe(200);
+
+      await prisma.liveSession.update({
+        where: { id: programado.body.id as string },
+        data: { scheduledFor: new Date(Date.now() + 5 * 60_000) },
+      });
+      await app.get(AgendaService).avisarLosQueEmpiezanPronto();
+
+      const cuantos = await prisma.notification.count({
+        where: { userId: persona.userId, type: 'LIVE_SOON' },
+      });
+      expect(cuantos).toBe(0);
+    });
+
+    it('⛔ los avisos de plata NO se pueden apagar', async () => {
+      /**
+       * No hay categoría para ellos, así que no hay forma de apagarlos desde la
+       * API. Y aunque alguien escribiera el tipo directo en la base, el
+       * servicio los deja pasar igual.
+       *
+       * Un pago rechazado que no llega deja a alguien creyendo que compró.
+       */
+      const persona = await nuevoUsuario();
+
+      await prisma.user.update({
+        where: { id: persona.userId },
+        data: { mutedNotificationTypes: ['PAYMENT_REJECTED', 'ORDER_STATUS'] },
+      });
+
+      const notif = app.get(NotificationsService);
+      await notif.crear({
+        userId: persona.userId,
+        type: 'PAYMENT_REJECTED',
+        title: 'Tu pago se rechazó',
+        body: 'Probá con otra tarjeta',
+      });
+
+      const cuantos = await prisma.notification.count({
+        where: { userId: persona.userId, type: 'PAYMENT_REJECTED' },
+      });
+      expect(cuantos).toBe(1);
+    });
+
+    it('volver a encenderla la reactiva', async () => {
+      const persona = await nuevoUsuario();
+
+      await call('PATCH', '/api/v1/notifications/preferences/opiniones', {
+        token: persona.token,
+        body: { activa: false },
+      });
+      const r = await call('PATCH', '/api/v1/notifications/preferences/opiniones', {
+        token: persona.token,
+        body: { activa: true },
+      });
+
+      const opiniones = (r.body.categorias as Array<{ clave: string; activa: boolean }>).find(
+        (c) => c.clave === 'opiniones',
+      );
+      expect(opiniones?.activa).toBe(true);
+    });
+
+    it('⛔ una categoría inventada se rechaza', async () => {
+      const persona = await nuevoUsuario();
+      const r = await call('PATCH', '/api/v1/notifications/preferences/inventada', {
+        token: persona.token,
+        body: { activa: false },
+      });
+      expect(r.status).toBe(400);
     });
   });
 });

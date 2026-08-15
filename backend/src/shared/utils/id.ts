@@ -58,6 +58,7 @@ export const ID_PREFIX = {
   review: 'rev',
   reviewImage: 'rvi',
   recentlyViewed: 'vst',
+  liveReminder: 'rem',
   purchaseIntent: 'pin',
   notification: 'ntf',
   like: 'lik',

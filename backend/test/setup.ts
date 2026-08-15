@@ -25,8 +25,19 @@ const TEST_DEFAULTS: Record<string, string> = {
   PORT: '3100',
   LOG_LEVEL: 'error', // sin ruido de logs en la salida de los tests
 
-  DATABASE_URL: 'postgresql://livesell:livesell@localhost:5433/livesell_test?schema=public',
-  REDIS_URL: 'redis://localhost:6380/1', // db 1 de Redis, no la 0 de desarrollo
+  /**
+   * ⚠️ `127.0.0.1` y NO `localhost`.
+   *
+   * En Windows, `localhost` resuelve primero a `::1` —IPv6— y el reenvío de
+   * puertos IPv6 de Docker Desktop deja de responder cada tanto sin previo
+   * aviso. El contenedor sigue sano, `docker exec psql` funciona, y Prisma
+   * falla con «Can't reach database server at localhost:5433»: un rato de
+   * diagnóstico buscando un problema que no está en el código.
+   *
+   * Con la IP explícita no hay resolución de nombres que pueda elegir mal.
+   */
+  DATABASE_URL: 'postgresql://livesell:livesell@127.0.0.1:5433/livesell_test?schema=public',
+  REDIS_URL: 'redis://127.0.0.1:6380/1', // db 1 de Redis, no la 0 de desarrollo
 
   // Credenciales ficticias: los tests unitarios no hablan con LiveKit, y los de
   // integración lo mockean. Nunca credenciales reales acá.

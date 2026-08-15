@@ -12,6 +12,8 @@ import { ChatRetencionService } from './chat-retencion.service';
 import { ChatModeracionController, LiveController } from './live.controller';
 import { LiveGateway } from './live.gateway';
 import { LiveStockListener } from './live-stock.listener';
+import { AgendaBarridoService } from './agenda-barrido.service';
+import { AgendaService } from './agenda.service';
 import { LiveService } from './live.service';
 
 /**
@@ -35,7 +37,16 @@ import { LiveService } from './live.service';
   // cada mensaje para no dejar escribir a quien tiene bloqueo con el vendedor.
   imports: [AuthModule, LiveKitModule, SellerOAuthModule, ModerationModule],
   controllers: [LiveController, ChatModeracionController],
-  providers: [LiveService, LiveGateway, LiveStockListener, ChatModeracionService, ChatRetencionService, AuditService],
-  exports: [LiveService, LiveGateway, ChatModeracionService],
+  providers: [
+    LiveService,
+    AgendaService,
+    AgendaBarridoService,
+    LiveGateway,
+    LiveStockListener,
+    ChatModeracionService,
+    ChatRetencionService,
+    AuditService,
+  ],
+  exports: [LiveService, AgendaService, LiveGateway, ChatModeracionService],
 })
 export class LiveModule {}

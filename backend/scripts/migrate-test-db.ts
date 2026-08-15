@@ -13,7 +13,7 @@ import { spawnSync } from 'node:child_process';
 
 const TEST_DATABASE_URL =
   process.env.TEST_DATABASE_URL ??
-  'postgresql://livesell:livesell@localhost:5433/livesell_test?schema=public';
+  'postgresql://livesell:livesell@127.0.0.1:5433/livesell_test?schema=public';
 
 if (!TEST_DATABASE_URL.includes('_test')) {
   console.error(

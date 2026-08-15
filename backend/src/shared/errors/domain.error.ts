@@ -165,6 +165,12 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<string, number>> = {
   /** 409: la reseña existe, la ventana de edición se cerró. */
   REVIEW_EDIT_WINDOW_CLOSED: 409,
   REVIEW_ALREADY_ANSWERED: 409,
+
+  // Programar un vivo. 422 y no 400: la fecha está bien formada, lo que falla
+  // es una regla —muy cerca o muy lejos— y la app tiene que mostrarle el
+  // motivo a la persona, no «datos inválidos».
+  SCHEDULE_TOO_SOON: 422,
+  SCHEDULE_TOO_FAR: 422,
   /**
    * 422 y no 400: el pedido está bien formado, lo que falla es una regla del
    * negocio. La app lo distingue para llevar al selector de categoría en lugar

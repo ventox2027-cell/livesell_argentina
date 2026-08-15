@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { SocialController } from './social.controller';
+import { StockGuardadosListener } from './stock-guardados.listener';
 import { SocialService } from './social.service';
 
 /**
@@ -15,7 +16,7 @@ import { SocialService } from './social.service';
  */
 @Module({
   controllers: [SocialController],
-  providers: [SocialService],
+  providers: [SocialService, StockGuardadosListener],
   exports: [SocialService],
 })
 export class SocialModule {}

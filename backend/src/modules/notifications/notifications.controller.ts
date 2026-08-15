@@ -1,4 +1,4 @@
-import { Controller, Get, Param, Patch, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Query } from '@nestjs/common';
 import { z } from 'zod';
 
 import { CurrentUser, type AuthenticatedUser } from '@/modules/auth/auth.guard';
@@ -11,6 +11,9 @@ const ListarSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).optional(),
 });
 type ListarDto = z.infer<typeof ListarSchema>;
+
+const PreferenciaSchema = z.object({ activa: z.boolean() });
+type PreferenciaDto = z.infer<typeof PreferenciaSchema>;
 
 /**
  * El centro de notificaciones.
@@ -46,6 +49,29 @@ export class NotificationsController {
    * Endpoint propio porque la app lo pide al abrir y cada vez que vuelve del
    * fondo, y no necesita la lista entera para pintar un número.
    */
+  // ─── Preferencias ──────────────────────────────────────────────────────────
+
+  /**
+   * Qué categorías de aviso están encendidas.
+   *
+   * Cuatro grupos con nombres de persona, no ocho interruptores técnicos. Una
+   * pantalla con «REVIEW_ANSWERED» y «SAVED_BACK_IN_STOCK» es una pantalla que
+   * nadie configura: hay que leer los ocho para entender cuál apagar.
+   */
+  @Get('notifications/preferences')
+  misCategorias(@CurrentUser() user: AuthenticatedUser) {
+    return this.notifications.misCategorias(user.id);
+  }
+
+  @Patch('notifications/preferences/:clave')
+  cambiarCategoria(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('clave') clave: string,
+    @Body(new ZodValidationPipe(PreferenciaSchema)) dto: PreferenciaDto,
+  ) {
+    return this.notifications.cambiarCategoria(user.id, clave, dto.activa);
+  }
+
   @Get('notifications/unread-count')
   async sinLeer(@CurrentUser() user: AuthenticatedUser) {
     return { sinLeer: await this.notifications.contarSinLeer(user.id) };

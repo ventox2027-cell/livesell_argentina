@@ -2,7 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Prisma, type NotificationType } from '@prisma/client';
 
 import { PrismaService } from '@/shared/prisma/prisma.service';
+import { DomainError } from '@/shared/errors/domain.error';
 import { newId } from '@/shared/utils/id';
+
+import { AVISOS_QUE_NO_SE_APAGAN, estadoDeCategorias, tiposDe } from './categorias';
 
 import { PushProvider } from './push.provider';
 import { proximoIntento, seAgoto } from './reintentos';
@@ -83,6 +86,22 @@ export class NotificationsService {
    * avisó.
    */
   async crear(entrada: EntradaDeAviso): Promise<{ id: string } | null> {
+    /**
+     * ⛔ Lo que la persona apagó, no se crea. Ni siquiera en la campana.
+     *
+     * Es la parte que hace que la preferencia signifique algo. Si el aviso se
+     * creara igual y sólo no se mandara por push, quien apagó «promociones»
+     * abriría la campana y encontraría veinte promociones esperándolo — o sea,
+     * exactamente lo que pidió no ver.
+     *
+     * ⚠️ Y el filtro va acá, en el ÚNICO lugar donde se crean avisos, y no en
+     * cada uno de los diez que llaman. Ahí es donde alguien se olvida.
+     *
+     * Es una consulta más por aviso. Vale la pena: la alternativa es que la
+     * preferencia dependa de que nadie se olvide nunca.
+     */
+    if (await this.estaSilenciado(entrada.userId, entrada.type)) return null;
+
     try {
       const fila = await this.prisma.notification.create({
         data: {
@@ -173,6 +192,79 @@ export class NotificationsService {
   /** Para el globito rojo. Consulta propia porque se pide sola, sin la lista. */
   async contarSinLeer(userId: string): Promise<number> {
     return this.prisma.notification.count({ where: { userId, readAt: null } });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PREFERENCIAS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * ¿Esta persona apagó esta categoría?
+   *
+   * Se guarda lo apagado y no lo encendido: con una lista de encendidos, cada
+   * categoría nueva nace apagada para todos los que ya existían y hay que
+   * acordarse de un backfill en cada release.
+   *
+   * ⚠️ Los avisos que **no se pueden apagar** están enumerados en
+   * `categorias.ts` y ni se consultan. Un pedido que cambia de estado y un pago
+   * rechazado no son novedades: son cosas que le pasan a la plata de una
+   * persona, y una app que deja apagar eso deja a alguien sin enterarse de que
+   * su compra se cayó.
+   */
+  private async estaSilenciado(userId: string, tipo: NotificationType): Promise<boolean> {
+    if (AVISOS_QUE_NO_SE_APAGAN.has(tipo)) return false;
+
+    const usuario = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { mutedNotificationTypes: true },
+    });
+
+    return usuario?.mutedNotificationTypes.includes(tipo) ?? false;
+  }
+
+  /** Las categorías y si están encendidas. */
+  async misCategorias(userId: string) {
+    const usuario = await this.prisma.user.findUniqueOrThrow({
+      where: { id: userId },
+      select: { mutedNotificationTypes: true },
+    });
+    return { categorias: estadoDeCategorias(usuario.mutedNotificationTypes) };
+  }
+
+  /**
+   * Enciende o apaga una categoría.
+   *
+   * Se guarda la lista completa de apagados en vez de agregar o quitar sobre la
+   * que hay: dos toques rápidos desde dos pantallas leerían la misma lista y
+   * uno pisaría al otro. Reemplazar entero hace que gane el último, que es lo
+   * que la persona espera.
+   */
+  async cambiarCategoria(userId: string, clave: string, activa: boolean) {
+    const tipos = tiposDe(clave);
+    if (tipos.length === 0) {
+      throw new DomainError('VALIDATION_FAILED', 'Esa categoría no existe');
+    }
+
+    const usuario = await this.prisma.user.findUniqueOrThrow({
+      where: { id: userId },
+      select: { mutedNotificationTypes: true },
+    });
+
+    const apagados = new Set(usuario.mutedNotificationTypes);
+    for (const t of tipos) {
+      if (activa) {
+        apagados.delete(t);
+      } else {
+        apagados.add(t);
+      }
+    }
+
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { mutedNotificationTypes: [...apagados] },
+    });
+
+    return this.misCategorias(userId);
   }
 
   /**

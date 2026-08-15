@@ -592,6 +592,16 @@ model User {
   silencios         LiveChatMute[]    @relation("silenciado")
   bloqueosRecibidos UserBlock[] @relation("bloqueosRecibidos")
   vistosRecientes   RecentlyViewed[]
+  recordatorios     LiveReminder[]
+
+  /// Qué avisos NO quiere recibir.
+  ///
+  /// ⚠️ Se guarda lo APAGADO, no lo encendido. Con una lista de encendidos,
+  /// cada categoría nueva nace apagada para todos los que ya existían y hay que
+  /// acordarse de un backfill en cada release. Con una de apagados, lo nuevo
+  /// nace encendido y quien nunca entró a esta pantalla recibe todo — que es lo
+  /// que quiere.
+  mutedNotificationTypes String[] @default([]) @map("muted_notification_types")
 
   @@index([phoneE164])
   @@index([status, createdAt])
@@ -2186,6 +2196,17 @@ model LiveSession {
   featuredVariantId String?   @map("featured_variant_id")
   featuredAt        DateTime? @map("featured_at")
 
+  /// Cuándo va a empezar. `null` = arranca ahora, sin anuncio previo.
+  ///
+  /// El estado SCHEDULED ya existía y era el valor por omisión de toda sesión:
+  /// se creaba «programada» y arrancaba enseguida. Lo que faltaba era la fecha,
+  /// y sin fecha no hay nada que anunciar ni a quién avisarle.
+  scheduledFor DateTime? @map("scheduled_for")
+
+  /// Ya se avisó que estaba por empezar. Evita mandar dos veces el mismo aviso
+  /// si el barrido corre dos veces en la misma ventana.
+  reminderSentAt DateTime? @map("reminder_sent_at")
+
   startedAt DateTime? @map("started_at")
   endedAt   DateTime? @map("ended_at")
 
@@ -2194,6 +2215,8 @@ model LiveSession {
   // Se persiste en vez de recalcularse: las órdenes de un vivo se pueden
   // cancelar o devolver después, y el resumen tiene que decir qué pasó DURANTE
   // la transmisión. Recalcularlo un mes más tarde daría otro número.
+  recordatorios LiveReminder[]
+
   peakViewers   Int? @map("peak_viewers")
 
   /// Cuántos "me gusta" tiene. Denormalizado.
@@ -3036,6 +3059,30 @@ model RecentlyViewed {
   @@index([userId, viewedAt(sort: Desc)])
   @@index([viewedAt])
   @@map("recently_viewed")
+}
+
+/// «Recordarme» un vivo.
+///
+/// ⚠️ Es distinto de seguir al vendedor, y por eso es una tabla y no un filtro
+/// sobre `Follow`.
+///
+/// Seguir es «me interesa esta tienda en general». Recordarme es «este vivo, el
+/// jueves a las 20». Alguien puede querer lo segundo sin lo primero, y sobre
+/// todo puede seguir a un vendedor sin querer que le suene el teléfono en cada
+/// transmisión.
+model LiveReminder {
+  id            String @id // rem_<ulid>
+  userId        String @map("user_id")
+  liveSessionId String @map("live_session_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user    User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  session LiveSession @relation(fields: [liveSessionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, liveSessionId])
+  @@index([liveSessionId])
+  @@map("live_reminders")
 }
 
 enum ReportTarget {

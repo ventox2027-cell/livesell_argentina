@@ -5,6 +5,8 @@ import { SellerOAuthService } from '@/modules/payments/seller-oauth.service';
 import { BloqueosService } from '@/modules/moderation/bloqueos.service';
 import { AuditService } from '@/shared/audit/audit.service';
 import { exigirHabilitada } from '@/shared/config/banderas';
+
+import { AgendaService } from './agenda.service';
 import { DomainError } from '@/shared/errors/domain.error';
 import { PrismaService } from '@/shared/prisma/prisma.service';
 import { newId } from '@/shared/utils/id';
@@ -64,6 +66,7 @@ export class LiveService {
     private readonly audit: AuditService,
     private readonly sellerOAuth: SellerOAuthService,
     private readonly bloqueos: BloqueosService,
+    private readonly agenda: AgendaService,
   ) {}
 
   /**
@@ -223,6 +226,25 @@ export class LiveService {
       entityType: 'live_session',
       entityId: sesion.id,
       actorId: userId,
+    });
+
+    /**
+     * Y se avisa: a los seguidores y a quienes marcaron «recordarme».
+     *
+     * ⚠️ `void` y no `await`: con cinco mil seguidores esto son cinco mil
+     * inserciones, y el vendedor está esperando que la transmisión arranque. El
+     * aviso puede tardar unos segundos más; el vivo no.
+     *
+     * ⚠️ Y el `catch` acá adentro: sin él, un fallo en el aviso sería un
+     * rechazo de promesa sin manejar, que en Node tumba el proceso. Que no se
+     * avise es malo; que se caiga el servidor a mitad de un vivo es peor.
+     */
+    void this.agenda.avisarQueArranco(sesion.id).catch((err: unknown) => {
+      this.logger.error({
+        msg: 'no se pudo avisar el arranque del vivo',
+        liveSessionId: sesion.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
     });
 
     return { ok: true as const, estado: 'LIVE' as const };

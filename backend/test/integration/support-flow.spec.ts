@@ -27,8 +27,8 @@ import { NACIMIENTO_ADULTO_ISO } from '../helpers/edad';
 const TEST_ENV = {
   NODE_ENV: 'development',
   DATABASE_URL:
-    process.env.DATABASE_URL ?? 'postgresql://livesell:livesell@localhost:5433/livesell_test',
-  REDIS_URL: process.env.REDIS_URL ?? 'redis://localhost:6380/1',
+    process.env.DATABASE_URL ?? 'postgresql://livesell:livesell@127.0.0.1:5433/livesell_test',
+  REDIS_URL: process.env.REDIS_URL ?? 'redis://127.0.0.1:6380/1',
   LIVEKIT_API_KEY: 'APItest',
   LIVEKIT_API_SECRET: 'test-secret-at-least-16-chars-long',
   LIVEKIT_WS_URL: 'wss://test.livekit.cloud',
