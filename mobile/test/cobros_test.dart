@@ -40,7 +40,12 @@ void main() {
      * decidir si hacerlo ahora.
      */
     await tester.pumpWidget(
-      app(const EstadoDeCobrosDatos(conectada: false, disponible: true, obligatoria: true)),
+      app(const EstadoDeCobrosDatos(
+        conectada: false,
+        disponible: true,
+        obligatoria: true,
+        puedeVender: false,
+      )),
     );
     await tester.pump();
 
@@ -54,7 +59,12 @@ void main() {
     // Con la regla apagada —el interruptor de incidente— el texto no puede
     // seguir diciendo que no puede vender, porque sí puede.
     await tester.pumpWidget(
-      app(const EstadoDeCobrosDatos(conectada: false, disponible: true, obligatoria: false)),
+      app(const EstadoDeCobrosDatos(
+        conectada: false,
+        disponible: true,
+        obligatoria: false,
+        puedeVender: true,
+      )),
     );
     await tester.pump();
 
@@ -74,7 +84,8 @@ void main() {
         const EstadoDeCobrosDatos(
           conectada: true,
           disponible: true,
-          obligatoria: false,
+          obligatoria: true,
+          puedeVender: true,
           cuenta: '987654321',
         ),
       ),
@@ -91,7 +102,12 @@ void main() {
     // Ofrecer conectar algo que este servidor no puede conectar sería mandar a
     // la persona a una pantalla que termina en error.
     await tester.pumpWidget(
-      app(const EstadoDeCobrosDatos(conectada: false, disponible: false, obligatoria: false)),
+      app(const EstadoDeCobrosDatos(
+        conectada: false,
+        disponible: false,
+        obligatoria: false,
+        puedeVender: true,
+      )),
     );
     await tester.pump();
 
@@ -110,23 +126,99 @@ void main() {
     expect(datos.obligatoria, isFalse);
     expect(datos.conectada, isFalse);
     expect(datos.disponible, isFalse);
+    expect(datos.puedeVender, isTrue);
   });
 
-  testWidgets('lee la respuesta real del servidor', (tester) async {
-    // Los nombres de los campos salen de `GET /sellers/me/payment-account`.
-    final datos = EstadoDeCobrosDatos.fromJson(const {
-      'disponible': true,
-      'conectada': true,
-      'estado': 'CONNECTED',
-      'cuentaDeMercadoPago': '987654321',
-      'comisionBps': 600,
-      'obligatoriaParaVender': false,
-      'tokenTerminaEn': '····a3f9',
-    });
+  /**
+   * ═════════════════════════════════════════════════════════════════════════
+   * CONTRATO — JSON COPIADO DEL SERVIDOR, NO ESCRITO A MANO
+   * ═════════════════════════════════════════════════════════════════════════
+   *
+   * Los dos cuerpos de acá abajo salen de `backend/test/contratos/`, que los
+   * escribe el test de integración `oauth-flow.spec.ts` con la respuesta real
+   * de `GET /sellers/me/payment-account` — el caso conectado recorre el
+   * callback de OAuth entero.
+   *
+   * Ya pasó una vez y costó caro: un test de contrato escrito con un JSON
+   * inventado pasaba en verde mientras la app mostraba `$0,00`. El JSON
+   * inventado se parecía al real, pero no lo era.
+   *
+   * Si estos tests fallan después de tocar el backend, el que está mal es el
+   * JSON de acá: hay que volver a correr la captura, no editarlo a mano.
+   */
+
+  /// `test/contratos/cobros-sin-conectar.json`
+  const sinConectar = <String, dynamic>{
+    'disponible': true,
+    'conectada': false,
+    'estado': 'NOT_CONNECTED',
+    'cuentaDeMercadoPago': null,
+    'conectadaEl': null,
+    'desconectadaEl': null,
+    'venceEl': null,
+    'ultimaRenovacion': null,
+    'tokenTerminaEn': null,
+    'comisionBps': 600,
+    'mercadoPagoObligatorio': true,
+    'puedeVender': false,
+    'faltaConectar': true,
+  };
+
+  /// `test/contratos/cobros-conectada.json`
+  const conectada = <String, dynamic>{
+    'disponible': true,
+    'conectada': true,
+    'estado': 'CONNECTED',
+    'cuentaDeMercadoPago': '987654321',
+    'conectadaEl': '2026-08-15T02:09:36.418Z',
+    'desconectadaEl': null,
+    'venceEl': '2027-02-11T02:09:36.416Z',
+    'ultimaRenovacion': null,
+    'tokenTerminaEn': '····tado',
+    'comisionBps': 600,
+    'mercadoPagoObligatorio': true,
+    'puedeVender': true,
+    'faltaConectar': false,
+  };
+
+  testWidgets('contrato: sin conectar, con la regla activa', (tester) async {
+    final datos = EstadoDeCobrosDatos.fromJson(sinConectar);
+
+    expect(datos.disponible, isTrue);
+    expect(datos.conectada, isFalse);
+    expect(datos.obligatoria, isTrue);
+    expect(datos.puedeVender, isFalse);
+    expect(datos.cuenta, isNull);
+  });
+
+  testWidgets('contrato: conectada — obligatoria SIGUE siendo true', (tester) async {
+    /**
+     * Este es el test que existe por el bug de nombres.
+     *
+     * El campo se llamaba `obligatoriaParaVender` y para un vendedor YA
+     * conectado valía `false`. Leído desde afuera parecía decir que Mercado
+     * Pago no era obligatorio — cuando sí lo es. La regla y la falta son dos
+     * preguntas distintas y ahora son dos campos distintos.
+     */
+    final datos = EstadoDeCobrosDatos.fromJson(conectada);
 
     expect(datos.conectada, isTrue);
-    expect(datos.disponible, isTrue);
     expect(datos.cuenta, '987654321');
-    expect(datos.obligatoria, isFalse);
+    // La REGLA no se apaga porque este vendedor se haya conectado.
+    expect(datos.obligatoria, isTrue);
+    expect(datos.puedeVender, isTrue);
+  });
+
+  testWidgets('⛔ el contrato no trae ningún token', (tester) async {
+    /**
+     * Lo único que sale del servidor sobre el token es una pista de cuatro
+     * caracteres. Un access token de Mercado Pago empieza con `APP_USR-` y el
+     * de refresco con `TG-`.
+     */
+    for (final cuerpo in [sinConectar, conectada]) {
+      final texto = cuerpo.toString();
+      expect(texto.contains('APP_USR-'), isFalse);
+      expect(texto.contains('TG-'), isFalse);
+    }
   });
 }

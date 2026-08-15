@@ -52,9 +52,14 @@ class ConfirmarEntregaSheet extends ConsumerStatefulWidget {
 }
 
 class _ConfirmarEntregaSheetState extends ConsumerState<ConfirmarEntregaSheet> {
+  /// El largo exacto del código. El mismo número que valida el backend.
+  static const _largo = 6;
+
   final _codigo = TextEditingController();
   bool _enviando = false;
   String? _error;
+
+  bool get _completo => _codigo.text.trim().length == _largo;
 
   @override
   void dispose() {
@@ -64,7 +69,7 @@ class _ConfirmarEntregaSheetState extends ConsumerState<ConfirmarEntregaSheet> {
 
   Future<void> _confirmar() async {
     final codigo = _codigo.text.trim();
-    if (codigo.length != 6) {
+    if (codigo.length != _largo) {
       setState(() => _error = 'Son seis números.');
       return;
     }
@@ -135,7 +140,7 @@ class _ConfirmarEntregaSheetState extends ConsumerState<ConfirmarEntregaSheet> {
             autofocus: true,
             keyboardType: TextInputType.number,
             textAlign: TextAlign.center,
-            maxLength: 6,
+            maxLength: _largo,
             inputFormatters: [FilteringTextInputFormatter.digitsOnly],
             style: const TextStyle(
               fontSize: 30,
@@ -155,16 +160,21 @@ class _ConfirmarEntregaSheetState extends ConsumerState<ConfirmarEntregaSheet> {
               ),
             ),
             onChanged: (v) {
-              if (_error != null) setState(() => _error = null);
+              // El `setState` es incondicional porque el botón depende del
+              // largo: sin esto queda deshabilitado con el campo completo.
+              setState(() => _error = null);
               // Seis dígitos es el largo exacto: confirmar solo al completarlo
               // ahorra un toque en la puerta, con el repartidor esperando.
-              if (v.length == 6 && !_enviando) unawaited(_confirmar());
+              if (v.length == _largo && !_enviando) unawaited(_confirmar());
             },
           ),
           const SizedBox(height: Gap.lg),
 
           FilledButton(
-            onPressed: _enviando ? null : () => unawaited(_confirmar()),
+            // Deshabilitado hasta tener los seis dígitos. Dejarlo activo para
+            // después responder "son seis números" es hacer que la persona
+            // descubra la regla equivocándose, con el repartidor en la puerta.
+            onPressed: _enviando || !_completo ? null : () => unawaited(_confirmar()),
             style: FilledButton.styleFrom(minimumSize: const Size(0, 52)),
             child: _enviando
                 ? const SizedBox(

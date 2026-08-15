@@ -1599,9 +1599,15 @@ model Order {
 
   /// El código que el comprador le dice al repartidor. Seis dígitos.
   ///
-  /// ⚠️ NUNCA sale en una respuesta del vendedor ni aparece en logs. Se guarda
-  /// en claro a propósito: el comprador tiene que poder leerlo cada vez que
-  /// abre su pedido, no una sola vez. La explicación está en `delivery-code.ts`.
+  /// ⚠️ NUNCA sale en una respuesta del vendedor ni aparece en logs.
+  ///
+  /// Se guarda **cifrado**, con el formato `v1.iv.tag.ciphertext` y la llave en
+  /// una variable de entorno. No hasheado: el comprador tiene que poder leerlo
+  /// cada vez que abre su pedido, no una sola vez. La explicación entera está
+  /// en `delivery-code.ts`.
+  ///
+  /// Los pedidos despachados antes de ese cambio tienen seis dígitos en claro y
+  /// se siguen leyendo. La restricción de la base acepta las dos formas.
   deliveryCode         String?   @map("delivery_code")
   deliveryCodeIssuedAt DateTime? @map("delivery_code_issued_at")
   /// Intentos fallidos seguidos. Se reinicia al confirmar.

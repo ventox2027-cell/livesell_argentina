@@ -253,6 +253,12 @@ class OrderDetailScreen extends ConsumerWidget {
               if (p.esperaEntrega) ...[
                 const SizedBox(height: Gap.md),
                 CodigoDeEntrega(codigo: p.codigoDeEntrega!),
+              ] else if (p.entregadoEl != null) ...[
+                // Entregado: en el lugar donde estaba el codigo va la
+                // confirmacion, y el codigo no vuelve a aparecer nunca. El
+                // backend tampoco lo manda mas.
+                const SizedBox(height: Gap.md),
+                const _EntregaConfirmada(),
               ],
 
               const Divider(color: AppColor.borde, height: Gap.xl),
@@ -490,6 +496,39 @@ class _SinPedidos extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Lo que reemplaza al codigo una vez entregado el pedido.
+///
+/// Que quede algo en ese lugar y no un hueco: la persona que abre el pedido
+/// buscando su codigo tiene que entender por que ya no esta, no pensar que la
+/// pantalla se rompio.
+class _EntregaConfirmada extends StatelessWidget {
+  const _EntregaConfirmada();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(Gap.md),
+      decoration: BoxDecoration(
+        color: AppColor.exito.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(Redondeo.md),
+        border: Border.all(color: AppColor.exito.withValues(alpha: 0.3)),
+      ),
+      child: const Row(
+        children: [
+          Icon(Icons.check_circle_rounded, size: 19, color: AppColor.exito),
+          SizedBox(width: Gap.sm),
+          Expanded(
+            child: Text(
+              'Entrega confirmada',
+              style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700),
+            ),
+          ),
+        ],
       ),
     );
   }

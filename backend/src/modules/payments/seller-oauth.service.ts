@@ -344,13 +344,36 @@ export class SellerOAuthService {
       /** La comisión que se le descuenta a cada venta. Vigente, no histórica. */
       comisionBps: env.VENDOX_PLATFORM_FEE_BPS,
       /**
-       * Si sin esto no puede vender.
+       * ═══════════════════════════════════════════════════════════════════
+       * TRES CAMPOS PORQUE SON TRES PREGUNTAS DISTINTAS
+       * ═══════════════════════════════════════════════════════════════════
        *
-       * Lo decide el servidor y no la app: la regla depende de un interruptor y
-       * de si el OAuth está configurado acá, y la app no tiene forma de saber
-       * ninguna de las dos cosas.
+       * Antes había uno solo, `obligatoriaParaVender`, que en realidad
+       * respondía "¿te falta conectarla?". Para un vendedor YA conectado valía
+       * `false`, y leído desde afuera eso parecía decir que Mercado Pago no era
+       * obligatorio — cuando sí lo es.
+       *
+       * Un nombre que hace dudar de si la regla está activa es un nombre malo,
+       * aunque el valor sea correcto. Los tres los decide el servidor: la regla
+       * depende de un interruptor y de si el OAuth está configurado acá, y la
+       * app no tiene forma de saber ninguna de las dos cosas.
        */
-      obligatoriaParaVender:
+
+      /** ¿Este servidor exige Mercado Pago para vender? Es la REGLA. */
+      mercadoPagoObligatorio: env.SELLER_MUST_CONNECT_MP && this.disponible,
+
+      /** ¿Este vendedor puede publicar y transmitir AHORA? */
+      puedeVender:
+        !env.SELLER_MUST_CONNECT_MP ||
+        !this.disponible ||
+        cuenta?.status === 'CONNECTED',
+
+      /**
+       * ¿Le falta conectarla? Es la llamada a la acción de la interfaz.
+       *
+       * Es lo que antes se llamaba `obligatoriaParaVender`.
+       */
+      faltaConectar:
         env.SELLER_MUST_CONNECT_MP && this.disponible && cuenta?.status !== 'CONNECTED',
     };
   }

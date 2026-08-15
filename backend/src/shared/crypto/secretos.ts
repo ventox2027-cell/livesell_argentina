@@ -204,6 +204,62 @@ export function descifrar(secreto: SecretoCifrado, llave: Buffer): string {
 }
 
 /**
+ * El separador del formato de una sola columna. Ver `empaquetar`.
+ *
+ * Un punto y no una coma ni dos puntos: base64 usa `A-Za-z0-9+/=`, así que el
+ * punto no puede aparecer dentro de ninguna de las tres partes y el `split` no
+ * tiene forma de cortar por el lugar equivocado.
+ */
+const SEPARADOR = '.';
+
+/**
+ * Aplana un secreto cifrado a una sola cadena.
+ *
+ * ─── Por qué existe si `SecretoCifrado` ya tiene sus cuatro campos ───
+ *
+ * `SellerOAuthCredential` guarda los cuatro en cuatro columnas, que es lo
+ * correcto cuando la tabla es nueva y se diseña para esto. Pero hay secretos
+ * que viven en una columna que ya existe —el código de entrega de un pedido— y
+ * partirla en cuatro significa una migración de esquema, cuatro campos en cada
+ * `select` y cuatro formas de que uno quede sin copiar.
+ *
+ * El formato es `v1.iv.tag.ciphertext`, todo base64 salvo la versión. Empieza
+ * con la versión a propósito: hace evidente de un vistazo que la columna ya no
+ * contiene texto plano, y deja la puerta abierta a la rotación de llave sin
+ * tener que adivinar por el largo.
+ */
+export function empaquetar(secreto: SecretoCifrado): string {
+  return ['v' + String(secreto.version), secreto.iv, secreto.tag, secreto.ciphertext].join(
+    SEPARADOR,
+  );
+}
+
+/** ¿Esta cadena es un secreto empaquetado, o texto plano de antes? */
+export function estaEmpaquetado(valor: string): boolean {
+  return /^v\d+\./.test(valor);
+}
+
+/**
+ * Deshace `empaquetar`.
+ *
+ * Lanza `SecretoAdulteradoError` si la cadena no tiene la forma esperada. No
+ * devuelve `null`: un valor que no se puede interpretar es exactamente el caso
+ * en el que hay que fallar ruidosamente, no seguir con `undefined`.
+ */
+export function desempaquetar(valor: string): SecretoCifrado {
+  const partes = valor.split(SEPARADOR);
+  if (partes.length !== 4) throw new SecretoAdulteradoError();
+
+  const [etiqueta, iv, tag, ciphertext] = partes as [string, string, string, string];
+  const version = Number(etiqueta.slice(1));
+  if (!etiqueta.startsWith('v') || !Number.isInteger(version)) {
+    throw new SecretoAdulteradoError();
+  }
+
+  return { ciphertext, iv, tag, version };
+}
+
+/**
  * Los últimos caracteres de un secreto, para poder hablar de él sin exponerlo.
  *
  * Sirve para que alguien de soporte pueda confirmar "sí, es el token que

@@ -1,0 +1,15 @@
+{
+  "disponible": true,
+  "conectada": false,
+  "estado": "NOT_CONNECTED",
+  "cuentaDeMercadoPago": null,
+  "conectadaEl": null,
+  "desconectadaEl": null,
+  "venceEl": null,
+  "ultimaRenovacion": null,
+  "tokenTerminaEn": null,
+  "comisionBps": 600,
+  "mercadoPagoObligatorio": true,
+  "puedeVender": false,
+  "faltaConectar": true
+}

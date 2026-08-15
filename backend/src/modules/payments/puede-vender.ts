@@ -39,7 +39,7 @@ import { DomainError } from '@/shared/errors/domain.error';
  * estaba haciendo cuando la frenaron, sobre todo si tocó "publicar" en una
  * lista de veinte productos.
  */
-export type AccionQueRequiereMp = 'publicar' | 'transmitir';
+export type AccionQueRequiereMp = 'publicar' | 'transmitir' | 'comprar';
 
 export class RequiereMercadoPagoError extends DomainError {
   constructor(accion: AccionQueRequiereMp) {
@@ -58,6 +58,21 @@ function mensajeDe(accion: AccionQueRequiereMp): string {
       return (
         'Para hacer un vivo necesitás conectar tu cuenta de Mercado Pago. ' +
         'Es donde va a entrar el dinero de tus ventas. Lo hacés una sola vez.'
+      );
+    case 'comprar':
+      /**
+       * ⚠️ Este mensaje lo lee QUIEN COMPRA, no el vendedor.
+       *
+       * No hizo nada mal y no puede resolverlo. Decirle "conectá tu cuenta de
+       * Mercado Pago" sería incomprensible: no es su cuenta la que falta.
+       *
+       * Tampoco se le dice que el vendedor tiene un problema de configuración:
+       * eso lo expone sin necesidad. Alcanza con que sepa que no es culpa suya
+       * y qué puede hacer.
+       */
+      return (
+        'Este vendedor no está pudiendo recibir pagos en este momento. ' +
+        'Probá más tarde o escribile para avisarle.'
       );
   }
 }

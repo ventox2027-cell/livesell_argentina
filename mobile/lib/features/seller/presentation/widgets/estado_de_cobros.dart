@@ -48,6 +48,7 @@ class EstadoDeCobrosDatos {
     required this.conectada,
     required this.disponible,
     required this.obligatoria,
+    required this.puedeVender,
     this.cuenta,
   });
 
@@ -56,20 +57,40 @@ class EstadoDeCobrosDatos {
   /// Un fallo de red no puede hacer que la app le diga a un vendedor que no
   /// puede vender: el backend lo va a frenar igual si corresponde, con un
   /// mensaje que explica por qué.
-  factory EstadoDeCobrosDatos.fromJson(Map<String, dynamic>? j) => EstadoDeCobrosDatos(
-        conectada: j?['conectada'] as bool? ?? false,
-        disponible: j?['disponible'] as bool? ?? false,
-        obligatoria: j?['obligatoriaParaVender'] as bool? ?? false,
-        cuenta: j?['cuentaDeMercadoPago'] as String?,
-      );
+  ///
+  /// ─── Por qué `puedeVender` no se deriva acá ───
+  ///
+  /// Sería fácil calcularlo: `!obligatoria || conectada`. Pero entonces la
+  /// regla viviría en dos lugares, y el día que el servidor agregue una
+  /// condición —una cuenta suspendida, por ejemplo— la app seguiría diciendo
+  /// que sí. La respuesta del servidor es la única fuente.
+  factory EstadoDeCobrosDatos.fromJson(Map<String, dynamic>? j) {
+    final conectada = j?['conectada'] as bool? ?? false;
+    final obligatoria = j?['mercadoPagoObligatorio'] as bool? ?? false;
+    return EstadoDeCobrosDatos(
+      conectada: conectada,
+      disponible: j?['disponible'] as bool? ?? false,
+      obligatoria: obligatoria,
+      // El `??` cubre a un servidor viejo que no manda el campo: ahí se cae a
+      // la derivación, que es peor pero no rompe la pantalla.
+      puedeVender: j?['puedeVender'] as bool? ?? (!obligatoria || conectada),
+      cuenta: j?['cuentaDeMercadoPago'] as String?,
+    );
+  }
 
   final bool conectada;
 
   /// Si este servidor tiene la conexión habilitada.
   final bool disponible;
 
-  /// Si sin esto NO puede vender. Lo decide el servidor.
+  /// La REGLA: si este servidor exige Mercado Pago para vender.
+  ///
+  /// Es del servidor, no de este vendedor. Sirve para el texto —"sin esto no
+  /// podés publicar"— y para el borde ámbar.
   final bool obligatoria;
+
+  /// Si ESTE vendedor puede publicar y transmitir ahora mismo.
+  final bool puedeVender;
 
   /// El id de la cuenta en Mercado Pago. No es un secreto.
   final String? cuenta;

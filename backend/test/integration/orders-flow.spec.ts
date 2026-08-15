@@ -1807,6 +1807,99 @@ describe('Código de entrega', () => {
     expect(r.status).toBe(404);
   });
 
+  it('⛔ el código NO está en claro en la base', async () => {
+    /**
+     * Lo que este test protege es el respaldo de la base, la réplica y el
+     * volcado que alguien hizo para depurar. Con el código en claro en la
+     * columna, todos los pedidos en camino quedan confirmables por quien tenga
+     * ese archivo.
+     *
+     * No protege contra alguien con acceso al proceso —la llave está ahí— y no
+     * es la defensa principal, que sigue siendo que el vendedor nunca lo ve.
+     */
+    const { orderId, compradorToken } = await ordenDespachada();
+
+    const vista = await call('GET', `/api/v1/orders/${orderId}`, { token: compradorToken });
+    const codigo = vista.body.deliveryCode as string;
+    expect(codigo).toMatch(/^[0-9]{6}$/);
+
+    const fila = await prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+      select: { deliveryCode: true },
+    });
+
+    expect(fila.deliveryCode).not.toBe(codigo);
+    expect(fila.deliveryCode).not.toContain(codigo);
+    expect(fila.deliveryCode?.startsWith('v1.')).toBe(true);
+  });
+
+  it('⛔ el código no aparece en claro en NINGUNA columna de la orden', async () => {
+    /**
+     * El test de arriba mira una columna. Este mira la fila entera, por si el
+     * código termina de rebote en otro lado —una instantánea, un motivo de
+     * estado, un JSON de auditoría— donde nadie lo buscaría.
+     */
+    const { orderId, compradorToken } = await ordenDespachada();
+    const vista = await call('GET', `/api/v1/orders/${orderId}`, { token: compradorToken });
+    const codigo = vista.body.deliveryCode as string;
+
+    const fila = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+    expect(JSON.stringify(fila)).not.toContain(codigo);
+
+    const bitacora = await prisma.auditLog.findMany({ where: { entityId: orderId } });
+    expect(JSON.stringify(bitacora)).not.toContain(codigo);
+  });
+
+  it('después de entregado, el comprador ya no ve el código', async () => {
+    /**
+     * Terminada la entrega el código no sirve para nada, y la pantalla del
+     * pedido se vuelve a abrir: para calificar la compra, para pedir un cambio.
+     * Dejar un secreto inútil a la vista es exponerlo sin ganar nada.
+     */
+    const { orderId, compradorToken, sellerToken } = await ordenDespachada();
+    const antes = await call('GET', `/api/v1/orders/${orderId}`, { token: compradorToken });
+    expect(antes.body.deliveryCode).toMatch(/^[0-9]{6}$/);
+
+    const r = await call('POST', `/api/v1/seller/orders/${orderId}/delivery-confirmation`, {
+      token: sellerToken,
+      body: { code: antes.body.deliveryCode as string },
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+
+    const despues = await call('GET', `/api/v1/orders/${orderId}`, { token: compradorToken });
+    expect(despues.body.status).toBe('DELIVERED');
+    expect(despues.body.deliveryCode).toBeNull();
+  });
+
+  it('un código viejo, guardado en claro, se sigue pudiendo usar', async () => {
+    /**
+     * Los pedidos despachados antes del cifrado tienen seis dígitos en la
+     * columna. No se migran, y sin compatibilidad hacia atrás quedarían
+     * inconfirmables: el comprador vería un error donde antes veía su número y
+     * el vendedor no podría cerrar la entrega.
+     *
+     * Se simula escribiendo la columna a mano, que es exactamente el estado en
+     * que quedaron esas filas.
+     */
+    const { orderId, compradorToken, sellerToken } = await ordenDespachada();
+
+    await prisma.order.update({
+      where: { id: orderId },
+      data: { deliveryCode: '004821' },
+    });
+
+    const vista = await call('GET', `/api/v1/orders/${orderId}`, { token: compradorToken });
+    // Incluidos los ceros a la izquierda.
+    expect(vista.body.deliveryCode).toBe('004821');
+
+    const r = await call('POST', `/api/v1/seller/orders/${orderId}/delivery-confirmation`, {
+      token: sellerToken,
+      body: { code: '004821' },
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(r.body.status).toBe('DELIVERED');
+  });
+
   it('⛔ un código con formato raro no consume intentos', async () => {
     const { orderId, sellerToken } = await ordenDespachada();
 

@@ -5,11 +5,14 @@ import {
   codigoCoincide,
   finDelBloqueo,
   generarCodigoDeEntrega,
+  guardarCodigo,
   LARGO_DEL_CODIGO,
+  leerCodigoGuardado,
   MAX_INTENTOS,
   verificarCodigo,
   type EstadoDelCodigo,
 } from '@/modules/orders/delivery-code';
+import { SecretoAdulteradoError } from '@/shared/crypto/secretos';
 
 /**
  * El código de entrega.
@@ -176,5 +179,137 @@ describe('Verificación', () => {
     const ahora = new Date('2026-08-14T12:00:00Z');
     const fin = finDelBloqueo(ahora);
     expect(fin.getTime() - ahora.getTime()).toBe(BLOQUEO_MINUTOS * 60_000);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GUARDADO
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * El código cifrado en reposo.
+ *
+ * Lo que estos tests protegen es una clase de incidente concreta: alguien se
+ * lleva un respaldo de la base, o una réplica, o un volcado que un compañero
+ * hizo para depurar. Con el código en claro en la columna, todos los pedidos en
+ * camino quedan confirmables por quien los tenga.
+ *
+ * No protege contra alguien con acceso al proceso —la llave está ahí— y no es
+ * la defensa principal, que sigue siendo que el vendedor nunca lo ve.
+ */
+describe('Guardado del código', () => {
+  /** Una llave de 32 bytes que no es de ceros. Sólo para estos tests. */
+  const LLAVE = Buffer.alloc(32, 7);
+
+  it('lo que se guarda NO es el código', () => {
+    const codigo = '004821';
+    const guardado = guardarCodigo(codigo, LLAVE);
+
+    expect(guardado).not.toContain(codigo);
+    expect(guardado).not.toBe(codigo);
+    // Y se nota de un vistazo que no es texto plano.
+    expect(guardado.startsWith('v1.')).toBe(true);
+  });
+
+  it('se puede volver a leer', () => {
+    // Esto es lo que hace imposible el hash: el comprador tiene que poder leer
+    // su código cada vez que abre el pedido.
+    for (const codigo of ['000000', '004821', '999999', '123456']) {
+      expect(leerCodigoGuardado(guardarCodigo(codigo, LLAVE), LLAVE)).toBe(codigo);
+    }
+  });
+
+  it('preserva los ceros a la izquierda al ida y vuelta', () => {
+    /**
+     * `004821` es un código válido. Si en algún punto del camino pasara por un
+     * número, volvería como `4821` y la entrega sería imposible de confirmar.
+     */
+    const guardado = guardarCodigo('004821', LLAVE);
+    const leido = leerCodigoGuardado(guardado, LLAVE);
+
+    expect(leido).toBe('004821');
+    expect(leido).toHaveLength(6);
+  });
+
+  it('⛔ el mismo código dos veces NO produce lo mismo', () => {
+    /**
+     * El IV es distinto en cada cifrado. Si no lo fuera, dos pedidos con el
+     * mismo código tendrían la misma fila y quien viera la base sabría que
+     * coinciden — y con un solo código conocido, sabría los dos.
+     */
+    const a = guardarCodigo('123456', LLAVE);
+    const b = guardarCodigo('123456', LLAVE);
+
+    expect(a).not.toBe(b);
+    // Pero los dos descifran a lo mismo.
+    expect(leerCodigoGuardado(a, LLAVE)).toBe(leerCodigoGuardado(b, LLAVE));
+  });
+
+  it('⛔ con otra llave no se descifra: falla, no devuelve basura', () => {
+    /**
+     * GCM es cifrado autenticado. Con AES-CBC esto habría devuelto seis bytes
+     * cualesquiera y el sistema habría comparado contra ellos sin enterarse.
+     */
+    const guardado = guardarCodigo('123456', LLAVE);
+    const otra = Buffer.alloc(32, 9);
+
+    expect(() => leerCodigoGuardado(guardado, otra)).toThrow(SecretoAdulteradoError);
+  });
+
+  it('⛔ un código adulterado en la base no se acepta', () => {
+    const guardado = guardarCodigo('123456', LLAVE);
+    // Se le cambia un carácter al texto cifrado, como haría alguien con acceso
+    // de escritura a la base.
+    const partes = guardado.split('.');
+    const ultimo = partes[3]!;
+    partes[3] = (ultimo[0] === 'A' ? 'B' : 'A') + ultimo.slice(1);
+
+    expect(() => leerCodigoGuardado(partes.join('.'), LLAVE)).toThrow(SecretoAdulteradoError);
+  });
+
+  it('los códigos viejos, en claro, se siguen leyendo', () => {
+    /**
+     * Los pedidos despachados antes de este cambio tienen seis dígitos en la
+     * columna. No se migran, y sin esto quedarían inconfirmables: el comprador
+     * vería un error donde antes veía su número.
+     */
+    expect(leerCodigoGuardado('004821', LLAVE)).toBe('004821');
+    expect(leerCodigoGuardado('004821', null)).toBe('004821');
+  });
+
+  it('sin llave se guarda en claro, como antes', () => {
+    // Un servidor recién clonado, sin CREDENTIALS_ENCRYPTION_KEY, tiene que
+    // poder despachar un pedido de prueba.
+    expect(guardarCodigo('123456', null)).toBe('123456');
+  });
+
+  it('⛔ sin llave NO se puede leer algo cifrado', () => {
+    // El caso de la llave borrada del entorno. Falla ruidosamente en vez de
+    // devolver el sobre entero como si fuera el código.
+    const guardado = guardarCodigo('123456', LLAVE);
+
+    expect(() => leerCodigoGuardado(guardado, null)).toThrow(SecretoAdulteradoError);
+  });
+
+  it('⛔ un sobre con la forma rota no se interpreta a medias', () => {
+    for (const roto of ['v1.', 'v1.a.b', 'v1.a.b.c.d', 'v.a.b.c', 'vx.a.b.c']) {
+      expect(() => leerCodigoGuardado(roto, LLAVE)).toThrow(SecretoAdulteradoError);
+    }
+  });
+
+  it('lo guardado entra en la restricción de la base', () => {
+    /**
+     * La columna tiene un CHECK que acepta seis dígitos o el sobre. Si el
+     * formato cambiara y la expresión de la migración no, el INSERT fallaría
+     * recién en producción, al despachar un pedido.
+     *
+     * La expresión es la misma que la de
+     * `20260815020000_delivery_code_cifrado`.
+     */
+    const restriccion = /^v[0-9]+\.[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=]+$/;
+
+    for (let i = 0; i < 200; i++) {
+      expect(guardarCodigo(generarCodigoDeEntrega(), LLAVE)).toMatch(restriccion);
+    }
   });
 });

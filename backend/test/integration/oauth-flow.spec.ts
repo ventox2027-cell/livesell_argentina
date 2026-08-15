@@ -1,6 +1,7 @@
 import { type INestApplication } from '@nestjs/common';
 import { type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
+import { writeFileSync } from 'node:fs';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { SellerOAuthService } from '@/modules/payments/seller-oauth.service';
@@ -80,7 +81,27 @@ beforeAll(async () => {
 
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(LiveKitService)
-    .useValue({ wsUrl: '', ensureRoom: vi.fn(), issueToken: vi.fn(), verifyWebhook: vi.fn() })
+    .useValue({
+      wsUrl: 'wss://test.livekit.cloud',
+      ensureRoom: vi.fn().mockResolvedValue(undefined),
+      deleteRoom: vi.fn().mockResolvedValue(undefined),
+      listParticipants: vi.fn().mockResolvedValue([]),
+      verifyWebhook: vi.fn(),
+      // Devuelve un token con forma. Con `vi.fn()` pelado esto resolvía a
+      // `undefined` y preparar un vivo reventaba con un 500 que no tenía nada
+      // que ver con lo que el test estaba probando.
+      issueToken: vi.fn().mockImplementation((p: { roomName: string; role: string }) =>
+        Promise.resolve({
+          token: `token-falso-${p.role}`,
+          wsUrl: 'wss://test.livekit.cloud',
+          roomName: p.roomName,
+          identity: 'x',
+          role: p.role,
+          ttlSeconds: 3600,
+          expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+        }),
+      ),
+    })
     .overrideProvider(MercadoPagoOAuthClient)
     .useValue({
       configurado: true,
@@ -132,11 +153,12 @@ beforeEach(async () => {
 async function call(
   method: string,
   url: string,
-  opts: { body?: unknown; token?: string } = {},
+  opts: { body?: unknown; token?: string; idempotencyKey?: string } = {},
 ) {
   const headers: Record<string, string> = {};
   if (opts.body !== undefined) headers['content-type'] = 'application/json';
   if (opts.token) headers.authorization = `Bearer ${opts.token}`;
+  if (opts.idempotencyKey) headers['idempotency-key'] = opts.idempotencyKey;
 
   const res = await (app as NestFastifyApplication)
     .getHttpAdapter()
@@ -150,6 +172,22 @@ async function call(
       ? (JSON.parse(res.body) as Record<string, unknown>)
       : null,
   };
+}
+
+/** Escribe una respuesta real a `test/contratos/`, para los tests de Flutter. */
+function guardarContrato(nombre: string, cuerpo: unknown): void {
+  writeFileSync(`test/contratos/${nombre}.json`, `${JSON.stringify(cuerpo, null, 2)}\n`, 'utf8');
+}
+
+/**
+ * El error de una respuesta fallida.
+ *
+ * La API envuelve: `{ error: { code, message, traceId } }`. Leer `body.code`
+ * directamente devuelve `undefined`, y un `expect(undefined).toBe('X')` falla
+ * con un mensaje que no dice que el problema es la forma y no el valor.
+ */
+function error(r: { body: Record<string, unknown> | null }) {
+  return (r.body?.error ?? {}) as { code?: string; message?: string };
 }
 
 let n = 0;
@@ -746,5 +784,385 @@ describe('PKCE cuando falla', () => {
       await prisma.sellerOAuthCredential.count({ where: { sellerId: v.sellerId } }),
     ).toBe(0);
     expect(await puedeVenderConReglaEncendida(v.sellerId)).toBe(false);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LA REGLA, DE PUNTA A PUNTA
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Sin Mercado Pago conectado no se publica, no se transmite y no se cobra.
+ *
+ * Los tests de arriba prueban la función `puedeVender`. Estos prueban otra
+ * cosa: que esa función esté efectivamente enchufada en los tres lugares que
+ * importan, por HTTP, con la aplicación entera de por medio.
+ *
+ * La distinción no es académica. Una regla correcta que nadie llama es
+ * exactamente igual de útil que no tenerla, y ese fallo no lo detecta ningún
+ * test unitario.
+ *
+ * ─── Por qué la regla se enciende a mano ───
+ *
+ * `test/setup.ts` la deja apagada para toda la suite: hay más de cien tests que
+ * crean productos publicados y no tienen nada que ver con Mercado Pago.
+ * Encenderla globalmente los rompe a todos por un motivo que no es el suyo.
+ */
+describe('Sin Mercado Pago no se vende', () => {
+  /**
+   * Corre algo con la regla encendida y la vuelve a dejar como estaba.
+   *
+   * Se toca el objeto `env` y no `process.env` porque el esquema ya se evaluó
+   * cuando arrancó la aplicación: escribir en `process.env` a esta altura no
+   * cambia nada.
+   *
+   * El `finally` no es decorativo. Si un test falla con la regla encendida y no
+   * se restaura, los siguientes fallan por arrastre y el informe apunta al
+   * lugar equivocado.
+   */
+  async function conRegla<T>(fn: () => Promise<T>): Promise<T> {
+    const { env } = await import('@/config/env.schema');
+    const antes = env.SELLER_MUST_CONNECT_MP;
+    (env as { SELLER_MUST_CONNECT_MP: boolean }).SELLER_MUST_CONNECT_MP = true;
+    try {
+      return await fn();
+    } finally {
+      (env as { SELLER_MUST_CONNECT_MP: boolean }).SELLER_MUST_CONNECT_MP = antes;
+    }
+  }
+
+  /** Un vendedor con tienda, sin Mercado Pago. */
+  async function vendedorSinConectar() {
+    const v = await nuevoVendedor();
+    const yo = await call('GET', '/api/v1/sellers/me', { token: v.token });
+    return { ...v, storeId: (yo.body!.store as { id: string }).id };
+  }
+
+  /** El mismo vendedor, pero con la cuenta ya conectada de verdad. */
+  async function vendedorConectado() {
+    const v = await vendedorSinConectar();
+    const inicio = await call('POST', '/api/v1/sellers/me/payment-account/connect', {
+      token: v.token,
+    });
+    const state = new URL(inicio.body!.url as string).searchParams.get('state')!;
+    canjearCodigo.mockResolvedValue(tokensFalsos('regla'));
+    const cb = await call(
+      'GET',
+      `/${RUTA_OAUTH_MERCADOPAGO}/callback?code=TG-ok&state=${encodeURIComponent(state)}`,
+    );
+    expect(cb.texto).toContain('Listo');
+    return v;
+  }
+
+  // ─── Publicar ────────────────────────────────────────────────────────────
+
+  it('⛔ desconectado NO puede publicar un producto', async () => {
+    const v = await vendedorSinConectar();
+
+    const r = await conRegla(() =>
+      call('POST', '/api/v1/products', {
+        token: v.token,
+        body: { name: 'Buzo de lana', basePriceCents: 500_000, status: 'ACTIVE' },
+      }),
+    );
+
+    expect(r.status).toBe(422);
+    expect(error(r).code).toBe('MP_ACCOUNT_REQUIRED');
+    // El mensaje le dice QUÉ hacer, no sólo que no puede.
+    expect(error(r).message).toContain('conectar tu cuenta de Mercado Pago');
+
+    // Y no quedó nada a medio crear.
+    expect(await prisma.product.count({ where: { storeId: v.storeId } })).toBe(0);
+  });
+
+  it('desconectado SÍ puede guardar el borrador', async () => {
+    /**
+     * La contracara, y es la mitad de la decisión de negocio: alguien que se
+     * sienta una tarde a cargar cuarenta productos tiene que poder hacerlo. El
+     * bloqueo llega recién al publicar, cuando ya tiene el trabajo hecho.
+     *
+     * Sin este test, "arreglar" el bloqueo frenando la creación entera pasaría
+     * en verde.
+     */
+    const v = await vendedorSinConectar();
+
+    const r = await conRegla(() =>
+      call('POST', '/api/v1/products', {
+        token: v.token,
+        body: { name: 'Buzo en borrador', basePriceCents: 500_000, status: 'DRAFT' },
+      }),
+    );
+
+    expect(r.status, r.texto).toBe(201);
+    expect(r.body!.status).toBe('DRAFT');
+  });
+
+  it('⛔ desconectado NO puede pasar un borrador a publicado', async () => {
+    // El otro camino a lo mismo: se crea en borrador con la regla apagada y se
+    // intenta publicar después. Es el que usa la app de verdad.
+    const v = await vendedorSinConectar();
+    const p = await call('POST', '/api/v1/products', {
+      token: v.token,
+      body: { name: 'Borrador que quiere salir', basePriceCents: 300_000, status: 'DRAFT' },
+    });
+    expect(p.status, p.texto).toBe(201);
+
+    const r = await conRegla(() =>
+      call('PATCH', `/api/v1/products/${p.body!.id as string}`, {
+        token: v.token,
+        body: { status: 'ACTIVE' },
+      }),
+    );
+
+    expect(r.status).toBe(422);
+    expect(error(r).code).toBe('MP_ACCOUNT_REQUIRED');
+
+    const enBase = await prisma.product.findUniqueOrThrow({
+      where: { id: p.body!.id as string },
+      select: { status: true },
+    });
+    expect(enBase.status).toBe('DRAFT');
+  });
+
+  // ─── Transmitir ──────────────────────────────────────────────────────────
+
+  it('⛔ desconectado NO puede iniciar un vivo comercial', async () => {
+    const v = await vendedorSinConectar();
+
+    const r = await conRegla(() =>
+      call('POST', '/api/v1/live', {
+        token: v.token,
+        body: { title: 'Vivo sin cuenta de cobro', productIds: [] },
+      }),
+    );
+
+    expect(r.status).toBe(422);
+    expect(error(r).code).toBe('MP_ACCOUNT_REQUIRED');
+    expect(error(r).message).toContain('vivo');
+
+    // Ninguna sala creada. Un vivo a medio preparar dejaría al vendedor con la
+    // cámara encendida y sin poder cobrar.
+    expect(await prisma.liveSession.count({ where: { sellerId: v.sellerId } })).toBe(0);
+  });
+
+  // ─── Cobrar ──────────────────────────────────────────────────────────────
+
+  it('⛔ nadie puede comprarle a un vendedor desconectado', async () => {
+    /**
+     * El caso legado, que es el único por el que este bloqueo tiene que estar
+     * TAMBIÉN en la creación de la orden: el producto se publicó antes de que
+     * la regla existiera, o el vendedor desconectó su cuenta después.
+     *
+     * El producto sigue visible y comprable. Si el bloqueo estuviera sólo al
+     * publicar, esa compra entraría en la cuenta de VendoX.
+     */
+    const v = await vendedorSinConectar();
+
+    // Publicado con la regla APAGADA: así nacieron los productos históricos.
+    const p = await call('POST', '/api/v1/products', {
+      token: v.token,
+      body: { name: 'Producto histórico', basePriceCents: 1_000_000, status: 'ACTIVE' },
+    });
+    expect(p.status, p.texto).toBe(201);
+    const variantId = (p.body!.variants as Array<{ id: string }>)[0]!.id;
+    await prisma.inventory.update({ where: { productVariantId: variantId }, data: { onHand: 3 } });
+
+    const marca = `${Date.now().toString(36)}-${v.sellerId.slice(-6)}`;
+    const comprador = await call('POST', '/api/v1/auth/dev', {
+      body: {
+        email: `comprador-regla-${marca}@test.com`,
+        firstName: 'Compra',
+        lastName: 'Bloqueada',
+        device: {
+          installId: `install-regla-${marca}`,
+          platform: 'android',
+          appVersion: '1.0.0',
+          osVersion: '14',
+        },
+      },
+    });
+    const tokenComprador = comprador.body!.accessToken as string;
+
+    await call('POST', '/api/v1/addresses', {
+      token: tokenComprador,
+      body: {
+        recipientFullName: 'Compra Bloqueada',
+        documentType: 'DNI',
+        documentNumber: '30111222',
+        phoneE164: '+5491133334444',
+        street: 'Av. Rivadavia',
+        number: '4321',
+        city: 'CABA',
+        province: 'Buenos Aires',
+        postalCode: 'C1205',
+      },
+    });
+
+    const reserva = await call('POST', '/api/v1/inventory/reservations', {
+      token: tokenComprador,
+      idempotencyKey: `regla-r-${marca}`,
+      body: { productVariantId: variantId, quantity: 1 },
+    });
+    expect(reserva.status, reserva.texto).toBe(201);
+
+    const orden = await conRegla(() =>
+      call('POST', '/api/v1/orders', {
+        token: tokenComprador,
+        idempotencyKey: `regla-o-${marca}`,
+        body: { reservationId: reserva.body!.reservationId },
+      }),
+    );
+
+    expect(orden.status).toBe(422);
+    expect(error(orden).code).toBe('MP_ACCOUNT_REQUIRED');
+
+    /**
+     * Y el mensaje NO le habla al comprador como si fuera el vendedor.
+     *
+     * Es el error más fácil de cometer acá: reusar el texto de "conectá tu
+     * cuenta" en un endpoint que lee alguien que no tiene ninguna cuenta que
+     * conectar y no hizo nada mal.
+     */
+    expect(error(orden).message).not.toContain('conectar tu cuenta');
+    expect(error(orden).message).toContain('Este vendedor');
+
+    // Sin orden, y la reserva sigue viva: el comprador puede reintentar más
+    // tarde sin perder las unidades apartadas.
+    expect(await prisma.order.count({ where: { sellerId: v.sellerId } })).toBe(0);
+  });
+
+  // ─── Conectado: todo permitido ───────────────────────────────────────────
+
+  it('conectado puede publicar, transmitir y cobrar', async () => {
+    /**
+     * El caso feliz, en un solo test y a propósito.
+     *
+     * Tres tests separados repetirían el flujo completo de OAuth —que tarda— y
+     * lo que hay que comprobar es una sola cosa: que la regla LEVANTA.
+     */
+    const v = await vendedorConectado();
+
+    await conRegla(async () => {
+      const producto = await call('POST', '/api/v1/products', {
+        token: v.token,
+        body: {
+          name: 'Producto de vendedor conectado',
+          basePriceCents: 800_000,
+          status: 'ACTIVE',
+        },
+      });
+      expect(producto.status, producto.texto).toBe(201);
+      expect(producto.body!.status).toBe('ACTIVE');
+
+      const vivo = await call('POST', '/api/v1/live', {
+        token: v.token,
+        body: { title: 'Vivo de vendedor conectado', productIds: [] },
+      });
+      expect(vivo.status, vivo.texto).toBe(201);
+
+      // Y la compra, que es la que mueve plata.
+      const variantId = (producto.body!.variants as Array<{ id: string }>)[0]!.id;
+      await prisma.inventory.update({
+        where: { productVariantId: variantId },
+        data: { onHand: 3 },
+      });
+
+      const marca = `${Date.now().toString(36)}-${v.sellerId.slice(-6)}`;
+      const comprador = await call('POST', '/api/v1/auth/dev', {
+        body: {
+          email: `comprador-ok-${marca}@test.com`,
+          firstName: 'Compra',
+          lastName: 'Permitida',
+          device: {
+            installId: `install-ok-${marca}`,
+            platform: 'android',
+            appVersion: '1.0.0',
+            osVersion: '14',
+          },
+        },
+      });
+      const tokenComprador = comprador.body!.accessToken as string;
+
+      await call('POST', '/api/v1/addresses', {
+        token: tokenComprador,
+        body: {
+          recipientFullName: 'Compra Permitida',
+          documentType: 'DNI',
+          documentNumber: '30555666',
+          phoneE164: '+5491155556666',
+          street: 'Av. Cabildo',
+          number: '2200',
+          city: 'CABA',
+          province: 'Buenos Aires',
+          postalCode: 'C1428',
+        },
+      });
+
+      const reserva = await call('POST', '/api/v1/inventory/reservations', {
+        token: tokenComprador,
+        idempotencyKey: `ok-r-${marca}`,
+        body: { productVariantId: variantId, quantity: 1 },
+      });
+      expect(reserva.status, reserva.texto).toBe(201);
+
+      const orden = await call('POST', '/api/v1/orders', {
+        token: tokenComprador,
+        idempotencyKey: `ok-o-${marca}`,
+        body: { reservationId: reserva.body!.reservationId },
+      });
+      expect(orden.status, orden.texto).toBe(201);
+      expect(orden.body!.sellerId).toBe(v.sellerId);
+    });
+  });
+
+  // ─── Lo que lee la app ───────────────────────────────────────────────────
+
+  it('el estado que lee la app distingue la regla de la falta', async () => {
+    /**
+     * Los tres campos existen porque son tres preguntas distintas, y el que se
+     * confundió una vez fue `obligatoriaParaVender`: valía `false` para un
+     * vendedor YA conectado, y leído desde afuera parecía decir que Mercado
+     * Pago no era obligatorio.
+     */
+    const v = await vendedorSinConectar();
+
+    const sin = await conRegla(() =>
+      call('GET', '/api/v1/sellers/me/payment-account', { token: v.token }),
+    );
+    expect(sin.body!.mercadoPagoObligatorio).toBe(true);
+    expect(sin.body!.puedeVender).toBe(false);
+    expect(sin.body!.faltaConectar).toBe(true);
+
+    const inicio = await call('POST', '/api/v1/sellers/me/payment-account/connect', {
+      token: v.token,
+    });
+    const state = new URL(inicio.body!.url as string).searchParams.get('state')!;
+    canjearCodigo.mockResolvedValue(tokensFalsos('estado'));
+    await call(
+      'GET',
+      `/${RUTA_OAUTH_MERCADOPAGO}/callback?code=TG-ok&state=${encodeURIComponent(state)}`,
+    );
+
+    const con = await conRegla(() =>
+      call('GET', '/api/v1/sellers/me/payment-account', { token: v.token }),
+    );
+    // La REGLA no cambia porque este vendedor se haya conectado.
+    expect(con.body!.mercadoPagoObligatorio).toBe(true);
+    expect(con.body!.puedeVender).toBe(true);
+    expect(con.body!.faltaConectar).toBe(false);
+
+    /**
+     * Las dos respuestas quedan escritas para el test de contrato de Flutter.
+     *
+     * Ya pasó una vez y costó caro: un test de contrato escrito con un JSON
+     * inventado a mano pasaba en verde mientras la app mostraba `$0,00`. La
+     * regla que salió de ahí es que el JSON de un test de contrato **se copia
+     * de una respuesta real**.
+     *
+     * Este es el lugar donde existe la respuesta real de una cuenta conectada:
+     * es el único test que recorre el callback entero.
+     */
+    guardarContrato('cobros-sin-conectar', sin.body);
+    guardarContrato('cobros-conectada', con.body);
   });
 });

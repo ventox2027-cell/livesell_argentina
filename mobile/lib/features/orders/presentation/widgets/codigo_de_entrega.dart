@@ -107,8 +107,12 @@ class _CodigoDeEntregaState extends State<CodigoDeEntrega> {
           const SizedBox(height: Gap.sm),
           const Text(
             // El único texto que importa de toda la tarjeta.
-            'Dáselo sólo cuando tengas el producto en las manos. '
-            'Con ese número, el vendedor marca la entrega como hecha.',
+            //
+            // Dice "o repartidor" porque muchas veces no es el vendedor quien
+            // toca el timbre, y alguien que lee sólo "vendedor" duda de si
+            // dárselo a la persona que tiene enfrente.
+            'Decíselo al vendedor o al repartidor únicamente cuando tengas el '
+            'producto en tus manos. Con ese número queda marcada la entrega.',
             style: TextStyle(fontSize: 12.5, color: AppColor.textoSuave, height: 1.45),
           ),
         ],

@@ -1,5 +1,14 @@
 import { randomInt, timingSafeEqual } from 'node:crypto';
 
+import {
+  cifrar,
+  descifrar,
+  desempaquetar,
+  empaquetar,
+  estaEmpaquetado,
+  SecretoAdulteradoError,
+} from '@/shared/crypto/secretos';
+
 /**
  * El código de entrega.
  *
@@ -16,31 +25,49 @@ import { randomInt, timingSafeEqual } from 'node:crypto';
  * depender de la palabra de una sola parte.
  *
  * ═══════════════════════════════════════════════════════════════════════════
- * POR QUÉ NO SE GUARDA HASHEADO
+ * NO SE HASHEA — SE CIFRA
  * ═══════════════════════════════════════════════════════════════════════════
  *
- * Fue una decisión deliberada y va explicada porque contradice el reflejo
- * habitual.
+ * Va explicado porque contradice el reflejo habitual, y porque la decisión
+ * cambió: durante un tiempo se guardó en texto plano.
+ *
+ * ─── Por qué el hash es imposible, no indeseable ───
  *
  * Un hash sirve cuando el secreto lo tiene una persona y el sistema sólo
  * necesita **verificarlo**. Acá el comprador tiene que poder **leerlo** cada
  * vez que abre su pedido: no es una contraseña que se memoriza, es un número
- * que se muestra cuando llega el repartidor, quizás días después.
+ * que se dice en la puerta cuando llega el repartidor, quizás días después.
  *
- * Con hash habría que mostrarlo una sola vez y perderlo, o guardarlo cifrado —
- * y el cifrado con la clave en el mismo servidor protege contra un volcado de
- * base, no contra el acceso a la aplicación, que es el vector realista.
+ * Con hash habría que mostrarlo una sola vez y que lo pierda quien reinstale la
+ * app o cambie de teléfono. No es una decisión de seguridad: es que el sistema
+ * dejaría de funcionar.
  *
- * Lo que sí se hace:
+ * ─── Por qué sí se cifra ───
+ *
+ * El cifrado con sobre (`shared/crypto/secretos.ts`) sí permite volver a leer,
+ * y la llave vive en una variable de entorno, fuera de la base. Un respaldo, una
+ * réplica o un volcado que alguien hizo para depurar dejan de contener códigos
+ * utilizables.
+ *
+ * Lo que NO resuelve, y hay que tenerlo claro: quien tenga acceso al proceso
+ * puede descifrar. Y la amenaza principal sigue siendo otra —un vendedor
+ * marcando entregas que no hizo— contra la que lo que protege es que él nunca
+ * ve el código, no el cifrado.
+ *
+ * Se hace igual porque cuesta casi nada y cubre una clase de incidente
+ * completa: la filtración del contenido de la base sin acceso al servidor.
+ *
+ * ⚠️ El precio es real y hay que saberlo: **si se pierde la llave, los códigos
+ * en curso no se pueden leer ni verificar**. Es la misma llave que cifra los
+ * tokens de Mercado Pago, así que perderla ya era un incidente mayor.
+ *
+ * Lo demás, que no cambió:
  *
  *   · el vendedor **nunca** puede consultarlo: no está en ninguna respuesta
  *     suya, y el endpoint de confirmación sólo compara;
  *   · no aparece en logs (ver la redacción de Pino);
  *   · se compara en tiempo constante;
  *   · un solo uso, con tope de intentos y bloqueo temporal.
- *
- * La amenaza real no es alguien leyendo la base: es un vendedor marcando
- * entregas que no hizo. Contra eso, el hash no aporta nada.
  */
 
 /**
@@ -90,6 +117,70 @@ export function codigoCoincide(ingresado: string, esperado: string): boolean {
   const b = Buffer.from(esperado, 'utf8');
   if (a.length !== b.length) return false;
   return timingSafeEqual(a, b);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GUARDADO
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Prepara un código para guardarlo en la base.
+ *
+ * ─── Por qué la llave es un parámetro y no `env` ───
+ *
+ * Este módulo se prueba sin base de datos y sin configuración. Leer `env` acá
+ * adentro lo ataría al arranque de la aplicación y obligaría a montar medio
+ * sistema para probar una función de doce líneas.
+ *
+ * ─── Por qué `null` es un valor aceptado ───
+ *
+ * Un servidor sin `CREDENTIALS_ENCRYPTION_KEY` —el arranque mínimo de alguien
+ * que clona el repositorio— tiene que seguir funcionando. Guarda el código en
+ * plano, que es exactamente lo que hacía antes de existir esta función.
+ *
+ * No es una puerta trasera silenciosa: sin esa llave tampoco hay Mercado Pago,
+ * así que ese servidor no cobra ni entrega nada real.
+ */
+export function guardarCodigo(codigo: string, llave: Buffer | null): string {
+  if (!llave) return codigo;
+  return empaquetar(cifrar(codigo, llave));
+}
+
+/**
+ * Lee un código guardado, cifrado o no.
+ *
+ * ─── Los códigos viejos ───
+ *
+ * Las órdenes despachadas antes de este cambio tienen seis dígitos en plano en
+ * la columna. No se migran: en dos semanas no queda ninguna sin entregar, y una
+ * migración que cifra filas es un script que puede fallar a la mitad y dejar
+ * pedidos que nadie puede confirmar.
+ *
+ * ─── Por qué la condición es "son seis dígitos" y no "no parece un sobre" ───
+ *
+ * La segunda forma —devolver tal cual todo lo que no empiece con `v1.`— es la
+ * que se escribió primero y es peligrosa: cualquier cosa que termine en esa
+ * columna por un error de código sale de acá como si fuera un código válido.
+ *
+ * Lo legado tiene una forma exacta y conocida, garantizada por la restricción
+ * que la base tenía cuando se escribió. Todo lo demás **tiene** que ser un
+ * sobre, y si no lo es, es un error.
+ *
+ * Lanza `SecretoAdulteradoError` si no es ninguna de las dos cosas, o si estaba
+ * cifrado y no se puede descifrar. Eso significa que la llave no es la que
+ * corresponde o que alguien tocó la fila, y en los dos casos hay que fallar
+ * ruidosamente.
+ */
+export function leerCodigoGuardado(guardado: string, llave: Buffer | null): string {
+  if (esCodigoEnClaro(guardado)) return guardado;
+  if (!estaEmpaquetado(guardado)) throw new SecretoAdulteradoError();
+  if (!llave) throw new SecretoAdulteradoError();
+  return descifrar(desempaquetar(guardado), llave);
+}
+
+/** La forma exacta de un código de antes del cifrado. */
+function esCodigoEnClaro(valor: string): boolean {
+  return valor.length === LARGO_DEL_CODIGO && /^[0-9]+$/.test(valor);
 }
 
 export type MotivoDeRechazo =

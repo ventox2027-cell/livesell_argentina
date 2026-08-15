@@ -5,7 +5,9 @@ import { env } from '@/config/env.schema';
 import { AuditService } from '@/shared/audit/audit.service';
 import { DomainError } from '@/shared/errors/domain.error';
 import { DomainEvent, DomainEventBus } from '@/shared/events/domain-events';
+import { leerLlave } from '@/shared/crypto/secretos';
 import { MetricsService } from '@/shared/observability/metrics.service';
+import { SellerOAuthService } from '@/modules/payments/seller-oauth.service';
 import { PrismaService } from '@/shared/prisma/prisma.service';
 import { newId } from '@/shared/utils/id';
 
@@ -18,6 +20,8 @@ import {
 import {
   finDelBloqueo,
   generarCodigoDeEntrega,
+  guardarCodigo,
+  leerCodigoGuardado,
   verificarCodigo,
 } from './delivery-code';
 import { calcularPrecio, referenciaDeOrden, verificarCoherencia } from './pricing';
@@ -134,7 +138,23 @@ export class OrdersService {
     private readonly audit: AuditService,
     private readonly events: DomainEventBus,
     private readonly metrics: MetricsService,
+    private readonly sellerOAuth: SellerOAuthService,
   ) {}
+
+  /**
+   * La llave con la que se cifra el código de entrega, o `null` si no hay.
+   *
+   * Es la misma que cifra los tokens de Mercado Pago. No se guarda en un campo:
+   * `leerLlave` valida en cada llamada, y el costo de eso —parsear 32 bytes de
+   * base64— es irrelevante al lado de la consulta a la base que la acompaña
+   * siempre.
+   *
+   * `null` y no una excepción cuando falta: un servidor recién clonado, sin
+   * llave, tiene que poder despachar un pedido de prueba. Ver `guardarCodigo`.
+   */
+  private get llaveDeCodigos(): Buffer | null {
+    return env.CREDENTIALS_ENCRYPTION_KEY ? leerLlave(env.CREDENTIALS_ENCRYPTION_KEY) : null;
+  }
 
   // ═══════════════════════════════════════════════════════════════════════
   // CREAR
@@ -235,6 +255,28 @@ export class OrdersService {
     if (tienda.status !== 'ACTIVE' || producto.status !== 'ACTIVE' || producto.deletedAt) {
       throw new DomainError('NOT_PURCHASABLE', 'Este producto ya no está disponible');
     }
+
+    /**
+     * Sin Mercado Pago conectado no se crea la orden.
+     *
+     * ═══════════════════════════════════════════════════════════════════════
+     * POR QUÉ ACÁ Y NO SÓLO AL COBRAR
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * Publicar y transmitir ya están bloqueados, así que en teoría no debería
+     * existir un producto comprable de un vendedor sin cuenta. Pero sí hay un
+     * caso real: **los productos publicados ANTES de la regla**. Esos siguen
+     * publicados a propósito —no se rompe lo que ya estaba— y alguien puede
+     * intentar comprarlos.
+     *
+     * Cortar recién al cobrar sería peor: la persona aparta stock, carga su
+     * dirección, entra el número de tarjeta, y recién ahí se entera. Además
+     * deja una orden huérfana y unidades reservadas cinco minutos por una
+     * compra que nunca podía completarse.
+     *
+     * Se corta al crear, que es el primer momento en que se sabe.
+     */
+    await this.sellerOAuth.exigirParaVender(tienda.seller.id, 'comprar');
 
     // 4 · Dirección de entrega.
     const direccion = await this.direccionParaEnviar(buyerId, params.addressId);
@@ -396,10 +438,12 @@ export class OrdersService {
         /**
          * El código de entrega sale SÓLO acá.
          *
-         * Es el detalle del comprador, resuelto con  en el WHERE. El
+         * Es el detalle del comprador, resuelto con `buyerId` en el WHERE. El
          * vendedor tiene sus propios endpoints y ninguno lo incluye: si pudiera
          * leerlo, podría marcar entregado sin haber entregado y todo el
          * mecanismo no serviría para nada.
+         *
+         * Sale cifrado de la base y se descifra abajo, antes de devolverlo.
          */
         deliveryCode: true,
         deliveryCodeIssuedAt: true,
@@ -427,7 +471,22 @@ export class OrdersService {
       },
     });
     if (!orden) throw new OrderNotFoundError();
-    return orden;
+
+    /**
+     * El código se descifra recién acá, en el último paso antes de salir.
+     *
+     * Y se oculta si el pedido ya está entregado: después de `DELIVERED` el
+     * código no sirve para nada y seguir mostrándolo es dejar un secreto
+     * inútil a la vista en una pantalla que la persona va a volver a abrir para
+     * calificar la compra o pedir un cambio.
+     */
+    return {
+      ...orden,
+      deliveryCode:
+        orden.deliveryCode && !orden.deliveredAt
+          ? leerCodigoGuardado(orden.deliveryCode, this.llaveDeCodigos)
+          : null,
+    };
   }
 
   async listForBuyer(buyerId: string, query: { cursor?: string; limit: number }) {
@@ -557,7 +616,7 @@ export class OrdersService {
         ...this.marcaDeTiempo(hacia),
         ...(emitirCodigo
           ? {
-              deliveryCode: generarCodigoDeEntrega(),
+              deliveryCode: guardarCodigo(generarCodigoDeEntrega(), this.llaveDeCodigos),
               deliveryCodeIssuedAt: new Date(),
               deliveryCodeAttempts: 0,
               deliveryCodeLockedUntil: null,
@@ -634,7 +693,11 @@ export class OrdersService {
     if (!orden) throw new OrderNotFoundError();
 
     const veredicto = verificarCodigo(codigo, {
-      codigo: orden.deliveryCode,
+      // Descifrado en memoria y sólo para comparar. No se devuelve, no se
+      // registra y no sale de esta función.
+      codigo: orden.deliveryCode
+        ? leerCodigoGuardado(orden.deliveryCode, this.llaveDeCodigos)
+        : null,
       intentos: orden.deliveryCodeAttempts,
       bloqueadoHasta: orden.deliveryCodeLockedUntil,
       entregado: orden.deliveredAt !== null,
