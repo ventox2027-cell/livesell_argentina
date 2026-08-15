@@ -66,22 +66,21 @@ muertos y FCM HTTP v1 con la credencial cargada desde fuera del repositorio.
 La app **no tiene `firebase_messaging`** y nunca obtiene un token. El parámetro
 `pushToken` existe en `loginConGoogle` y nadie se lo pasa.
 
-**Y acá hay un choque que necesita una decisión, no código:** la app de Firebase
-se creó como `com.vendox.app`, y el `applicationId` real de la app es
-`ar.livesell.livesell_spike`. Un `google-services.json` de `com.vendox.app` no
-sirve para este paquete.
+**El choque de paquetes ya está resuelto.** El 15 de agosto de 2026 se migró el
+`applicationId` a `com.vendox.app`, que es el mismo con el que está registrada
+la app en Firebase. Ver [`MIGRACION-PACKAGE.md`](MIGRACION-PACKAGE.md).
 
-Las dos salidas:
+Lo que falta para que el push llegue son tres pasos, en orden:
 
-| Opción | Qué implica |
-|---|---|
-| **Crear una app Android nueva en Firebase** con `ar.livesell.livesell_spike` | Cinco minutos. El `applicationId` queda con nombre de spike para siempre, visible en la URL de Play Store |
-| **Cambiar el `applicationId` a `com.vendox.app`** | Es el nombre definitivo y correcto. ⛔ **Está prohibido tocarlo sin autorización explícita**, y una vez publicado en Play NO se puede cambiar nunca más |
+1. **Descargar `google-services.json`** de Firebase (app Android
+   `com.vendox.app`) y dejarlo en `mobile/android/app/`. Está en `.gitignore`.
+2. **Agregar `firebase_messaging`** y el plugin de Gradle de Google Services.
+3. **Pasar el token** que devuelve al `loginConGoogle`, que ya lo acepta.
 
-Si la app se va a publicar con este identificador para siempre, conviene
-decidirlo **antes** de la primera publicación y no después.
+Los pasos 2 y 3 son código y se pueden hacer en cualquier momento. El 1 necesita
+a alguien con acceso a la consola de Firebase.
 
-→ **Necesita:** una decisión del dueño del producto.
+→ **Lo destraba:** quien administra Firebase.
 
 ### 6 · Sin verificación real de identidad de vendedores
 
@@ -149,7 +148,6 @@ la cuenta de desarrollador de Apple. No bloquea Android.
 
 Cosas que sabemos y decidimos no arreglar ahora.
 
-- **El `applicationId` dice `livesell_spike`.** Ver el hueco 5.
 - **Las tablas del spike siguen en el esquema** (`spike_*`, `SpikeOrder`,
   `SpikeCustomerCard`). No corren en producción —`env.schema.ts` lo prohíbe— y
   borrarlas es una migración destructiva que no aporta nada hoy.

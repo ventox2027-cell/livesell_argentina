@@ -5,7 +5,26 @@ plugins {
 }
 
 android {
-    namespace = "ar.livesell.livesell_spike"
+    /**
+     * ⛔ `com.vendox.app` es DEFINITIVO.
+     *
+     * Antes era `ar.livesell.livesell_spike`, heredado del proyecto descartable
+     * del Sprint 0. Se migró el 15 de agosto de 2026, antes de la primera
+     * publicación, porque **el applicationId no se puede cambiar nunca más
+     * después de publicar en Google Play**: queda en la URL de la ficha, en la
+     * identidad de la app dentro de cada teléfono, y cambiarlo obliga a subir
+     * una app nueva y pedirle a todo el mundo que la instale de cero.
+     *
+     * También es el paquete con el que está registrada la app en Firebase, y
+     * el que tiene que figurar en el cliente de OAuth de Android en Google
+     * Cloud junto con la huella SHA-1 de la clave de firma.
+     *
+     * El `namespace` es lo mismo por convención de Flutter: es el paquete de
+     * las clases generadas (`R`, `BuildConfig`) y no tiene por qué coincidir
+     * con el `applicationId`, pero mantenerlos iguales evita una fuente de
+     * confusión que no aporta nada.
+     */
+    namespace = "com.vendox.app"
 
     // 36 fijo, no flutter.compileSdkVersion: flutter_webrtc lo exige.
     // Ver la explicación completa en android/build.gradle.kts.
@@ -18,7 +37,8 @@ android {
     }
 
     defaultConfig {
-        applicationId = "ar.livesell.livesell_spike"
+        // Ver la nota de `namespace`. Es definitivo y no se toca.
+        applicationId = "com.vendox.app"
 
         // El WebRTC de LiveKit exige API 23 como mínimo.
         // maxOf y no un 23 fijo: si Flutter sube su mínimo, no lo bajamos por

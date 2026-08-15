@@ -136,6 +136,9 @@ cd mobile
 # El repo trae lib/ y pubspec.yaml, pero NO las carpetas nativas: se generan
 # para que queden con la versión y el identificador correctos.
 # `flutter create .` respeta los archivos que ya existen.
+# ⛔ HISTÓRICO. El paquete definitivo es `com.vendox.app` desde el 15/08/2026.
+#    Este comando quedó como registro de cómo se generó el proyecto del Sprint 0.
+#    Para regenerar las carpetas nativas hoy: --org com.vendox --project-name app
 flutter create . --org ar.livesell --project-name livesell_spike --platforms android,ios
 
 flutter pub get

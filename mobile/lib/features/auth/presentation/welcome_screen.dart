@@ -157,7 +157,24 @@ class _WelcomeScreenState extends ConsumerState<WelcomeScreen> {
   ///     el backend no puede decidir, porque justamente sirve para cambiar de
   ///     backend.
   List<({String etiqueta, VoidCallback accion})> _accesosDeServicio(AuthConfig config) => [
-        if (config.devLoginEnabled) (etiqueta: 'Entrar en modo prueba', accion: _accesoDePrueba),
+        /**
+         * El acceso de desarrollo lleva DOS candados, no uno.
+         *
+         * El del servidor ya existía: `env.schema.ts` prohíbe encender
+         * `AUTH_DEV_LOGIN_ENABLED` en producción. El de compilación se agregó
+         * al migrar el paquete, cuando el escaneo de la APK encontró que la
+         * hoja de este acceso —con su correo de ejemplo adentro— seguía
+         * viajando en el binario de release.
+         *
+         * No era alcanzable: el botón sólo aparece si el servidor lo habilita,
+         * y una APK de release no puede cambiar de servidor. Pero código que
+         * nunca se va a ejecutar en producción no tiene por qué estar ahí.
+         *
+         * ⚠️ El acceso de REVISIÓN de abajo es distinto y NO lleva este
+         * candado: tiene que funcionar en la APK que revisa Google.
+         */
+        if (Entorno.herramientas && config.devLoginEnabled)
+          (etiqueta: 'Entrar en modo prueba', accion: _accesoDePrueba),
 
         /**
          * El acceso de la cuenta de revisión de Google Play.
@@ -538,7 +555,7 @@ class _HojaAccesoPrueba extends StatefulWidget {
 }
 
 class _HojaAccesoPruebaState extends State<_HojaAccesoPrueba> {
-  final _ctrl = TextEditingController(text: 'prueba@livesell.ar');
+  final _ctrl = TextEditingController(text: 'prueba@vendox.com.ar');
 
   @override
   void dispose() {

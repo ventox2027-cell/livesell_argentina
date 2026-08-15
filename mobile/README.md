@@ -17,7 +17,11 @@ cd mobile
 
 # 1. Generar los proyectos nativos SIN pisar lib/ ni pubspec.yaml.
 #    `flutter create .` respeta los archivos existentes.
-flutter create . --org ar.livesell --project-name livesell_spike --platforms android,ios
+#
+#    ⛔ El identificador definitivo es `com.vendox.app`. Si algún día hay que
+#    regenerar las carpetas nativas, tiene que salir con ESE paquete: después
+#    de publicar en Google Play no se puede cambiar nunca más.
+flutter create . --org com.vendox --project-name app --platforms android,ios
 
 # 2. Dependencias
 flutter pub get

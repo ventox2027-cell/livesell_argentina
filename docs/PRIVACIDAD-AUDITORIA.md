@@ -241,11 +241,10 @@ Lo que hay que declarar, ya traducido a las categorías de Google.
 Lo que esta auditoría encontró y todavía no está resuelto.
 
 1. **Push no llega a ningún teléfono.** El backend está completo y la app no
-   registra el token. Cerrarlo exige `firebase_messaging` y un
-   `google-services.json`, y ahí aparece un choque que **necesita una decisión**:
-   la app de Firebase se creó como `com.vendox.app` y el `applicationId` real es
-   `ar.livesell.livesell_spike`. Un `google-services.json` de `com.vendox.app` no
-   sirve para este paquete.
+   registra el token. El choque de paquetes ya se resolvió —el `applicationId`
+   es `com.vendox.app` desde el 15/08/2026, igual que en Firebase— así que
+   falta bajar el `google-services.json`, agregar `firebase_messaging` y pasarle
+   el token a `loginConGoogle`, que ya lo acepta.
 2. **`privacidad@vendox.com.ar` no existe todavía.** Las dos páginas lo publican
    como canal de contacto.
 3. **Sin purga automática** para `auth_events`, `notifications` ni `reports`. La

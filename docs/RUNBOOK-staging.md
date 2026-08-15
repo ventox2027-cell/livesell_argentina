@@ -219,8 +219,7 @@ automática necesita cosas que no existen:
 
 Y antes del lanzamiento siguen pendientes, de la lista de deuda:
 
-1. **El `applicationId` es `ar.livesell.livesell_spike`.** Una vez publicado en
-   Play **no se puede cambiar nunca más**.
+1. ~~El `applicationId`~~ **RESUELTO el 15/08/2026: es `com.vendox.app`.**
 2. **El APK está firmado con la clave de debug.** Si se pierde la clave real,
    no se puede volver a publicar una actualización jamás.
 3. **Admin Lite.** Sin panel, el primer problema se atiende con `psql`.

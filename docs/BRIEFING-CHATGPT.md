@@ -251,9 +251,9 @@ un campo que falta tiene que degradar lo que se ve, nunca tumbar la pantalla.
 
 **Bloqueantes antes de publicar:**
 
-1. **`applicationId` es `ar.livesell.livesell_spike`.** Hay que cambiarlo antes
-   de subir a Play: una vez publicado **no se puede cambiar nunca más**.
-   Cambiarlo obliga a recrear el cliente OAuth de Android.
+1. ~~`applicationId`~~ **RESUELTO el 15/08/2026: es `com.vendox.app`.** Queda
+   pendiente registrar el cliente de OAuth de Android para ese paquete. Ver
+   [MIGRACION-PACKAGE.md](MIGRACION-PACKAGE.md).
 2. **El APK de release está firmado con la clave de debug.** Hay que generar
    una propia y guardarla: si se pierde, no se puede volver a publicar una
    actualización jamás.
