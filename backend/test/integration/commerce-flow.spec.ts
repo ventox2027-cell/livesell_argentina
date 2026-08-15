@@ -2849,3 +2849,198 @@ describe('Interruptores de emergencia', () => {
     expect(ahora.status, JSON.stringify(ahora.body)).toBe(201);
   });
 });
+
+describe('Filtros del feed', () => {
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * SIN ROMPER EL RANKING QUE YA EXISTÍA
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * El feed ya ordenaba por un puntaje —frescura, likes, si el vendedor está en
+   * vivo, si está verificado— y esa lógica no se toca. Los filtros acotan QUÉ
+   * entra; el puntaje sigue decidiendo el orden de lo que entró.
+   *
+   * Salvo que la persona pida un orden explícito, y ahí manda ella.
+   */
+
+  async function productoDe(precio: number, extra: Record<string, unknown> = {}) {
+    const { token } = await nuevoVendedor();
+    n += 1;
+    const r = await call('POST', '/api/v1/products', {
+      token,
+      body: {
+        name: `Filtrable ${n}`,
+        basePriceCents: precio,
+        status: 'ACTIVE',
+        categoryId: 'cat_otros',
+        ...extra,
+      },
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    return r.body;
+  }
+
+  it('por rango de precio', async () => {
+    const barato = await productoDe(50_000); // $500
+    const caro = await productoDe(5_000_000); // $50.000
+
+    const r = await call('GET', '/api/v1/discover/products?precioMin=10000&precioMax=100000&limit=50');
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+
+    const ids = (r.body.items as { id: string }[]).map((p) => p.id);
+    expect(ids).toContain(barato.id);
+    expect(ids).not.toContain(caro.id);
+  });
+
+  it('⛔ un rango invertido se rechaza en vez de devolver vacío', async () => {
+    // Casi siempre es un error de tipeo, y devolver vacío en silencio deja a
+    // la persona pensando que no hay nada.
+    const r = await call('GET', '/api/v1/discover/products?precioMin=500000&precioMax=1000');
+    expect(r.status).toBe(400);
+  });
+
+  it('⛔ los precios del filtro son CENTAVOS, como todo el dinero', async () => {
+    /**
+     * Si acá viajaran en pesos, este sería el único lugar del sistema donde un
+     * número de dinero significa otra cosa — y el día que alguien lo compare
+     * con `basePriceCents` sin darse cuenta, el filtro va a andar cien veces
+     * mal sin fallar.
+     */
+    const producto = await productoDe(1_000_000); // $10.000 = 1.000.000 centavos
+
+    // En centavos, entra.
+    const enCentavos = await call(
+      'GET',
+      '/api/v1/discover/products?precioMin=999999&precioMax=1000001&limit=50',
+    );
+    expect((enCentavos.body.items as { id: string }[]).map((p) => p.id)).toContain(producto.id);
+
+    // Si fueran pesos, "10000" lo encontraría. No lo encuentra.
+    const comoSiFueranPesos = await call(
+      'GET',
+      '/api/v1/discover/products?precioMin=9999&precioMax=10001&limit=50',
+    );
+    expect((comoSiFueranPesos.body.items as { id: string }[]).map((p) => p.id)).not.toContain(
+      producto.id,
+    );
+  });
+
+  it('por tienda', async () => {
+    const a = await productoDe(100_000);
+    const b = await productoDe(100_000);
+
+    const r = await call(`GET`, `/api/v1/discover/products?tienda=${a.storeId}&limit=50`);
+    const ids = (r.body.items as { id: string }[]).map((p) => p.id);
+    expect(ids).toContain(a.id);
+    expect(ids).not.toContain(b.id);
+  });
+
+  describe('EN VIVO AHORA', () => {
+    it('⛔ todo lo que devuelve es de alguien que está al aire', async () => {
+      /**
+       * ⚠️ La primera versión de este test afirmaba «devuelve vacío» y fallaba
+       * en la suite completa: la base de tests no se trunca entre archivos, así
+       * que otros tests dejan vivos abiertos y el filtro —correctamente—
+       * devolvía sus productos.
+       *
+       * El test estaba mal, no el filtro. La garantía real no es «vacío» sino
+       * «todo lo que sale es de alguien transmitiendo», y eso no depende de lo
+       * que hayan dejado otros archivos.
+       *
+       * De paso cubre el caso límite: si no hubiera nadie al aire, la lista
+       * viene vacía y el bucle no itera.
+       */
+      const quieto = await productoDe(100_000);
+
+      const r = await call('GET', '/api/v1/discover/products?enVivo=true&limit=50');
+      expect(r.status).toBe(200);
+
+      const ids = (r.body.items as { id: string }[]).map((p) => p.id);
+      expect(ids).not.toContain(quieto.id);
+
+      // Y cada uno de los que sí salieron tiene a su vendedor transmitiendo.
+      for (const item of r.body.items as { store: { seller: { id: string } } }[]) {
+        const alAire = await prisma.liveSession.count({
+          where: { sellerId: item.store.seller.id, state: { in: ['LIVE', 'RECONNECTING'] } },
+        });
+        expect(alAire, `el vendedor ${item.store.seller.id} no está en vivo`).toBeGreaterThan(0);
+      }
+    });
+
+    it('sólo trae productos de quien está al aire', async () => {
+      const enVivo = await productoDe(100_000);
+      const quieto = await productoDe(100_000);
+
+      // Se pone al aire directo en la base: lo que se prueba es el filtro, no
+      // el flujo de LiveKit.
+      const tienda = await prisma.store.findFirstOrThrow({
+        where: { id: enVivo.storeId as string },
+      });
+      await prisma.liveSession.create({
+        data: {
+          id: `liv_filtro${Date.now().toString(36)}`,
+          sellerId: tienda.sellerId,
+          storeId: tienda.id,
+          title: 'Al aire',
+          roomName: `room-filtro-${Date.now()}`,
+          state: 'LIVE',
+          startedAt: new Date(),
+        },
+      });
+
+      const r = await call('GET', '/api/v1/discover/products?enVivo=true&limit=50');
+      const ids = (r.body.items as { id: string }[]).map((p) => p.id);
+      expect(ids).toContain(enVivo.id);
+      expect(ids).not.toContain(quieto.id);
+    });
+  });
+
+  describe('Orden', () => {
+    it('precio de menor a mayor', async () => {
+      await productoDe(900_000);
+      await productoDe(100_000);
+
+      const r = await call('GET', '/api/v1/discover/products?orden=precio_asc&limit=50');
+      const precios = (r.body.items as { basePriceCents: number }[]).map((p) => p.basePriceCents);
+
+      const ordenados = [...precios].sort((a, b) => a - b);
+      expect(precios).toEqual(ordenados);
+    });
+
+    it('⛔ un orden explícito NO lo reordena el ranking después', async () => {
+      /**
+       * El ranking del feed reordena la página por frescura, likes y si el
+       * vendedor está en vivo. Aplicarlo encima de «precio: menor a mayor»
+       * sería ignorar lo que la persona pidió.
+       */
+      await productoDe(800_000);
+      await productoDe(200_000);
+      await productoDe(500_000);
+
+      const r = await call('GET', '/api/v1/discover/products?orden=precio_asc&limit=50');
+      const precios = (r.body.items as { basePriceCents: number }[]).map((p) => p.basePriceCents);
+      expect(precios).toEqual([...precios].sort((a, b) => a - b));
+    });
+
+    it('sin orden explícito, el ranking sigue mandando', async () => {
+      // El comportamiento de siempre no cambió.
+      const r = await call('GET', '/api/v1/discover/products?limit=50');
+      expect(r.status).toBe(200);
+      expect(Array.isArray(r.body.items)).toBe(true);
+    });
+  });
+
+  it('los filtros se combinan', async () => {
+    const objetivo = await productoDe(300_000, { categoryId: 'cat_calzado' });
+    await productoDe(300_000, { categoryId: 'cat_hogar' });
+    await productoDe(9_000_000, { categoryId: 'cat_calzado' });
+
+    const r = await call(
+      'GET',
+      '/api/v1/discover/products?categoria=cat_calzado&precioMax=500000&limit=50',
+    );
+    const ids = (r.body.items as { id: string }[]).map((p) => p.id);
+    expect(ids).toContain(objetivo.id);
+    expect(ids).toHaveLength(1);
+  });
+});

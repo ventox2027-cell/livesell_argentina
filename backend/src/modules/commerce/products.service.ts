@@ -14,6 +14,7 @@ import { slugDisponible } from '@/shared/utils/slug';
 import type {
   CreateProductDto,
   CreateVariantDto,
+  DiscoverQueryDto,
   DefinirOpcionesDto,
   PageQueryDto,
   UpdateProductDto,
@@ -524,7 +525,7 @@ export class ProductsService {
    * cambio es materializar el puntaje en una columna y ordenar por ahí. La
    * fórmula ya está aparte, así que no habría que reescribirla.
    */
-  async listDiscover(query: PageQueryDto & { q?: string; categoria?: string }) {
+  async listDiscover(query: DiscoverQueryDto) {
     /**
      * Con texto, la búsqueda manda.
      *
@@ -536,6 +537,58 @@ export class ProductsService {
       return { items: [], nextCursor: null };
     }
 
+    /**
+     * «En vivo ahora»: se resuelve ANTES de la consulta principal.
+     *
+     * ⚠️ Es el único filtro que no se puede expresar como una condición sobre
+     * `product`: depende de qué vendedores están transmitiendo en este
+     * instante, que vive en otra tabla y cambia cada pocos minutos.
+     *
+     * Se resuelve pidiendo primero la lista de vendedores al aire y filtrando
+     * por ella.
+     *
+     * El corte con cero vendedores es un atajo, no una corrección. Escribiendo
+     * esto se asumió que Prisma traduciría `in: []` a algo que devuelve todo;
+     * se comprobó contra la base y no: lo traduce a `WHERE false` y devuelve
+     * vacío, que es lo correcto. Lo que el corte ahorra es una consulta con
+     * seis joins que ya se sabe que no va a traer nada — y esta es la pantalla
+     * más visitada de la app.
+     */
+    let sellersEnVivo: string[] | null = null;
+    if (query.enVivo) {
+      const sesiones = await this.prisma.liveSession.findMany({
+        where: { state: { in: ['LIVE', 'RECONNECTING'] } },
+        select: { sellerId: true },
+        distinct: ['sellerId'],
+      });
+      sellersEnVivo = sesiones.map((s) => s.sellerId);
+      if (sellersEnVivo.length === 0) return { items: [], nextCursor: null };
+    }
+
+    /**
+     * El orden de la base.
+     *
+     * ⚠️ `relevancia` NO se ordena acá: se ordena después, con
+     * `ordenarPorPuntaje`, que es el ranking que ya existía. Acá sólo se le da
+     * un orden estable a la página —el mismo de siempre— para que la
+     * paginación por cursor siga funcionando.
+     *
+     * Los otros tres sí son órdenes de base porque son objetivos: el precio
+     * más bajo es el precio más bajo, no hay nada que ponderar.
+     */
+    const orderBy = ((): Prisma.ProductOrderByWithRelationInput[] => {
+      switch (query.orden) {
+        case 'precio_asc':
+          return [{ basePriceCents: 'asc' }, { id: 'desc' }];
+        case 'precio_desc':
+          return [{ basePriceCents: 'desc' }, { id: 'desc' }];
+        case 'nuevos':
+          return [{ createdAt: 'desc' }, { id: 'desc' }];
+        default:
+          return [{ id: 'desc' }];
+      }
+    })();
+
     const filas = await this.prisma.product.findMany({
       where: {
         ...PRODUCTO_COMPRABLE,
@@ -544,7 +597,28 @@ export class ProductsService {
         // El rubro se combina con el texto en vez de reemplazarlo: "botines"
         // dentro de Calzado es una búsqueda legítima.
         ...(query.categoria ? { categoryId: query.categoria } : {}),
+        ...(query.tienda ? { storeId: query.tienda } : {}),
+        ...(sellersEnVivo ? { store: { sellerId: { in: sellersEnVivo } } } : {}),
+
+        /**
+         * El precio filtra por `basePriceCents`, el precio del PRODUCTO.
+         *
+         * Una variante puede tener un precio distinto —el talle XXL sale más
+         * caro— y filtrar por variante haría que un producto apareciera en un
+         * rango por una combinación que quizá ni está disponible. Filtrar por
+         * el precio base es lo que la persona ve en la tarjeta del feed, que
+         * es sobre lo que está decidiendo.
+         */
+        ...(query.precioMin !== undefined || query.precioMax !== undefined
+          ? {
+              basePriceCents: {
+                ...(query.precioMin !== undefined ? { gte: query.precioMin } : {}),
+                ...(query.precioMax !== undefined ? { lte: query.precioMax } : {}),
+              },
+            }
+          : {}),
       },
+      orderBy,
       select: {
         ...PRODUCT_SELECT,
         likesCount: true,
@@ -589,7 +663,6 @@ export class ProductsService {
         },
         _count: { select: { variants: { where: { deletedAt: null, status: 'ACTIVE' } } } },
       },
-      orderBy: { id: 'desc' },
       take: query.limit + 1,
     });
 
@@ -618,6 +691,15 @@ export class ProductsService {
      */
     const pagina = this.paginar(conDisponibilidad, query.limit);
     if (idsBuscados) return pagina;
+
+    /**
+     * ⚠️ Y tampoco se aplica cuando la persona pidió un orden explícito.
+     *
+     * Alguien que eligió «precio: menor a mayor» quiere eso, no una lista
+     * reordenada por frescura y likes con el precio como una consideración
+     * más. Reordenar encima de un orden pedido es ignorar lo que pidió.
+     */
+    if (query.orden !== 'relevancia') return pagina;
 
     const vivos = await this.vendedoresEnVivo(pagina.items.map((p) => p.store.seller.id));
 

@@ -342,5 +342,51 @@ export const DiscoverQuerySchema = PageQuerySchema.extend({
    * no un error.
    */
   categoria: z.string().trim().max(40).optional(),
-});
+
+  /**
+   * ⚠️ Los precios viajan en CENTAVOS, igual que en todo el resto del sistema.
+   *
+   * Si acá viajaran en pesos, este sería el único lugar del código donde un
+   * número de dinero significa otra cosa — y el día que alguien compare este
+   * valor con `basePriceCents` sin darse cuenta, el filtro va a andar cien
+   * veces mal sin fallar.
+   */
+  precioMin: z.coerce.number().int().min(0).optional(),
+  precioMax: z.coerce.number().int().min(0).optional(),
+
+  /** Sólo lo que se puede comprar ahora. */
+  soloConStock: z.coerce.boolean().optional(),
+
+  /**
+   * Sólo productos de vendedores transmitiendo AHORA.
+   *
+   * Es el filtro que hace de VendoX otra cosa que un catálogo: «qué puedo
+   * comprar en este momento mientras alguien me lo muestra».
+   */
+  enVivo: z.coerce.boolean().optional(),
+
+  /** Productos de una tienda. Sirve para «más de esta tienda». */
+  tienda: z.string().trim().max(40).optional(),
+
+  /**
+   * Cómo se ordena.
+   *
+   * `relevancia` es el valor por omisión y **es el ranking que ya existe**:
+   * frescura, likes, si está en vivo y si el vendedor está verificado. Los
+   * otros tres son órdenes simples de base de datos.
+   *
+   * ⚠️ Con búsqueda de texto, el orden lo da la relevancia del texto y este
+   * campo se ignora. Alguien que escribió «buzo negro» quiere buzos negros, no
+   * lo más barato que haya.
+   */
+  orden: z.enum(['relevancia', 'precio_asc', 'precio_desc', 'nuevos']).default('relevancia'),
+})
+  /**
+   * Un rango invertido casi siempre es un error de tipeo, y devolver vacío en
+   * silencio deja a la persona pensando que no hay nada.
+   */
+  .refine((v) => v.precioMin === undefined || v.precioMax === undefined || v.precioMin <= v.precioMax, {
+    message: 'El precio mínimo no puede ser mayor que el máximo',
+    path: ['precioMin'],
+  });
 export type DiscoverQueryDto = z.infer<typeof DiscoverQuerySchema>;
