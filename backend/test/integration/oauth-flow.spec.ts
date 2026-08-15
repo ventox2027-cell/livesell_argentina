@@ -5,6 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 
 import type { SellerOAuthService } from '@/modules/payments/seller-oauth.service';
 import type { PrismaService } from '@/shared/prisma/prisma.service';
+import type { RedisService } from '@/shared/redis/redis.service';
 
 import { RUTA_OAUTH_MERCADOPAGO } from '@/shared/http/rutas-webhook';
 
@@ -61,6 +62,7 @@ const TEST_ENV = {
 let app: INestApplication;
 let prisma: PrismaService;
 let oauth: SellerOAuthService;
+let redis: RedisService;
 
 /** El canje contra Mercado Pago, sustituido. */
 const canjearCodigo = vi.fn();
@@ -74,6 +76,7 @@ beforeAll(async () => {
   const { MercadoPagoOAuthClient } = await import('@/modules/payments/mp-oauth.client');
   const { SellerOAuthService } = await import('@/modules/payments/seller-oauth.service');
   const { PrismaService } = await import('@/shared/prisma/prisma.service');
+  const { RedisService } = await import('@/shared/redis/redis.service');
 
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(LiveKitService)
@@ -94,6 +97,7 @@ beforeAll(async () => {
   app = await crearAppDePrueba(moduleRef);
   prisma = app.get(PrismaService);
   oauth = app.get(SellerOAuthService);
+  redis = app.get(RedisService);
 
   if (!(process.env.DATABASE_URL ?? '').includes('_test')) {
     throw new Error('Sólo corre contra una base *_test');
@@ -109,9 +113,20 @@ afterAll(async () => {
   await app?.close();
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   canjearCodigo.mockReset();
   renovar.mockReset();
+
+  /**
+   * Los contadores de límite por IP se limpian entre tests.
+   *
+   * Crear un vendedor está limitado a 3 por hora —ocupar slugs de marcas
+   * conocidas es barato— y este archivo crea uno por caso. Sin esto, del
+   * cuarto test en adelante todo devuelve 429 y los fallos apuntan al lugar
+   * equivocado.
+   */
+  const claves = await redis.client.keys('rl:*');
+  if (claves.length > 0) await redis.client.del(...claves);
 });
 
 async function call(
@@ -572,5 +587,164 @@ describe('PKCE', () => {
     // Mercado Pago comprueba que el hash del verificador coincida con el
     // desafío. Sin mandarlo, rechaza el canje.
     expect(canjearCodigo).toHaveBeenCalledWith('TG-codigo', fila.codeVerifier);
+  });
+});
+
+/**
+ * Lo que pasa cuando el verificador no cierra.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * QUIÉN VALIDA QUÉ
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * El `state` lo validamos NOSOTROS: es una fila nuestra y sabemos a qué
+ * vendedor pertenece.
+ *
+ * El verificador lo valida MERCADO PAGO: compara su hash contra el desafío que
+ * recibió al empezar. Nosotros no podemos comprobarlo —no guardamos el desafío
+ * enviado, y aunque lo guardáramos, quien decide si el canje procede es quien
+ * emite el token—.
+ *
+ * Así que lo que se prueba de nuestro lado es lo que nos toca: que el
+ * verificador correcto se mande, que un rechazo de Mercado Pago no deje la
+ * cuenta a medio conectar, y que el `state` no se pueda reusar.
+ */
+describe('PKCE cuando falla', () => {
+  /**
+   * `puedeVender` con la regla ENCENDIDA.
+   *
+   * En la suite está apagada —cien tests crean productos publicados y no
+   * tienen nada que ver con Mercado Pago— así que estos dos casos, que son
+   * justamente sobre la regla, la encienden a mano.
+   *
+   * Se toca el objeto de configuración y no `process.env` porque `env` ya está
+   * evaluado y congelado para cuando corre el test.
+   */
+  async function puedeVenderConReglaEncendida(sellerId: string): Promise<boolean> {
+    const { env } = await import('@/config/env.schema');
+    const antes = env.SELLER_MUST_CONNECT_MP;
+    (env as { SELLER_MUST_CONNECT_MP: boolean }).SELLER_MUST_CONNECT_MP = true;
+    try {
+      return await oauth.puedeVender(sellerId);
+    } finally {
+      (env as { SELLER_MUST_CONNECT_MP: boolean }).SELLER_MUST_CONNECT_MP = antes;
+    }
+  }
+
+  /** Deja un `state` vivo y devuelve lo necesario para el callback. */
+  async function autorizacionEnCurso() {
+    const v = await nuevoVendedor();
+    const inicio = await call('POST', '/api/v1/sellers/me/payment-account/connect', {
+      token: v.token,
+    });
+    const state = new URL(inicio.body!.url as string).searchParams.get('state')!;
+    return { v, state };
+  }
+
+  it('⛔ si Mercado Pago rechaza el verificador, la cuenta NO queda conectada', async () => {
+    /**
+     * Es el caso que importa. Un canje rechazado a mitad de camino no puede
+     * dejar una cuenta que la app muestre como conectada y que después no pueda
+     * cobrar: el vendedor publicaría creyendo que puede vender.
+     */
+    const { v, state } = await autorizacionEnCurso();
+
+    canjearCodigo.mockRejectedValue(
+      new Error('invalid_grant: code_verifier does not match code_challenge'),
+    );
+
+    const cb = await call(
+      'GET',
+      `/${RUTA_OAUTH_MERCADOPAGO}/callback?code=TG-codigo&state=${encodeURIComponent(state)}`,
+    );
+
+    expect(cb.texto).toContain('No pudimos conectar');
+
+    expect(
+      await prisma.sellerOAuthCredential.count({ where: { sellerId: v.sellerId } }),
+    ).toBe(0);
+    const cuenta = await prisma.sellerPaymentAccount.findFirst({
+      where: { sellerId: v.sellerId },
+    });
+    expect(cuenta?.status ?? 'NOT_CONNECTED').not.toBe('CONNECTED');
+  });
+
+  it('⛔ y ese vendedor sigue sin poder vender', async () => {
+    // La consecuencia de lo anterior, comprobada por el otro lado: si la cuenta
+    // quedara "conectada" tras un canje fallido, el bloqueo se levantaría solo.
+    const { v, state } = await autorizacionEnCurso();
+    canjearCodigo.mockRejectedValue(new Error('invalid_grant'));
+
+    await call(
+      'GET',
+      `/${RUTA_OAUTH_MERCADOPAGO}/callback?code=c&state=${encodeURIComponent(state)}`,
+    );
+
+    expect(await puedeVenderConReglaEncendida(v.sellerId)).toBe(false);
+  });
+
+  it('⛔ un state sin verificador guardado no rompe el canje', async () => {
+    /**
+     * Una autorización empezada ANTES de que existiera PKCE tiene la columna en
+     * `null`. Mandar `undefined` haría que el canje falle para esa persona, que
+     * no hizo nada mal.
+     *
+     * Es un caso de transición, pero de los que se descubren en producción una
+     * semana después del despliegue.
+     */
+    const { v, state } = await autorizacionEnCurso();
+    await prisma.oAuthState.update({ where: { state }, data: { codeVerifier: null } });
+
+    canjearCodigo.mockResolvedValue(tokensFalsos('sinv'));
+
+    const cb = await call(
+      'GET',
+      `/${RUTA_OAUTH_MERCADOPAGO}/callback?code=TG-viejo&state=${encodeURIComponent(state)}`,
+    );
+
+    expect(cb.texto).toContain('Listo');
+    // Se llamó SIN verificador, no con `undefined` disfrazado de valor.
+    expect(canjearCodigo).toHaveBeenCalledWith('TG-viejo', null);
+    expect(
+      await prisma.sellerOAuthCredential.count({ where: { sellerId: v.sellerId } }),
+    ).toBe(1);
+  });
+
+  it('⛔ el state consumido no se puede reusar aunque el canje haya fallado', async () => {
+    /**
+     * Un `state` se gasta al intentarlo, no al lograrlo. Si un canje fallido lo
+     * devolviera al ruedo, alguien podría reintentar con códigos distintos hasta
+     * que uno entre.
+     */
+    const { state } = await autorizacionEnCurso();
+    canjearCodigo.mockRejectedValue(new Error('invalid_grant'));
+
+    const url = `/${RUTA_OAUTH_MERCADOPAGO}/callback?code=c&state=${encodeURIComponent(state)}`;
+    await call('GET', url);
+
+    canjearCodigo.mockResolvedValue(tokensFalsos('segundo'));
+    const segunda = await call('GET', url);
+
+    expect(segunda.texto).toContain('No pudimos conectar');
+    // Y el segundo intento NUNCA llegó a Mercado Pago.
+    expect(canjearCodigo).toHaveBeenCalledTimes(1);
+  });
+
+  it('desconectar borra los tokens y vuelve a bloquear la venta', async () => {
+    const { v, state } = await autorizacionEnCurso();
+    canjearCodigo.mockResolvedValue(tokensFalsos('desc'));
+    await call(
+      'GET',
+      `/${RUTA_OAUTH_MERCADOPAGO}/callback?code=c&state=${encodeURIComponent(state)}`,
+    );
+
+    expect(await puedeVenderConReglaEncendida(v.sellerId)).toBe(true);
+
+    await call('DELETE', '/api/v1/sellers/me/payment-account', { token: v.token });
+
+    expect(
+      await prisma.sellerOAuthCredential.count({ where: { sellerId: v.sellerId } }),
+    ).toBe(0);
+    expect(await puedeVenderConReglaEncendida(v.sellerId)).toBe(false);
   });
 });

@@ -204,10 +204,17 @@ class _MercadoPagoScreenState extends ConsumerState<MercadoPagoScreen>
 
         if (!disponible)
           const _Aviso(
-            // Sin credenciales cargadas en el servidor. No es un error del
-            // vendedor y el texto no puede hacerle creer que hizo algo mal.
+            /**
+             * Sin credenciales cargadas en el servidor. No es un error del
+             * vendedor y el texto no puede hacerle creer que hizo algo mal.
+             *
+             * ⚠️ Antes decía "mientras tanto podés vender igual". Se sacó: dejó
+             * de ser cierto cuando conectar Mercado Pago pasó a ser requisito
+             * para publicar, y prometerle a alguien que puede vender cuando no
+             * puede es peor que no decirle nada.
+             */
             texto: 'Estamos terminando de habilitar los cobros con Mercado Pago. '
-                'Mientras tanto podés vender igual.',
+                'Te avisamos apenas puedas conectar tu cuenta.',
           )
         else if (conectada)
           OutlinedButton(
@@ -340,15 +347,34 @@ class _ComoFunciona extends StatelessWidget {
         ),
         _Punto(
           icono: Icons.percent_rounded,
-          texto: 'Mercado Pago nos descuenta $porcentaje % de comisión en el mismo '
-              'movimiento, sobre el precio del producto.',
+          /**
+           * ⚠️ La comisión de VendoX y el costo de Mercado Pago son DOS cosas
+           * distintas, y el texto anterior las mezclaba: decía que "Mercado
+           * Pago nos descuenta 6 %", como si el 6 % fuera de ellos.
+           *
+           * No lo es. VendoX cobra 6 % sobre el producto; Mercado Pago cobra lo
+           * suyo aparte, según la cuenta y el medio de pago. Confundirlos hace
+           * que el vendedor calcule mal su ganancia y después reclame.
+           */
+          texto: 'VendoX cobra una comisión del $porcentaje % sobre el precio del producto.',
         ),
         const _Punto(
           icono: Icons.local_shipping_outlined,
           // Es la duda número uno del vendedor y contestarla acá evita el
           // reclamo.
-          texto: 'No cobramos comisión sobre el envío ni sobre el costo del cobro: '
-              'esa plata es tuya para gastarla.',
+          texto: 'No cobramos comisión de VendoX sobre el envío ni sobre el costo '
+              'del procesador: esa plata es tuya para gastarla.',
+        ),
+        const _Punto(
+          icono: Icons.credit_card_outlined,
+          /**
+           * Sin porcentaje. La tasa real depende del plazo de acreditación, del
+           * medio de pago y del rubro, y la informa Mercado Pago DESPUÉS de
+           * cobrar. Escribir un número acá sería prometer algo que no
+           * controlamos.
+           */
+          texto: 'Mercado Pago aplica por separado sus costos de procesamiento, '
+              'según las condiciones de tu cuenta y del medio de pago.',
         ),
         const _Punto(
           icono: Icons.lock_outline_rounded,

@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { normalizarTexto, tieneCaracteresRotos } from '@/shared/utils/texto';
+
 import { MAX_PRICE_CENTS, MIN_PRICE_CENTS } from '@/shared/utils/money';
 import { SLUG_MAX, SLUG_MIN, esSlugReservado, esSlugValido } from '@/shared/utils/slug';
 
@@ -16,6 +18,35 @@ import { SLUG_MAX, SLUG_MIN, esSlugReservado, esSlugValido } from '@/shared/util
  * Es la clase de campo que parece inofensiva al agregarla ("total, el frontend
  * lo tiene") y que abre un agujero.
  */
+
+/**
+ * Texto que escribe una persona y que se va a mostrar.
+ *
+ * Normaliza a NFC y rechaza el carácter de reemplazo. Los dos problemas que
+ * resuelve —texto ya roto, y texto correcto escrito en dos formas Unicode
+ * distintas— no se ven en una pantalla: se ven en un buscador que no
+ * encuentra. Ver `shared/utils/texto.ts`.
+ *
+ * Se aplica en el BORDE porque es el único momento en que todavía se puede
+ * pedir el texto de nuevo. Más adentro sólo queda guardarlo o perderlo.
+ */
+function textoDePersona(min: number, max: number) {
+  return z
+    .string()
+    // ⚠️ `normalizarTexto` y no una expresión regular escrita acá: la primera
+    // versión decía `/s+/g` en vez de `/\s+/g` —una barra invertida perdida al
+    // generar el archivo— y reemplazaba la letra "s" por un espacio. "Té de
+    // hierbas" se guardaba como "Té de hierba". Lo agarró un test de
+    // codificación; a ojo no se ve.
+    .transform(normalizarTexto)
+    .refine((v) => !tieneCaracteresRotos(v), {
+      message:
+        'El texto tiene caracteres ilegibles. Suele pasar al copiar y pegar desde ' +
+        'otro programa: volvé a escribirlo.',
+    })
+    .refine((v) => v.length >= min, { message: `Mínimo ${min} caracteres` })
+    .refine((v) => v.length <= max, { message: `Máximo ${max} caracteres` });
+}
 
 /** Slug propuesto por el vendedor. Opcional: si no viene, se genera del nombre. */
 const SlugSchema = z
@@ -37,11 +68,11 @@ const PrecioSchema = z
 // ─── Sellers ────────────────────────────────────────────────────────────────
 
 export const CreateSellerSchema = z.object({
-  displayName: z.string().trim().min(2).max(60),
+  displayName: textoDePersona(2, 60),
   slug: SlugSchema.optional(),
   bio: z.string().trim().max(500).optional(),
   /** Nombre de la tienda. Si no viene, se usa el del vendedor. */
-  storeName: z.string().trim().min(2).max(60).optional(),
+  storeName: textoDePersona(2, 60).optional(),
 });
 export type CreateSellerDto = z.infer<typeof CreateSellerSchema>;
 
@@ -59,7 +90,7 @@ export type UpdateSellerDto = z.infer<typeof UpdateSellerSchema>;
 
 export const UpdateStoreSchema = z
   .object({
-    name: z.string().trim().min(2).max(60).optional(),
+    name: textoDePersona(2, 60).optional(),
     description: z.string().trim().max(1000).nullable().optional(),
     logoUrl: z.string().url().max(500).nullable().optional(),
     coverUrl: z.string().url().max(500).nullable().optional(),
@@ -165,9 +196,9 @@ export type ProductOptionInput = z.infer<typeof ProductOptionInputSchema>;
 
 export const CreateProductSchema = z
   .object({
-    name: z.string().trim().min(2).max(140),
+    name: textoDePersona(2, 140),
     slug: SlugSchema.optional(),
-    description: z.string().trim().max(5000).optional(),
+    description: textoDePersona(0, 5000).optional(),
     basePriceCents: PrecioSchema,
     compareAtPriceCents: PrecioSchema.nullable().optional(),
     categoryId: z.string().max(40).nullable().optional(),

@@ -2214,3 +2214,116 @@ describe('Sin Mercado Pago no se vende', () => {
     });
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CODIFICACIÓN
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Los acentos sobreviven la ida y la vuelta.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * EL BUG QUE ORIGINÓ ESTE BLOQUE
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * En el teléfono apareció `Vela arom�tica` en la búsqueda. Los bytes guardados
+ * en la base eran `…6f 6d EF BF BD 74…`: U+FFFD, el carácter de reemplazo. El
+ * texto estaba roto EN EL DISCO, no era un problema de cómo se mostraba.
+ *
+ * Lo escribió un script desde una consola de Windows con página de códigos
+ * 1252. La ruta viva —app, API, base— estaba bien, pero nada impedía guardar
+ * texto ya roto ni normalizaba dos formas Unicode de la misma palabra.
+ *
+ * Esto prueba las dos cosas contra PostgreSQL de verdad, que es el único lugar
+ * donde se puede verificar que los bytes son los correctos.
+ */
+describe('Codificación', () => {
+  const PALABRAS = ['Vela aromática', 'Muñeca de trapo', 'Niñez', 'Té de hierbas'];
+
+  async function crear(vendedor: { token: string }, nombre: string) {
+    n += 1;
+    return call('POST', '/api/v1/products', {
+      token: vendedor.token,
+      body: {
+        name: nombre,
+        slug: `enc-${n}-${Date.now().toString(36)}`,
+        basePriceCents: 500_000,
+        status: 'ACTIVE',
+      },
+    });
+  }
+
+  it('⛔ los acentos sobreviven de la app a la base y de vuelta', async () => {
+    const v = await nuevoVendedor();
+
+    for (const palabra of PALABRAS) {
+      const creado = await crear(v, palabra);
+      expect(creado.status, `${palabra} → ${JSON.stringify(creado.body)}`).toBe(201);
+
+      // Lo que devuelve la API.
+      expect(creado.body.name, palabra).toBe(palabra);
+
+      // Y lo que hay en la base, en BYTES. Es lo único que prueba de verdad que
+      // no se rompió: una cadena que se lee bien en la consola puede tener el
+      // carácter de reemplazo adentro.
+      const enLaBase = await prisma.$queryRawUnsafe<Array<{ hex: string }>>(
+        `select encode(convert_to(name,'UTF8'),'hex') hex from products where id = $1`,
+        creado.body.id as string,
+      );
+      expect(enLaBase[0]?.hex, palabra).toBe(Buffer.from(palabra, 'utf8').toString('hex'));
+    }
+  });
+
+  it('⛔ el texto ya roto se RECHAZA, no se guarda', async () => {
+    /**
+     * Un U+FFFD en algo que escribió una persona siempre es una decodificación
+     * fallida más arriba. Nadie lo escribe: no está en ningún teclado. Se
+     * rechaza en el borde, que es el único momento en que todavía se puede
+     * pedir el texto de nuevo.
+     */
+    const v = await nuevoVendedor();
+
+    // Exactamente como se rompió: el `á` como byte suelto de cp1252.
+    const comoLlego = Buffer.from([0xe1]).toString('utf8');
+    const r = await crear(v, `Vela arom${comoLlego}tica`);
+
+    expect(r.status, JSON.stringify(r.body)).toBe(400);
+    // El nombre EXACTO: 'Vela arom' es prefijo del producto sano que crea el
+    // test anterior, y contarlo daría un falso positivo.
+    expect(
+      await prisma.product.count({ where: { name: { contains: comoLlego } } }),
+    ).toBe(0);
+  });
+
+  it('⛔ la misma palabra en dos formas Unicode queda igual', async () => {
+    /**
+     * "á" se puede escribir como U+00E1 o como a + U+0301. Se ven idénticos y
+     * no son iguales: un producto cargado desde un iPhone no se encontraría
+     * buscando desde un Android.
+     */
+    const v = await nuevoVendedor();
+
+    const descompuesta = 'Vela aromática'.normalize('NFD');
+    const compuesta = 'Vela aromática'.normalize('NFC');
+    expect(descompuesta).not.toBe(compuesta);
+
+    const r = await crear(v, descompuesta);
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+
+    // Se guardó en la forma canónica, no como llegó.
+    expect(r.body.name).toBe(compuesta);
+  });
+
+  it('la búsqueda encuentra con y sin acento', async () => {
+    // Es donde el bug se vio. El stemmer de PostgreSQL ya lo resolvía; lo que
+    // faltaba era que el texto llegara entero.
+    const v = await nuevoVendedor();
+    await crear(v, 'Vela aromática de lavanda');
+
+    for (const q of ['aromática', 'aromatica', 'vela']) {
+      const r = await call('GET', `/api/v1/discover/products?q=${encodeURIComponent(q)}`);
+      const nombres = (r.body.items as Array<{ name: string }>).map((p) => p.name);
+      expect(nombres, q).toContain('Vela aromática de lavanda');
+    }
+  });
+});

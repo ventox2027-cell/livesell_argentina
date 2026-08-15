@@ -260,23 +260,41 @@ class SellerRepository {
   ComercioException _error(Response<dynamic> res) {
     final d = res.data;
     if (d is Map && d['error'] is Map) {
-      final msg = (d['error'] as Map)['message'];
-      final detalles = (d['error'] as Map)['details'];
+      final error = d['error'] as Map;
+      final codigo = error['codigo'] as String? ?? error['code'] as String?;
+      final msg = error['message'];
+      final detalles = error['details'];
       if (detalles is List && detalles.isNotEmpty) {
         final primero = detalles.first;
         if (primero is Map && primero['message'] is String) {
-          return ComercioException(primero['message'] as String);
+          return ComercioException(primero['message'] as String, codigo: codigo);
         }
       }
-      if (msg is String && msg.isNotEmpty) return ComercioException(msg);
+      if (msg is String && msg.isNotEmpty) {
+        return ComercioException(msg, codigo: codigo);
+      }
     }
     return ComercioException('No se pudo completar la operación.');
   }
 }
 
 class ComercioException implements Exception {
-  ComercioException(this.mensaje);
+  ComercioException(this.mensaje, {this.codigo});
+
   final String mensaje;
+
+  /// El código estable del backend. Por ejemplo MP_ACCOUNT_REQUIRED.
+  ///
+  /// La app decide con esto, nunca con el texto: el mensaje puede cambiar de
+  /// redacción en cualquier momento y el código no.
+  final String? codigo;
+
+  /// Falta conectar Mercado Pago para poder publicar o transmitir.
+  ///
+  /// Merece un getter propio porque no se resuelve mostrando el error: se
+  /// resuelve ofreciendo la pantalla de conectar. Ver ConectarMpSheet.
+  bool get requiereMercadoPago => codigo == 'MP_ACCOUNT_REQUIRED';
+
   @override
   String toString() => mensaje;
 }

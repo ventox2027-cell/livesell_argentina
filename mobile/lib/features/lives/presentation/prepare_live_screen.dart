@@ -10,6 +10,7 @@ import '../../../core/design/tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../seller/data/seller_repository.dart';
 import '../data/broadcaster_api.dart';
+import '../../seller/presentation/widgets/conectar_mp_sheet.dart';
 import '../data/broadcaster_room.dart';
 import 'seller_live_screen.dart';
 
@@ -124,6 +125,21 @@ class _PrepareLiveScreenState extends ConsumerState<PrepareLiveScreen> {
         ),
       );
     } catch (e) {
+      /**
+       * Falta conectar Mercado Pago: no se resuelve leyendo un cartel.
+       *
+       * Es el peor momento posible para un error genérico — la persona ya
+       * eligió sus productos y escribió el título. Se le ofrece conectar acá
+       * mismo y volver a intentar.
+       */
+      if (e is VivoException && e.requiereMercadoPago && mounted) {
+        final fueAConectar = await ConectarMpSheet.mostrar(
+          context,
+          AccionBloqueada.transmitir,
+        );
+        if (fueAConectar && mounted) await _salirAlAire();
+        return;
+      }
       if (mounted) AppSnack.error(context, 'No pudimos iniciar la transmisión.');
     } finally {
       if (mounted) setState(() => _preparando = false);

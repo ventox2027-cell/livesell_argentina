@@ -9,6 +9,7 @@ import '../../../shared/widgets/app_snack.dart';
 import '../../inventory/data/inventory_repository.dart';
 import '../../inventory/presentation/stock_screen.dart';
 import '../data/seller_repository.dart';
+import 'widgets/conectar_mp_sheet.dart';
 import '../domain/seller_models.dart';
 
 /// Crear y editar un producto.
@@ -86,7 +87,7 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
         }
       });
     } catch (e) {
-      if (mounted) AppSnack.error(context, e.toString());
+      if (mounted) await _mostrarError(e);
     } finally {
       if (mounted) setState(() => _cargando = false);
     }
@@ -160,10 +161,31 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
         AppSnack.exito(context, 'Guardado');
       }
     } catch (e) {
-      if (mounted) AppSnack.error(context, e.toString());
+      if (mounted) await _mostrarError(e, reintentar: _guardar);
     } finally {
       if (mounted) setState(() => _guardando = false);
     }
+  }
+
+  /// Muestra el error, salvo que sea el de Mercado Pago.
+  ///
+  /// Ese no se resuelve leyendo un cartel: se resuelve conectando la cuenta.
+  /// Mostrarlo como un error rojo cualquiera dejaría al vendedor buscando
+  /// dónde se arregla, con el producto ya cargado y sin poder publicarlo.
+  Future<void> _mostrarError(Object e, {Future<void> Function()? reintentar}) async {
+    if (e is ComercioException && e.requiereMercadoPago) {
+      final fueAConectar = await ConectarMpSheet.mostrar(context, AccionBloqueada.publicar);
+      /**
+       * El reintento se pasa sólo donde tiene sentido.
+       *
+       * Reintentar automáticamente lo que sea sería peligroso: sólo guardar es
+       * idempotente acá. Volver a disparar un borrado porque la persona fue a
+       * conectar su cuenta sería sorprendente en el peor sentido.
+       */
+      if (fueAConectar && mounted && reintentar != null) await reintentar();
+      return;
+    }
+    if (mounted) AppSnack.error(context, e.toString());
   }
 
   /// ¿Los ejes en pantalla son los mismos que ya tiene el producto?
@@ -208,7 +230,7 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
         nuevo == 'ACTIVE' ? 'Publicado. Ya lo pueden comprar.' : 'Producto ${r.etiquetaEstado.toLowerCase()}',
       );
     } catch (e) {
-      if (mounted) AppSnack.error(context, e.toString());
+      if (mounted) await _mostrarError(e);
     } finally {
       if (mounted) setState(() => _guardando = false);
     }
@@ -243,7 +265,7 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
         _huboCambios = true;
       });
     } catch (e) {
-      if (mounted) AppSnack.error(context, e.toString());
+      if (mounted) await _mostrarError(e);
     } finally {
       if (mounted) setState(() => _guardando = false);
     }
@@ -263,7 +285,7 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
         _huboCambios = true;
       });
     } catch (e) {
-      if (mounted) AppSnack.error(context, e.toString());
+      if (mounted) await _mostrarError(e);
     } finally {
       if (mounted) setState(() => _guardando = false);
     }
@@ -286,7 +308,7 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
         _huboCambios = true;
       });
     } catch (e) {
-      if (mounted) AppSnack.error(context, e.toString());
+      if (mounted) await _mostrarError(e);
     } finally {
       if (mounted) setState(() => _guardando = false);
     }
@@ -439,7 +461,7 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
       await ref.read(sellerRepositoryProvider).borrarProducto(p.id);
       if (mounted) Navigator.of(context).pop(true);
     } catch (e) {
-      if (mounted) AppSnack.error(context, e.toString());
+      if (mounted) await _mostrarError(e);
     }
   }
 }

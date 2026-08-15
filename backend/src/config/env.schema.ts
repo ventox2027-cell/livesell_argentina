@@ -340,6 +340,30 @@ export const envSchema = z
      */
     SELLER_MUST_CONNECT_MP: envBoolean(true),
 
+    /**
+     * ⛔ SÓLO DESARROLLO. Cobrar sin que el vendedor tenga cuenta conectada.
+     *
+     * ═══════════════════════════════════════════════════════════════════════
+     * POR QUÉ EXISTE Y POR QUÉ ESTÁ PROHIBIDO EN PRODUCCIÓN
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * Con esto encendido, un cobro cuyo vendedor no conectó Mercado Pago entra
+     * en la cuenta de VendoX. Eso nos convierte en intermediarios del dinero de
+     * terceros: cada venta así es plata que le debemos a alguien y que hay que
+     * girar a mano, una por una.
+     *
+     * Existe por una razón acotada: la suite de tests prueba el flujo de cobro
+     * de punta a punta —tres desenlaces, idempotencia, conciliación,
+     * devoluciones— y ninguno de esos casos trata sobre Mercado Pago
+     * Marketplace. Obligar a cada uno a montar un OAuth falso agregaría
+     * maquinaria a cien tests para probar algo que ya tiene los suyos.
+     *
+     * El refine de abajo hace que el proceso NO ARRANQUE si esto viene
+     * encendido en production o staging. No es una convención ni un comentario
+     * de advertencia: es el arranque que se niega.
+     */
+    ALLOW_PAYMENT_WITHOUT_SELLER_ACCOUNT: envBoolean(false),
+
     MP_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(60_000).default(10_000),
     PAYMENTS_SPIKE_ENABLED: envBoolean(false),
 
@@ -770,6 +794,22 @@ export const envSchema = z
    *
    * Así que si el OAuth está configurado, la llave es obligatoria.
    */
+  /**
+   * ⛔ El respaldo de cobro sin cuenta del vendedor no existe fuera de local.
+   *
+   * Con esto encendido en un servidor real, cada venta de un vendedor sin
+   * cuenta conectada entra en la nuestra — y el problema crece en silencio
+   * hasta que hay que devolver plata a mano.
+   *
+   * El proceso no arranca. Es deliberado: una variable de entorno mal copiada
+   * entre entornos es exactamente cómo esto llegaría a producción.
+   */
+  .refine((e) => !e.ALLOW_PAYMENT_WITHOUT_SELLER_ACCOUNT || esEntornoLocal(e.NODE_ENV), {
+    message:
+      'ALLOW_PAYMENT_WITHOUT_SELLER_ACCOUNT sólo puede estar encendido en development o test. ' +
+      'Fuera de ahí, un cobro sin cuenta del vendedor entra en la cuenta de VendoX.',
+    path: ['ALLOW_PAYMENT_WITHOUT_SELLER_ACCOUNT'],
+  })
   .refine((e) => !e.MP_CLIENT_ID || !!e.CREDENTIALS_ENCRYPTION_KEY, {
     message:
       'Con el OAuth de Mercado Pago configurado hace falta CREDENTIALS_ENCRYPTION_KEY. ' +

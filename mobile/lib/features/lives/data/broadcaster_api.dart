@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/api_client.dart';
@@ -43,7 +44,36 @@ class BroadcasterApi {
         if (portadaUrl != null && portadaUrl.isNotEmpty) 'coverUrl': portadaUrl,
       },
     );
+    /**
+     * ⚠️ Se comprueba el ESTADO antes de parsear.
+     *
+     * `ApiClient` usa `validateStatus: s < 500` para poder reintentar tras
+     * refrescar el token, así que un 4xx no lanza: llega como respuesta normal
+     * con el cuerpo del error adentro. Y como el parseo es defensivo, ese
+     * cuerpo se convierte en un objeto vacío en vez de en un error.
+     *
+     * Es exactamente el bug que dejó la hoja de variantes mostrando $0,00
+     * durante días. Acá el síntoma sería "no pudimos preparar la transmisión"
+     * en vez de "conectá Mercado Pago", que es lo que la persona necesita leer.
+     */
+    if (r.statusCode != 200 && r.statusCode != 201) throw _error(r);
     return VivoPreparado.fromJson(r.data!);
+  }
+
+  /// El error del backend, con su código.
+  ///
+  /// El mensaje sale del servidor —es el único lugar donde están traducidos— y
+  /// el código permite que la app decida sin mirar el texto.
+  VivoException _error(Response<dynamic> r) {
+    final d = r.data;
+    if (d is Map && d['error'] is Map) {
+      final e = d['error'] as Map;
+      final msg = e['message'];
+      if (msg is String && msg.isNotEmpty) {
+        return VivoException(msg, codigo: e['code'] as String?);
+      }
+    }
+    return VivoException('No pudimos preparar la transmisión.');
   }
 
   /// Sale al aire.
@@ -98,3 +128,17 @@ final broadcasterApiProvider =
 final miVivoAbiertoProvider = FutureProvider<MiVivoAbierto?>(
   (ref) => ref.watch(broadcasterApiProvider).miVivoAbierto(),
 );
+
+class VivoException implements Exception {
+  VivoException(this.mensaje, {this.codigo});
+
+  final String mensaje;
+  final String? codigo;
+
+  /// Falta conectar Mercado Pago. No se resuelve mostrando el error: se
+  /// resuelve ofreciendo la pantalla de conectar.
+  bool get requiereMercadoPago => codigo == 'MP_ACCOUNT_REQUIRED';
+
+  @override
+  String toString() => mensaje;
+}

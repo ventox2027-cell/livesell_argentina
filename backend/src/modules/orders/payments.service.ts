@@ -63,6 +63,25 @@ export class OrderNotPayableError extends DomainError {
   }
 }
 
+/**
+ * El vendedor no tiene cuenta de cobro conectada.
+ *
+ * No debería pasar: sin cuenta conectada no se puede publicar ni transmitir.
+ * Si llega acá es que el producto se publicó antes de esa regla, o que el
+ * vendedor desconectó entre la publicación y la compra.
+ *
+ * El mensaje habla del VENDEDOR y no de un error técnico: quien lo lee es la
+ * persona que está intentando comprar, y no hizo nada mal.
+ */
+export class VendedorSinCuentaDeCobroError extends DomainError {
+  constructor() {
+    super(
+      'SELLER_PAYMENT_ACCOUNT_MISSING',
+      'Este vendedor no está pudiendo recibir pagos en este momento. Probá más tarde.',
+    );
+  }
+}
+
 export class PaymentInFlightError extends DomainError {
   constructor() {
     super(
@@ -255,32 +274,47 @@ export class OrderPaymentsService {
 
     /**
      * ═══════════════════════════════════════════════════════════════════════
-     * DÓNDE ENTRA LA PLATA
+     * EL COBRO VA A LA CUENTA DEL VENDEDOR. SIN EXCEPCIONES.
      * ═══════════════════════════════════════════════════════════════════════
      *
-     * Si el vendedor conectó su cuenta de Mercado Pago, el cobro va **directo
-     * a la suya** y Mercado Pago nos deposita la comisión en el mismo
-     * movimiento. Nunca tocamos su plata.
+     * Si el vendedor no tiene su cuenta conectada, **el cobro no se hace**.
      *
-     * Si no la conectó, el cobro entra en la nuestra. Eso NO es el modelo
-     * definitivo —nos convierte en intermediarios del dinero de terceros— y
-     * está acá sólo para que el sistema funcione durante la beta, mientras la
-     * habilitación de marketplace de Mercado Pago no esté lista.
+     * Hasta hace un rato había un respaldo: sin cuenta conectada, el cobro
+     * entraba en la de VendoX. Se eliminó, y no por prolijidad —era una bomba
+     * de tiempo:
      *
-     * ⚠️ Antes de abrir al público hay que exigir la cuenta conectada para
-     * poder publicar. Está anotado como deuda y es de las que no se pueden
-     * dejar pasar: acumular ventas sin cuenta conectada significa deberle plata
-     * a gente, y devolverla a mano.
+     *   · nos convierte en intermediarios del dinero de terceros, con todo lo
+     *     que eso implica legalmente;
+     *   · cada venta así es plata que le debemos a alguien y que hay que girar
+     *     a mano, una por una, sin ningún registro pensado para eso;
+     *   · y el problema crece en silencio: nadie se entera hasta que hay que
+     *     devolver.
      *
-     * ─── La comisión se toma de la ORDEN, no del entorno ───
+     * El bloqueo de verdad está antes —sin cuenta conectada no se puede
+     * publicar ni transmitir— así que llegar acá sin token significa que algo
+     * se saltó esa regla: un producto publicado antes de la regla, o una cuenta
+     * desconectada entre la publicación y la compra.
      *
-     * `orden.platformFeeAmount` es la foto de lo que se calculó cuando se creó
-     * el pedido, con el porcentaje vigente en ese momento. Recalcularlo acá con
-     * `env.VENDOX_PLATFORM_FEE_BPS` haría que un cambio de comisión entre la
+     * En los dos casos, cobrar sería peor que fallar.
+     *
+     * ─── La comisión sale de la ORDEN, no del entorno ───
+     *
+     *  es la foto de lo que se calculó al crear el
+     * pedido, y es **6 % del producto solamente** — no del envío ni del recargo
+     * del procesador. Recalcularlo acá haría que un cambio de comisión entre la
      * creación y el pago cobre un número distinto del que se le mostró a la
      * persona.
      */
     const sellerAccessToken = await this.tokenDelVendedor(orden.sellerId);
+
+    if (!sellerAccessToken && !env.ALLOW_PAYMENT_WITHOUT_SELLER_ACCOUNT) {
+      this.logger.error({
+        msg: '⛔ cobro rechazado: el vendedor no tiene Mercado Pago conectado',
+        orderId: orden.id,
+        sellerId: orden.sellerId,
+      });
+      throw new VendedorSinCuentaDeCobroError();
+    }
 
     let pago: ProviderPayment;
     try {
@@ -296,6 +330,10 @@ export class OrderPaymentsService {
           // La comisión sólo tiene sentido si el cobro va a la cuenta del
           // vendedor. Sobre la nuestra, cobrarnos a nosotros mismos no
           // significa nada y Mercado Pago lo rechaza.
+          // 6 % del PRODUCTO. La foto que se calculó al crear el pedido.
+          // La comisión sólo tiene sentido cobrando en la cuenta del vendedor.
+          // Sobre la nuestra —el respaldo de desarrollo— Mercado Pago la
+          // rechaza, porque sería cobrarnos a nosotros mismos.
           applicationFee: sellerAccessToken ? orden.platformFeeAmount : undefined,
           sellerAccessToken: sellerAccessToken ?? undefined,
         },
@@ -943,19 +981,12 @@ export class OrderPaymentsService {
     return env.REFUND_MAX_ATTEMPTS;
   }
   /**
-   * El token del vendedor si conectó su cuenta, o `null`.
+   * El token del vendedor, o `null` si no se puede obtener.
    *
-   * ─── Por qué devuelve `null` en vez de lanzar ───
+   * Quien llama DEBE tratar el `null` como un cobro que no se hace. Ya no hay
+   * respaldo a la cuenta de VendoX: ver el comentario largo en `cobrar()`.
    *
-   * Un vendedor sin cuenta conectada tiene que poder cobrar igual durante la
-   * beta: cortarle la venta por una función que todavía no exigimos sería
-   * romperle el negocio por una decisión nuestra.
-   *
-   * Y si el módulo no está configurado —sin credenciales de OAuth en este
-   * servidor— pasa lo mismo: no es un error, es que la función no está
-   * habilitada acá.
-   *
-   * ⛔ El token que devuelve NO se guarda en ningún lado ni se registra.
+   * ⛔ El token que devuelve no se guarda en ningún lado ni se registra.
    */
   private async tokenDelVendedor(sellerId: string): Promise<string | null> {
     if (!this.sellerOAuth.disponible) return null;

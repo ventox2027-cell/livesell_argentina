@@ -92,6 +92,19 @@ const TEST_DEFAULTS: Record<string, string> = {
    */
   SELLER_MUST_CONNECT_MP: 'false',
 
+  /**
+   * ⛔ Respaldo de cobro sin cuenta del vendedor. **Sólo acá.**
+   *
+   * La suite prueba el flujo de cobro de punta a punta —tres desenlaces,
+   * idempotencia, conciliación, devoluciones— y ninguno de esos casos trata
+   * sobre Mercado Pago Marketplace. Montar un OAuth falso en cada uno
+   * agregaría maquinaria a cien tests para probar algo que ya tiene los suyos.
+   *
+   * `env.schema.ts` impide que esto se encienda fuera de development o test:
+   * el proceso no arranca. Ver el refine.
+   */
+  ALLOW_PAYMENT_WITHOUT_SELLER_ACCOUNT: 'true',
+
 
 
   METRICS_ENABLED: 'false',

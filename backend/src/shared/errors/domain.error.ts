@@ -51,6 +51,11 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<string, number>> = {
   // decir "no tenés acceso".
   MP_ACCOUNT_REQUIRED: 422,
 
+  // 409 y no 500: el pedido es válido y el sistema funciona. Lo que pasa es
+  // que ese vendedor no puede recibir pagos en este momento. Quien compra no
+  // hizo nada mal, y reintentar más tarde puede funcionar.
+  SELLER_PAYMENT_ACCOUNT_MISSING: 409,
+
   // Moderación
   //
   // 409 y no 400: el reporte es válido, lo que pasa es que esta persona ya
