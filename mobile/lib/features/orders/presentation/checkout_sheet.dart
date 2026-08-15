@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../../core/config/runtime_config.dart';
+import '../../../core/design/componentes.dart';
 import '../../../core/design/tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../auth/presentation/widgets/fecha_de_nacimiento_sheet.dart';
@@ -428,11 +429,9 @@ class _Resumen extends StatelessWidget {
         DesgloseDePrecio(pedido: pedido),
         const SizedBox(height: Gap.lg),
 
-        FilledButton(
-          onPressed: onPagar,
-          style: FilledButton.styleFrom(minimumSize: const Size(0, 52)),
-          child: const Text('Pagar', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-        ),
+        // El CTA de marca: es el toque donde sale plata de la cuenta de una
+        // persona. Tiene que ser lo más brillante de la pantalla.
+        BotonVendoX(etiqueta: 'Pagar', icono: Icons.lock_rounded, onTap: onPagar, alto: 52),
         const SizedBox(height: Gap.sm),
         const Row(
           mainAxisAlignment: MainAxisAlignment.center,

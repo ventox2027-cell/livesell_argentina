@@ -4,6 +4,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/design/componentes.dart';
 import '../../../core/design/tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../../shared/widgets/aviso_de_pausa.dart';
@@ -661,13 +662,12 @@ class _BotonPrincipal extends ConsumerWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         const AvisoDePausa(mostrarSi: _sinCheckout, texto: Banderas.avisoDeCheckout),
-        SizedBox(
-          width: double.infinity,
-          child: FilledButton(
-            onPressed: sinCheckout ? null : () => unawaited(onComprar()),
-            style: estilo,
-            child: const Text('Comprar', style: fuente),
-          ),
+        // El CTA de marca. Es la acción que genera plata: gradiente violeta →
+        // magenta, glow corto y el hundido al apretar.
+        BotonVendoX(
+          etiqueta: 'Comprar',
+          icono: Icons.bolt_rounded,
+          onTap: sinCheckout ? null : () => unawaited(onComprar()),
         ),
       ],
     );

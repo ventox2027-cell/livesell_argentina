@@ -4,6 +4,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/design/componentes.dart';
 import '../../../core/design/tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../seller/domain/seller_models.dart';
@@ -400,13 +401,22 @@ class _ChipEstado extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final (color, icono) = switch (estado.tono) {
-      TonoDeEstado.exito => (AppColor.exito, Icons.check_circle_rounded),
-      TonoDeEstado.error => (AppColor.error, Icons.error_outline_rounded),
-      TonoDeEstado.alerta => (AppColor.alerta, Icons.info_outline_rounded),
-      TonoDeEstado.enCurso => (AppColor.alerta, Icons.schedule_rounded),
-      TonoDeEstado.pendiente => (AppColor.acento, Icons.payments_outlined),
-      TonoDeEstado.neutro => (AppColor.textoDebil, Icons.inventory_2_outlined),
+    /**
+     * El color sale del sistema de diseño; acá sólo se elige el ícono.
+     *
+     * Antes esta pantalla tenía su propia tabla de colores y el detalle del
+     * pedido tenía otra: el mismo estado salía de dos colores distintos según
+     * desde dónde se lo mirara.
+     */
+    final (color, _) = coloresDelTono(estado.tono);
+    final icono = switch (estado.tono) {
+      TonoDeEstado.exito => Icons.check_circle_rounded,
+      TonoDeEstado.error => Icons.error_outline_rounded,
+      TonoDeEstado.alerta || TonoDeEstado.info => Icons.info_outline_rounded,
+      TonoDeEstado.enCurso => Icons.schedule_rounded,
+      TonoDeEstado.pendiente => Icons.payments_outlined,
+      TonoDeEstado.vivo => Icons.sensors_rounded,
+      TonoDeEstado.neutro => Icons.inventory_2_outlined,
     };
 
     return Row(

@@ -11,10 +11,25 @@ import 'tokens.dart';
 /// producto se convierte en una búsqueda por todo el proyecto y siempre queda
 /// alguno viejo.
 ThemeData buildAppTheme() {
+  /**
+   * `secondary` es cyan, no una copia del violeta.
+   *
+   * Material lo usa para lo que está seleccionado o resaltado sin ser la
+   * acción principal: la pestaña activa, el chip elegido, el cursor de un
+   * campo. Ese es exactamente el trabajo del cyan en la paleta VendoX —
+   * información y selección— y el del violeta es otro: la acción que genera
+   * plata.
+   *
+   * Cuando los dos eran el mismo color, un chip seleccionado se veía igual que
+   * un botón de comprar, y la única forma de saber cuál hacía qué era tocarlo.
+   */
   const esquema = ColorScheme.dark(
     primary: AppColor.acento,
     onPrimary: Colors.white,
-    secondary: AppColor.acento,
+    secondary: AppColor.info,
+    onSecondary: AppColor.sobreCyan,
+    tertiary: AppColor.exito,
+    onTertiary: AppColor.sobreLima,
     surface: AppColor.superficie,
     onSurface: AppColor.texto,
     error: AppColor.error,
@@ -124,12 +139,140 @@ ThemeData buildAppTheme() {
       dragHandleColor: AppColor.borde,
     ),
     dividerTheme: const DividerThemeData(color: AppColor.borde, thickness: 1, space: 1),
+
+    /**
+     * ═══════════════════════════════════════════════════════════════════════
+     * LOS CONTROLES CHICOS TAMBIÉN SON LA MARCA
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * Un switch celeste de Material adentro de una app violeta y magenta se
+     * nota más que un botón mal pintado, porque aparece en pantallas de
+     * ajustes donde no hay nada más que mirar.
+     *
+     * Todo lo de acá abajo existía con los valores por defecto de Material 3.
+     */
+
+    /// Prendido = violeta: es una acción, cambia algo.
+    switchTheme: SwitchThemeData(
+      thumbColor: WidgetStateProperty.resolveWith((estados) {
+        if (estados.contains(WidgetState.disabled)) return AppColor.inactivo;
+        if (estados.contains(WidgetState.selected)) return Colors.white;
+        return AppColor.textoDebil;
+      }),
+      trackColor: WidgetStateProperty.resolveWith((estados) {
+        if (estados.contains(WidgetState.disabled)) return AppColor.superficieAlta;
+        if (estados.contains(WidgetState.selected)) return AppColor.acento;
+        return AppColor.superficieAlta;
+      }),
+      trackOutlineColor: WidgetStateProperty.resolveWith((estados) {
+        if (estados.contains(WidgetState.selected)) return AppColor.acento;
+        return AppColor.borde;
+      }),
+    ),
+
+    checkboxTheme: CheckboxThemeData(
+      fillColor: WidgetStateProperty.resolveWith((estados) {
+        if (estados.contains(WidgetState.selected)) return AppColor.acento;
+        return Colors.transparent;
+      }),
+      checkColor: const WidgetStatePropertyAll(Colors.white),
+      side: const BorderSide(color: AppColor.borde, width: 1.5),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.all(Radius.circular(Redondeo.sm / 2)),
+      ),
+    ),
+
+    radioTheme: RadioThemeData(
+      fillColor: WidgetStateProperty.resolveWith((estados) {
+        if (estados.contains(WidgetState.selected)) return AppColor.acento;
+        return AppColor.textoDebil;
+      }),
+    ),
+
+    /// Un chip elegido es información —«estás filtrando por esto»—, no una
+    /// acción. Por eso cyan y no violeta.
+    chipTheme: const ChipThemeData(
+      backgroundColor: AppColor.superficieAlta,
+      selectedColor: AppColor.infoSuave,
+      disabledColor: AppColor.superficie,
+      labelStyle: TextStyle(
+        color: AppColor.textoSuave,
+        fontSize: 13.5,
+        fontWeight: FontWeight.w500,
+      ),
+      secondaryLabelStyle: TextStyle(
+        color: AppColor.info,
+        fontSize: 13.5,
+        fontWeight: FontWeight.w600,
+      ),
+      side: BorderSide(color: AppColor.borde),
+      shape: StadiumBorder(),
+      padding: EdgeInsets.symmetric(horizontal: Gap.md, vertical: Gap.sm),
+      showCheckmark: false,
+    ),
+
+    /// La pestaña activa, en cyan. Navegar es orientarse, no comprar.
+    navigationBarTheme: NavigationBarThemeData(
+      backgroundColor: AppColor.superficie,
+      indicatorColor: AppColor.infoSuave,
+      surfaceTintColor: Colors.transparent,
+      elevation: 0,
+      labelTextStyle: WidgetStateProperty.resolveWith((estados) {
+        final activo = estados.contains(WidgetState.selected);
+        return TextStyle(
+          fontSize: 11.5,
+          fontWeight: activo ? FontWeight.w600 : FontWeight.w500,
+          color: activo ? AppColor.info : AppColor.textoDebil,
+        );
+      }),
+      iconTheme: WidgetStateProperty.resolveWith((estados) {
+        final activo = estados.contains(WidgetState.selected);
+        return IconThemeData(
+          size: 24,
+          color: activo ? AppColor.info : AppColor.textoDebil,
+        );
+      }),
+    ),
+
+    tabBarTheme: const TabBarThemeData(
+      labelColor: AppColor.info,
+      unselectedLabelColor: AppColor.textoDebil,
+      indicatorColor: AppColor.info,
+      dividerColor: AppColor.borde,
+    ),
+
+    sliderTheme: const SliderThemeData(
+      activeTrackColor: AppColor.acento,
+      inactiveTrackColor: AppColor.superficieAlta,
+      thumbColor: Colors.white,
+      overlayColor: AppColor.acentoSuave,
+    ),
+
+    dialogTheme: DialogThemeData(
+      backgroundColor: AppColor.superficie,
+      surfaceTintColor: Colors.transparent,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(Redondeo.lg)),
+      titleTextStyle: base.titleLarge?.copyWith(
+        color: AppColor.texto,
+        fontWeight: FontWeight.w600,
+      ),
+      contentTextStyle: const TextStyle(color: AppColor.textoSuave, height: 1.45),
+    ),
+
+    /// El indeterminado es cyan, no violeta.
+    ///
+    /// Un spinner no es una acción: es información —«esperá»—. Con el violeta
+    /// del CTA, media pantalla de carga parecía llena de botones.
+    progressIndicatorTheme: const ProgressIndicatorThemeData(
+      color: AppColor.info,
+      linearTrackColor: AppColor.superficieAlta,
+      circularTrackColor: Colors.transparent,
+    ),
     snackBarTheme: SnackBarThemeData(
       backgroundColor: AppColor.superficieAlta,
       contentTextStyle: const TextStyle(color: AppColor.texto),
       behavior: SnackBarBehavior.floating,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(Redondeo.md)),
     ),
-    progressIndicatorTheme: const ProgressIndicatorThemeData(color: AppColor.acento),
   );
 }

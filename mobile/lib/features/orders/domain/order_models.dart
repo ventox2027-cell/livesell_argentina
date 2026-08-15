@@ -7,7 +7,14 @@
 /// y se cobraría otro — y el que se cobra siempre gana.
 library;
 
+import '../../../core/design/componentes.dart';
 import '../../seller/domain/seller_models.dart';
+
+// El tono de un estado es una decisión VISUAL, no de negocio: vive en el
+// sistema de diseño y se reexporta acá para que las pantallas de pedidos no
+// tengan que importar dos archivos. Antes había dos enums con el mismo nombre
+// y significados distintos.
+export '../../../core/design/componentes.dart' show TonoDeEstado;
 
 int _int(Object? v, [int fallback = 0]) => v is int
     ? v
@@ -357,8 +364,6 @@ class Pedido {
         _ => const EstadoDePedido('En proceso', '', TonoDeEstado.neutro),
       };
 }
-
-enum TonoDeEstado { pendiente, enCurso, exito, alerta, error, neutro }
 
 class EstadoDePedido {
   const EstadoDePedido(this.titulo, this.detalle, this.tono);

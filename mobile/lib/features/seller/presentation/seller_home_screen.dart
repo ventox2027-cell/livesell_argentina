@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/design/componentes.dart';
 import '../../../core/design/tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../../shared/widgets/aviso_de_pausa.dart';
@@ -229,28 +230,48 @@ class _BotonDeVivo extends ConsumerWidget {
       children: [
         if (pausadosLosVivos)
           const AvisoDePausa(mostrarSi: _sinVivos, texto: Banderas.avisoDeVivos),
-        SizedBox(
-          width: double.infinity,
-          child: FilledButton.icon(
-            onPressed: pausadosLosVivos
-                ? null
-                : () async {
+        /**
+         * El CTA de marca: salir en vivo es la acción más importante que tiene
+         * un vendedor en toda la app.
+         *
+         * Cuando ya hay un vivo al aire cambia a magenta sólido en vez del
+         * gradiente: no es «empezá algo», es «volvé a lo que está pasando». Son
+         * dos acciones distintas y no pueden verse igual.
+         */
+        enCurso
+            ? SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: () async {
                     await Navigator.of(context).push<void>(
                       MaterialPageRoute(builder: (_) => const PrepareLiveScreen()),
                     );
                     ref.invalidate(miVivoAbiertoProvider);
                   },
-            style: FilledButton.styleFrom(
-              backgroundColor: enCurso ? AppColor.vivo : AppColor.acento,
-              minimumSize: const Size(0, 56),
-            ),
-            icon: Icon(enCurso ? Icons.sensors_rounded : Icons.videocam_rounded, size: 22),
-            label: Text(
-              enCurso ? 'Volver a tu vivo' : 'Iniciar LIVE',
-              style: const TextStyle(fontSize: 16.5, fontWeight: FontWeight.w800),
-            ),
-          ),
-        ),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppColor.vivo,
+                    minimumSize: const Size(0, 56),
+                  ),
+                  icon: const Icon(Icons.sensors_rounded, size: 22),
+                  label: const Text(
+                    'Volver a tu vivo',
+                    style: TextStyle(fontSize: 16.5, fontWeight: FontWeight.w800),
+                  ),
+                ),
+              )
+            : BotonVendoX(
+                etiqueta: 'Iniciar LIVE',
+                icono: Icons.videocam_rounded,
+                alto: 56,
+                onTap: pausadosLosVivos
+                    ? null
+                    : () async {
+                        await Navigator.of(context).push<void>(
+                          MaterialPageRoute(builder: (_) => const PrepareLiveScreen()),
+                        );
+                        ref.invalidate(miVivoAbiertoProvider);
+                      },
+              ),
       ],
     );
   }

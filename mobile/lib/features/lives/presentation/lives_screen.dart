@@ -4,6 +4,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/design/componentes.dart';
 import '../../../core/design/tokens.dart';
 import '../data/live_api.dart';
 import '../domain/live_models.dart';
@@ -127,26 +128,27 @@ class _TarjetaDeLive extends StatelessWidget {
 
             const DecoratedBox(decoration: BoxDecoration(gradient: AppColor.velo)),
 
-            // El estado, arriba a la izquierda. Con texto, no sólo color.
+            /**
+             * El estado, arriba a la izquierda. Con texto, no sólo color.
+             *
+             * El vivo al aire usa el badge de marca —el del punto que late—
+             * porque en una grilla la diferencia entre algo que está pasando
+             * ahora y una tarjeta cualquiera tiene que verse sin leer.
+             *
+             * Reconectando NO late: es una etiqueta ámbar quieta. Un punto
+             * pulsando mientras la transmisión se está cayendo diría lo
+             * contrario de lo que pasa.
+             */
             Positioned(
               top: Gap.sm,
               left: Gap.sm,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: live.estado == 'RECONNECTING' ? AppColor.alerta : AppColor.vivo,
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Text(
-                  live.estado == 'RECONNECTING' ? 'RECONECTANDO' : 'EN VIVO',
-                  style: const TextStyle(
-                    fontSize: 9.5,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 0.5,
-                    color: Colors.white,
-                  ),
-                ),
-              ),
+              child: live.estado == 'RECONNECTING'
+                  ? const Etiqueta(
+                      texto: 'RECONECTANDO',
+                      tono: TonoDeEstado.alerta,
+                      icono: Icons.wifi_tethering_error_rounded,
+                    )
+                  : const BadgeEnVivo(compacto: true),
             ),
 
             Positioned(
