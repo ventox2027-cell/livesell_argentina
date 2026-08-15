@@ -4,6 +4,7 @@ import { LiveKitService } from '@/modules/livekit/livekit.service';
 import { SellerOAuthService } from '@/modules/payments/seller-oauth.service';
 import { BloqueosService } from '@/modules/moderation/bloqueos.service';
 import { AuditService } from '@/shared/audit/audit.service';
+import { exigirHabilitada } from '@/shared/config/banderas';
 import { DomainError } from '@/shared/errors/domain.error';
 import { PrismaService } from '@/shared/prisma/prisma.service';
 import { newId } from '@/shared/utils/id';
@@ -83,6 +84,10 @@ export class LiveService {
     userId: string,
     datos: { title: string; coverUrl?: string; productIds: string[] },
   ) {
+    // Interruptor de emergencia. Va primero: si los vivos están apagados no
+    // tiene sentido resolver el vendedor ni validar nada.
+    exigirHabilitada('LIVE_ENABLED');
+
     const vendedor = await this.prisma.seller.findUnique({
       where: { userId },
       include: { stores: { where: { isPrimary: true }, take: 1 } },

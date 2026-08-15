@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 
 import { env } from '@/config/env.schema';
 import { AuditService } from '@/shared/audit/audit.service';
+import { exigirHabilitada } from '@/shared/config/banderas';
 import { DomainError } from '@/shared/errors/domain.error';
 import { DomainEvent, DomainEventBus } from '@/shared/events/domain-events';
 import { PrismaService } from '@/shared/prisma/prisma.service';
@@ -146,6 +147,19 @@ export class ProductsService {
    * habría forma de saber cuál falta.
    */
   async create(userId: string, dto: CreateProductDto) {
+    /**
+     * Interruptor de emergencia.
+     *
+     * La misma bandera cubre crear el producto y subirle fotos: «cargar un
+     * producto» es una sola operación para quien la hace, y dejar crear la
+     * ficha con las imágenes apagadas produce catálogos de productos sin foto
+     * que después nadie completa.
+     *
+     * No toca los productos que ya existen: se siguen editando, pausando y
+     * vendiendo.
+     */
+    exigirHabilitada('PRODUCT_UPLOAD_ENABLED');
+
     const { store } = await this.ownership.primaryStoreOf(userId, { requireActive: true });
 
     /**

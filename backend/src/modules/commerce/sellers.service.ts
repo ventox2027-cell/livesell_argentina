@@ -17,6 +17,7 @@ import {
 } from '@/modules/orders/shipping';
 import { AuditService } from '@/shared/audit/audit.service';
 import { DomainEvent, DomainEventBus } from '@/shared/events/domain-events';
+import { exigirHabilitada } from '@/shared/config/banderas';
 import { DomainError } from '@/shared/errors/domain.error';
 import { exigirMayoriaDeEdad } from '@/modules/users/edad';
 import { env } from '@/config/env.schema';
@@ -84,6 +85,9 @@ export class SellersService {
    * consulta posterior.
    */
   async create(userId: string, dto: CreateSellerDto): Promise<{ seller: Seller; store: Store }> {
+    // Interruptor de emergencia: frena el alta, no toca a quien ya vende.
+    exigirHabilitada('SELLER_SIGNUP_ENABLED');
+
     const existente = await this.prisma.seller.findUnique({ where: { userId } });
     if (existente) throw new SellerAlreadyExistsError();
 

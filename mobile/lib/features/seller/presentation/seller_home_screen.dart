@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/design/tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
+import '../../../shared/widgets/aviso_de_pausa.dart';
+import '../../auth/data/banderas.dart';
 import '../../auth/presentation/widgets/fecha_de_nacimiento_sheet.dart';
 import '../../auth/state/auth_providers.dart';
 import '../../lives/data/broadcaster_api.dart';
@@ -174,8 +176,13 @@ class _SinVendedorState extends ConsumerState<_SinVendedor> {
             ),
           ),
           const SizedBox(height: Gap.xl),
+          // Con el alta pausada, el botón se apaga y se dice por qué. El
+          // backend lo rechaza igual; esto evita que alguien escriba el nombre
+          // de su tienda para enterarse recién al tocar.
+          const AvisoDePausa(
+              mostrarSi: _sinAltaDeVendedores, texto: Banderas.avisoDeAltaDeVendedores),
           FilledButton(
-            onPressed: _creando ? null : _crear,
+            onPressed: _creando || pausado(ref, _sinAltaDeVendedores) ? null : _crear,
             child: _creando
                 ? const SizedBox(
                     width: 20,
@@ -207,28 +214,52 @@ class _BotonDeVivo extends ConsumerWidget {
     final vivo = abierto.valueOrNull;
     final enCurso = vivo != null;
 
-    return SizedBox(
-      width: double.infinity,
-      child: FilledButton.icon(
-        onPressed: () async {
-          await Navigator.of(context).push<void>(
-            MaterialPageRoute(builder: (_) => const PrepareLiveScreen()),
-          );
-          ref.invalidate(miVivoAbiertoProvider);
-        },
-        style: FilledButton.styleFrom(
-          backgroundColor: enCurso ? AppColor.vivo : AppColor.acento,
-          minimumSize: const Size(0, 56),
+    /**
+     * Con los vivos pausados, el botón se apaga y se explica por qué.
+     *
+     * Volver a un vivo que YA está al aire se permite igual: la bandera cierra
+     * la puerta de entrada, no corta lo que está adentro. Sacar de su propia
+     * transmisión a alguien que está vendiendo sería exactamente el daño que
+     * el interruptor intenta evitar.
+     */
+    final pausadosLosVivos = !enCurso && pausado(ref, (b) => !b.vivos);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (pausadosLosVivos)
+          const AvisoDePausa(mostrarSi: _sinVivos, texto: Banderas.avisoDeVivos),
+        SizedBox(
+          width: double.infinity,
+          child: FilledButton.icon(
+            onPressed: pausadosLosVivos
+                ? null
+                : () async {
+                    await Navigator.of(context).push<void>(
+                      MaterialPageRoute(builder: (_) => const PrepareLiveScreen()),
+                    );
+                    ref.invalidate(miVivoAbiertoProvider);
+                  },
+            style: FilledButton.styleFrom(
+              backgroundColor: enCurso ? AppColor.vivo : AppColor.acento,
+              minimumSize: const Size(0, 56),
+            ),
+            icon: Icon(enCurso ? Icons.sensors_rounded : Icons.videocam_rounded, size: 22),
+            label: Text(
+              enCurso ? 'Volver a tu vivo' : 'Iniciar LIVE',
+              style: const TextStyle(fontSize: 16.5, fontWeight: FontWeight.w800),
+            ),
+          ),
         ),
-        icon: Icon(enCurso ? Icons.sensors_rounded : Icons.videocam_rounded, size: 22),
-        label: Text(
-          enCurso ? 'Volver a tu vivo' : 'Iniciar LIVE',
-          style: const TextStyle(fontSize: 16.5, fontWeight: FontWeight.w800),
-        ),
-      ),
+      ],
     );
   }
 }
+
+/// Función con nombre, y no una lambda, para que `AvisoDePausa` pueda ser
+/// `const`: una lambda escrita en el sitio no es una expresión constante.
+bool _sinVivos(Banderas b) => !b.vivos;
+bool _sinAltaDeVendedores(Banderas b) => !b.altaDeVendedores;
 
 class _Panel extends ConsumerWidget {
   const _Panel({required this.perfil});

@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/auth_providers.dart';
+import 'banderas.dart';
 
 /// Configuración de acceso, servida por el backend.
 ///
@@ -15,6 +16,7 @@ class AuthConfig {
     this.devLoginEnabled = false,
     this.demoLoginEnabled = false,
     this.alcanzable = true,
+    this.banderas = const Banderas(),
   });
 
   /// La configuración que se usa cuando **no se pudo hablar con el backend**.
@@ -51,6 +53,9 @@ class AuthConfig {
   /// problemas distintos, con arreglos distintos, y tienen que decirse distinto.
   final bool alcanzable;
 
+  /// Qué partes del sistema están encendidas ahora mismo.
+  final Banderas banderas;
+
   bool get googleDisponible => (googleServerClientId ?? '').isNotEmpty;
   bool get appleDisponible => (appleBundleId ?? '').isNotEmpty;
 }
@@ -84,6 +89,7 @@ final authConfigProvider = FutureProvider<AuthConfig>((ref) async {
       appleBundleId: d['appleBundleId'] as String?,
       devLoginEnabled: d['devLoginEnabled'] as bool? ?? false,
       demoLoginEnabled: d['demoLoginEnabled'] as bool? ?? false,
+      banderas: Banderas.fromJson(d['banderas'] as Map<String, dynamic>?),
     );
   } on DioException {
     return const AuthConfig.sinConexion();

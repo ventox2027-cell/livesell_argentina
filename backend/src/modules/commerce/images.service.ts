@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 
 import { AuditService } from '@/shared/audit/audit.service';
+import { exigirHabilitada } from '@/shared/config/banderas';
 import { DomainError } from '@/shared/errors/domain.error';
 import { DomainEvent, DomainEventBus } from '@/shared/events/domain-events';
 import { PrismaService } from '@/shared/prisma/prisma.service';
@@ -52,6 +53,10 @@ export class ImagesService {
   ) {}
 
   async upload(userId: string, productId: string, archivo: ArchivoSubido) {
+    // Interruptor de emergencia. El caso real: alguien encontró cómo subir
+    // un ejecutable disfrazado de imagen y hay que cerrar la puerta ya.
+    exigirHabilitada('PRODUCT_UPLOAD_ENABLED');
+
     const { product } = await this.ownership.productOf(userId, productId, { requireActive: true });
 
     const cuantas = await this.prisma.productImage.count({ where: { productId: product.id } });

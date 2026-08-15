@@ -2681,3 +2681,171 @@ describe('Categorías de producto', () => {
     expect(r.body.items).toEqual([]);
   });
 });
+
+describe('Interruptores de emergencia', () => {
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * PARA QUÉ EXISTEN
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * Apagar una parte del sistema sin desplegar nada. El caso es siempre urgente:
+   * Mercado Pago devolviendo pagos duplicados, LiveKit caído, alguien subiendo
+   * ejecutables disfrazados de imagen.
+   *
+   * Lo que estos tests protegen no es que apaguen —eso es un `if`— sino que
+   * apaguen **sólo la puerta de entrada**. Una bandera que además cancela
+   * órdenes pagas o corta un vivo al aire convierte un problema en dos.
+   */
+
+  /**
+   * ⚠️ Se toca `env`, no `process.env`.
+   *
+   * `env` se evalúa y se congela al importar el módulo de configuración, así
+   * que cambiar `process.env` a esta altura no mueve nada. Es feo y sólo vale
+   * en un test; la alternativa —levantar otra aplicación entera por caso—
+   * tarda diez segundos cada vez.
+   */
+  async function conBanderaApagada<T>(bandera: string, fn: () => Promise<T>): Promise<T> {
+    const { env } = await import('@/config/env.schema');
+    const mutable = env as unknown as Record<string, boolean>;
+    const antes = mutable[bandera];
+    mutable[bandera] = false;
+    try {
+      return await fn();
+    } finally {
+      mutable[bandera] = antes;
+    }
+  }
+
+  it('el estado de las cuatro se publica en /auth/config', async () => {
+    // La app las usa para esconder lo que está pausado, en vez de dejar que
+    // alguien complete un checkout entero y choque contra un 503 al final.
+    const r = await call('GET', '/api/v1/auth/config');
+
+    expect(r.status).toBe(200);
+    expect(r.body.banderas).toEqual({
+      LIVE_ENABLED: true,
+      CHECKOUT_ENABLED: true,
+      SELLER_SIGNUP_ENABLED: true,
+      PRODUCT_UPLOAD_ENABLED: true,
+    });
+  });
+
+  it('⛔ SELLER_SIGNUP_ENABLED=false frena el alta de vendedores', async () => {
+    await conBanderaApagada('SELLER_SIGNUP_ENABLED', async () => {
+      const usuario = await nuevoUsuario();
+      n += 1;
+
+      const r = await call('POST', '/api/v1/sellers', {
+        token: usuario.token,
+        body: { displayName: `Tienda pausada ${n}` },
+      });
+
+      expect(r.status, JSON.stringify(r.body)).toBe(503);
+      expect(r.body.error.code).toBe('FEATURE_PAUSED');
+      // El mensaje no dice "bandera" ni qué se rompió: dice qué no se puede
+      // hacer ahora y que es temporal.
+      expect(r.body.error.message).toContain('pausada');
+    });
+  });
+
+  it('⛔ pero quien YA es vendedor sigue operando', async () => {
+    /**
+     * El invariante de todas las banderas: cierran la puerta de entrada, no
+     * rompen lo que está adentro. Una bandera que además suspende a los
+     * vendedores existentes convierte un problema en dos.
+     */
+    const v = await nuevoVendedor();
+
+    await conBanderaApagada('SELLER_SIGNUP_ENABLED', async () => {
+      const perfil = await call('GET', '/api/v1/sellers/me', { token: v.token });
+      expect(perfil.status).toBe(200);
+      expect(perfil.body.seller.status).toBe('ACTIVE');
+    });
+  });
+
+  it('⛔ PRODUCT_UPLOAD_ENABLED=false frena crear productos', async () => {
+    const v = await nuevoVendedor();
+
+    await conBanderaApagada('PRODUCT_UPLOAD_ENABLED', async () => {
+      n += 1;
+      const r = await call('POST', '/api/v1/products', {
+        token: v.token,
+        body: { name: `Producto pausado ${n}`, basePriceCents: 100_000 },
+      });
+
+      expect(r.status, JSON.stringify(r.body)).toBe(503);
+      expect(r.body.error.code).toBe('FEATURE_PAUSED');
+    });
+  });
+
+  it('⛔ y también subir fotos', async () => {
+    // Es la misma bandera: "cargar un producto" es una sola operación para
+    // quien la hace, y dejar crear la ficha con las imágenes apagadas produce
+    // catálogos de productos sin foto que después nadie completa.
+    const v = await nuevoVendedor();
+    const p = await crearProducto(v.token);
+
+    await conBanderaApagada('PRODUCT_UPLOAD_ENABLED', async () => {
+      const r = await subirArchivo(v.token, p.id as string, jpegDePrueba());
+      expect(r.status, JSON.stringify(r.body)).toBe(503);
+    });
+  });
+
+  it('⛔ pero los productos que ya existen se siguen editando y viendo', async () => {
+    const v = await nuevoVendedor();
+    const p = await crearProducto(v.token, { status: 'ACTIVE', categoryId: 'cat_otros' });
+
+    await conBanderaApagada('PRODUCT_UPLOAD_ENABLED', async () => {
+      const editado = await call('PATCH', `/api/v1/products/${p.id}`, {
+        token: v.token,
+        body: { basePriceCents: 200_000 },
+      });
+      expect(editado.status, JSON.stringify(editado.body)).toBe(200);
+
+      // Y sigue en el feed: apagar la carga no esconde el catálogo.
+      const feed = await call('GET', '/api/v1/discover/products?limit=50');
+      expect(feed.status).toBe(200);
+    });
+  });
+
+  it('⛔ LIVE_ENABLED=false frena preparar un vivo', async () => {
+    const v = await nuevoVendedor();
+
+    await conBanderaApagada('LIVE_ENABLED', async () => {
+      const r = await call('POST', '/api/v1/live', {
+        token: v.token,
+        body: { title: 'Vivo pausado', productIds: [] },
+      });
+
+      expect(r.status, JSON.stringify(r.body)).toBe(503);
+      expect(r.body.error.code).toBe('FEATURE_PAUSED');
+    });
+  });
+
+  it('encendidas de vuelta, todo vuelve a funcionar', async () => {
+    /**
+     * Que se puedan apagar no sirve de nada si no se pueden volver a prender.
+     *
+     * Suena obvio y no lo es: una bandera que además borra o marca algo al
+     * apagarse deja restos que impiden volver al estado anterior. Éstas son
+     * `if` sobre configuración y nada más, y este test lo fija.
+     */
+    const usuario = await nuevoUsuario();
+    n += 1;
+
+    await conBanderaApagada('SELLER_SIGNUP_ENABLED', async () => {
+      const bloqueado = await call('POST', '/api/v1/sellers', {
+        token: usuario.token,
+        body: { displayName: `Vuelve ${n}` },
+      });
+      expect(bloqueado.status).toBe(503);
+    });
+
+    const ahora = await call('POST', '/api/v1/sellers', {
+      token: usuario.token,
+      body: { displayName: `Vuelve ${n}` },
+    });
+    expect(ahora.status, JSON.stringify(ahora.body)).toBe(201);
+  });
+});

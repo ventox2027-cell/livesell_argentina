@@ -3,6 +3,7 @@ import { Prisma, type OrderStatus } from '@prisma/client';
 
 import { env } from '@/config/env.schema';
 import { AuditService } from '@/shared/audit/audit.service';
+import { exigirHabilitada } from '@/shared/config/banderas';
 import { DomainError } from '@/shared/errors/domain.error';
 import { DomainEvent, DomainEventBus } from '@/shared/events/domain-events';
 import { leerLlave } from '@/shared/crypto/secretos';
@@ -189,6 +190,10 @@ export class OrdersService {
     retiraEnPersona?: boolean;
   }): Promise<OrdenPublica> {
     const { buyerId, reservationId } = params;
+
+    // Interruptor de emergencia. Apagar el checkout impide crear órdenes
+    // NUEVAS; las que ya existen se pagan, se preparan y se entregan igual.
+    exigirHabilitada('CHECKOUT_ENABLED');
 
     // 1 · La reserva, **sólo si es de esta persona**. Ajena = no encontrada.
     const reserva = await this.prisma.inventoryReservation.findFirst({

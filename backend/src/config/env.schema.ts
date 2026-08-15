@@ -750,6 +750,24 @@ export const envSchema = z
     SENTRY_DSN: z.string().url().optional().or(z.literal('')),
     SENTRY_TRACES_SAMPLE_RATE: z.coerce.number().min(0).max(1).default(0.1),
     METRICS_ENABLED: envBoolean(true),
+
+    // ─── Interruptores de emergencia ────────────────────────────────────────
+    //
+    // Cuatro llaves de luz para apagar una parte del sistema sin desplegar
+    // nada. El caso que las justifica es siempre urgente: Mercado Pago
+    // devolviendo pagos duplicados, LiveKit caído, alguien subiendo
+    // ejecutables disfrazados de imagen, una campaña de tiendas falsas.
+    //
+    // Encendidas por omisión: una bandera que hay que acordarse de prender
+    // para que el sistema funcione es un sistema apagado esperando a que
+    // alguien se olvide.
+    //
+    // ⛔ Apagar una NO rompe lo que ya está en curso. Ver
+    // `shared/config/banderas.ts`, que es donde está la explicación completa.
+    LIVE_ENABLED: envBoolean(true),
+    CHECKOUT_ENABLED: envBoolean(true),
+    SELLER_SIGNUP_ENABLED: envBoolean(true),
+    PRODUCT_UPLOAD_ENABLED: envBoolean(true),
   })
   // El módulo de spike no tiene autenticación de usuarios porque Auth todavía
   // no existe. Se protege con una clave compartida, así que habilitarlo sin

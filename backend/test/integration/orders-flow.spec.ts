@@ -3300,3 +3300,104 @@ describe('Reportar, desde todos lados', () => {
     expect(JSON.stringify(uno.body)).toBe(JSON.stringify(dos.body));
   });
 });
+
+describe('Interruptor de emergencia del checkout', () => {
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * EL CASO QUE LO JUSTIFICA
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * Mercado Pago devuelve pagos duplicados. Hay que dejar de cobrar YA, antes
+   * de cobrarle dos veces a diez personas más, y no hay tiempo de desplegar
+   * nada.
+   *
+   * ⛔ Y en ese momento, lo peor que puede hacer el interruptor es romper las
+   * órdenes que ya existen. Alguien que pagó hace dos minutos tiene que poder
+   * recibir su pedido igual: abandonarlo a medio camino es peor que el
+   * problema que se está apagando.
+   */
+  async function conCheckoutApagado<T>(fn: () => Promise<T>): Promise<T> {
+    const { env } = await import('@/config/env.schema');
+    const mutable = env as unknown as Record<string, boolean>;
+    const antes = mutable.CHECKOUT_ENABLED;
+    mutable.CHECKOUT_ENABLED = false;
+    try {
+      return await fn();
+    } finally {
+      mutable.CHECKOUT_ENABLED = antes;
+    }
+  }
+
+  it('⛔ apagado, no se crean órdenes nuevas', async () => {
+    const comprador = await nuevoComprador();
+    const { variantId } = await nuevaVarianteConStock(3);
+    const reservaId = await reservar(comprador.token, variantId, 1);
+
+    await conCheckoutApagado(async () => {
+      const r = await call('POST', '/api/v1/orders', {
+        token: comprador.token,
+        idempotencyKey: clave('o'),
+        body: { reservationId: reservaId },
+      });
+
+      expect(r.status, JSON.stringify(r.body)).toBe(503);
+      expect(r.body.error.code).toBe('FEATURE_PAUSED');
+      // El mensaje le dice a la persona que su carrito no se pierde: sin eso,
+      // lo primero que hace es volver a intentar y duplicar la reserva.
+      expect(r.body.error.message).toContain('carrito');
+    });
+  });
+
+  it('⛔ pero una orden YA PAGA se sigue preparando y entregando', async () => {
+    /**
+     * El invariante que sostiene todo el mecanismo. Si apagar el checkout
+     * congelara los pedidos en curso, nadie lo apagaría nunca — y entonces no
+     * sirve para la emergencia para la que existe.
+     */
+    const { variantId, sellerToken } = await nuevaVarianteConStock(5);
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, variantId));
+    proveedor.proximo = { status: 'approved' };
+    await pagar(comprador.token, orden.body.id);
+    const orderId = orden.body.id as string;
+
+    await conCheckoutApagado(async () => {
+      for (const estado of ['PREPARING', 'READY_TO_SHIP', 'SHIPPED']) {
+        const r = await call('PATCH', `/api/v1/seller/orders/${orderId}/fulfillment`, {
+          token: sellerToken,
+          body: { status: estado },
+        });
+        expect(r.status, `${estado}: ${JSON.stringify(r.body)}`).toBe(200);
+      }
+
+      // Y el comprador la sigue viendo.
+      const mia = await call('GET', `/api/v1/orders/${orderId}`, { token: comprador.token });
+      expect(mia.status).toBe(200);
+      expect(mia.body.status).toBe('SHIPPED');
+    });
+  });
+
+  it('⛔ y la reserva no se pierde: al volver a encender, se compra', async () => {
+    // Apagar el checkout no puede consumir la reserva de quien estaba por
+    // pagar. Si la consumiera, la unidad quedaría trabada hasta que venza.
+    const comprador = await nuevoComprador();
+    const { variantId } = await nuevaVarianteConStock(2);
+    const reservaId = await reservar(comprador.token, variantId, 1);
+
+    await conCheckoutApagado(async () => {
+      const bloqueado = await call('POST', '/api/v1/orders', {
+        token: comprador.token,
+        idempotencyKey: clave('o'),
+        body: { reservationId: reservaId },
+      });
+      expect(bloqueado.status).toBe(503);
+    });
+
+    const ahora = await call('POST', '/api/v1/orders', {
+      token: comprador.token,
+      idempotencyKey: clave('o'),
+        body: { reservationId: reservaId },
+    });
+    expect(ahora.status, JSON.stringify(ahora.body)).toBe(201);
+  });
+});

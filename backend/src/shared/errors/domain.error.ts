@@ -145,6 +145,17 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<string, number>> = {
   PRODUCT_NOT_FOUND: 404,
   VARIANT_NOT_FOUND: 404,
   IMAGE_NOT_FOUND: 404,
+
+  /**
+   * Una parte del sistema está apagada a propósito. Ver `config/banderas.ts`.
+   *
+   * 503 y no 403: no es que esta persona no tenga permiso, es que el servicio
+   * no está disponible para nadie y es temporal. La app lo distingue —un 403
+   * la manda a explicar un problema de cuenta que no existe— y un monitoreo
+   * externo lee 503 como «degradado», que es lo que está pasando.
+   */
+  FEATURE_PAUSED: 503,
+
   CATEGORY_NOT_FOUND: 404,
   /**
    * 422 y no 400: el pedido está bien formado, lo que falla es una regla del

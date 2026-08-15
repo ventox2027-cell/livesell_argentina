@@ -2,6 +2,7 @@ import { Body, Controller, Delete, Get, Patch, Post, Req } from '@nestjs/common'
 import type { FastifyRequest } from 'fastify';
 
 import { env } from '@/config/env.schema';
+import { estadoDeLasBanderas } from '@/shared/config/banderas';
 
 import { RateLimit } from '@/shared/http/rate-limit.guard';
 import { ZodValidationPipe } from '@/shared/http/zod-validation.pipe';
@@ -85,6 +86,21 @@ export class AuthController {
        * tiene sentido ofrecer un camino que va a fallar.
        */
       demoLoginEnabled: env.DEMO_LOGIN_ENABLED,
+
+      /**
+       * Los interruptores de emergencia.
+       *
+       * La app los usa para esconder o desactivar lo que está pausado, en vez
+       * de dejar que alguien complete un checkout entero y choque contra un
+       * 503 en el último toque.
+       *
+       * ⚠️ NO es la aplicación de la regla: el backend rechaza igual, y por
+       * eso esta lista puede quedar vieja sin consecuencias. Se lee al
+       * arrancar la app, así que si una bandera se apaga con la app abierta,
+       * quien esté adentro se entera al intentar — con el mensaje del 503, que
+       * dice lo mismo.
+       */
+      banderas: estadoDeLasBanderas(),
     };
   }
 

@@ -6,6 +6,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/design/tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
+import '../../../shared/widgets/aviso_de_pausa.dart';
+import '../../auth/data/banderas.dart';
 import '../../inventory/presentation/reserve_sheet.dart';
 import '../../orders/domain/order_models.dart';
 import '../data/live_api.dart';
@@ -574,7 +576,7 @@ class _Paso extends StatelessWidget {
 ///
 /// Un "Comprar" gris al lado de un "Avisame" activo obliga a leer para entender
 /// cuál sirve. Con uno solo, lo que se puede hacer ahora es evidente.
-class _BotonPrincipal extends StatelessWidget {
+class _BotonPrincipal extends ConsumerWidget {
   const _BotonPrincipal({
     required this.faltaElegir,
     required this.variante,
@@ -592,7 +594,7 @@ class _BotonPrincipal extends StatelessWidget {
   final Future<void> Function() onIntencion;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final estilo = FilledButton.styleFrom(minimumSize: const Size(0, 52));
     const fuente = TextStyle(fontSize: 16, fontWeight: FontWeight.w700);
 
@@ -646,16 +648,33 @@ class _BotonPrincipal extends StatelessWidget {
       );
     }
 
-    return SizedBox(
-      width: double.infinity,
-      child: FilledButton(
-        onPressed: () => unawaited(onComprar()),
-        style: estilo,
-        child: const Text('Comprar', style: fuente),
-      ),
+    /**
+     * Con las compras pausadas, el botón se apaga acá y no en el checkout.
+     *
+     * Este es el último punto donde la persona todavía no invirtió nada:
+     * dejarla pasar significaría elegir talle, cargar la dirección, elegir el
+     * envío y recién en el último toque leer que no se puede comprar.
+     */
+    final sinCheckout = pausado(ref, _sinCheckout);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const AvisoDePausa(mostrarSi: _sinCheckout, texto: Banderas.avisoDeCheckout),
+        SizedBox(
+          width: double.infinity,
+          child: FilledButton(
+            onPressed: sinCheckout ? null : () => unawaited(onComprar()),
+            style: estilo,
+            child: const Text('Comprar', style: fuente),
+          ),
+        ),
+      ],
     );
   }
 }
+
+bool _sinCheckout(Banderas b) => !b.checkout;
 
 class _Aviso extends StatelessWidget {
   const _Aviso({required this.icono, required this.texto, this.color = AppColor.textoSuave});
