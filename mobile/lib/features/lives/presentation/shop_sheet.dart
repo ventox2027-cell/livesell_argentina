@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/design/tokens.dart';
+import '../../moderation/presentation/reportar_sheet.dart';
 import '../data/live_api.dart';
 import '../domain/live_models.dart';
 
@@ -309,6 +310,19 @@ class _ShopSheetState extends ConsumerState<ShopSheet> {
           // Un producto agotado se muestra igual —el catálogo es la tienda, no
           // sólo lo que hay hoy— pero no se puede elegir.
           onTap: item.agotado ? null : () => Navigator.of(context).pop(item.id),
+          /**
+           * Mantener apretado un producto lo reporta.
+           *
+           * Toque largo y no un ícono en la tarjeta: la grilla tiene dos
+           * columnas y cada elemento que se agrega le come lugar a la foto,
+           * que es lo que hace que alguien lo mire. El gesto ya se usa en el
+           * chat, así que es consistente dentro de la app.
+           */
+          onMantenerApretado: () => ReportarSheet.mostrar(
+            context,
+            targetType: 'PRODUCT',
+            targetId: item.id,
+          ),
         );
       },
     );
@@ -316,15 +330,17 @@ class _ShopSheetState extends ConsumerState<ShopSheet> {
 }
 
 class _Tarjeta extends StatelessWidget {
-  const _Tarjeta({required this.item, this.onTap});
+  const _Tarjeta({required this.item, this.onTap, this.onMantenerApretado});
 
   final ItemDeCatalogo item;
   final VoidCallback? onTap;
+  final VoidCallback? onMantenerApretado;
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onTap,
+      onLongPress: onMantenerApretado,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

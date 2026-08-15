@@ -183,7 +183,7 @@ afterAll(async () => {
  * no se trunca entre corridas: la segunda vez que se corría el archivo, los
  * `user.create` chocaban contra las filas de la vez anterior.
  */
-const CORRIDA = Date.now().toString(36).slice(-6);
+const CORRIDA = Math.random().toString(36).slice(2, 8);
 let n = 0;
 
 const idDe = (prefijo: string): string =>

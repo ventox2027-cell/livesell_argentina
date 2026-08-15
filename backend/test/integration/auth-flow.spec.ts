@@ -576,7 +576,7 @@ describe('Login de la cuenta de revisión', () => {
    * La base de tests no se trunca entre corridas a propósito —es lento y la
    * mayoría de los tests no lo necesita— así que la unicidad la aporta el id.
    */
-  const CORRIDA = Date.now().toString(36).slice(-6);
+  const CORRIDA = Math.random().toString(36).slice(2, 8);
   const idDe = (prefijo: string): string =>
     `${prefijo}_${CORRIDA}${String(n).padStart(14, '0')}`;
 

@@ -8,7 +8,7 @@ import { ZodValidationPipe } from '@/shared/http/zod-validation.pipe';
 import { BloqueosService } from './bloqueos.service';
 import { ModerationService } from './moderation.service';
 
-const DESTINOS = ['PRODUCT', 'LIVE', 'SELLER', 'REVIEW', 'CHAT_MESSAGE'] as const;
+const DESTINOS = ['PRODUCT', 'LIVE', 'SELLER', 'REVIEW', 'CHAT_MESSAGE', 'USER'] as const;
 const MOTIVOS = [
   'PROHIBIDO',
   'FALSIFICADO',

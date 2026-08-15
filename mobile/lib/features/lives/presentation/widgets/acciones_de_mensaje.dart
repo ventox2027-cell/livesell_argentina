@@ -96,6 +96,26 @@ class AccionesDeMensaje extends ConsumerWidget {
             },
           ),
 
+          ListTile(
+            leading: const Icon(Icons.person_off_outlined, color: AppColor.alerta),
+            title: Text('Reportar a ${mensaje.nombre}'),
+            subtitle: const Text(
+              // La diferencia con reportar el mensaje: acá lo que se reporta es
+              // el comportamiento sostenido, no una frase suelta. Es el caso
+              // del acoso, donde ningún mensaje solo alcanza para explicarlo.
+              'Si viene molestando, no sólo con este mensaje.',
+              style: TextStyle(fontSize: 12.5),
+            ),
+            onTap: () async {
+              Navigator.pop(context, false);
+              await ReportarSheet.mostrar(
+                context,
+                targetType: 'USER',
+                targetId: mensaje.userId,
+              );
+            },
+          ),
+
           if (soyElVendedor) ...[
             ListTile(
               leading: const Icon(Icons.delete_outline_rounded, color: AppColor.error),

@@ -399,16 +399,21 @@ export class ModerationService {
           return this.prisma.seller.count({ where: { id: targetId } });
         case 'REVIEW':
           return this.prisma.review.count({ where: { id: targetId } });
+        case 'USER':
+          return this.prisma.user.count({ where: { id: targetId, deletedAt: null } });
         case 'CHAT_MESSAGE':
           /**
-           * Los mensajes del chat del vivo NO se guardan en la base: viven en
-           * el socket y se pierden al terminar. Así que no hay nada que
-           * verificar, y el reporte se acepta igual con el texto en `detail`.
+           * Los mensajes del chat AHORA SÍ se guardan.
            *
-           * Es una limitación conocida: sin el mensaje guardado, quien modera
-           * sólo tiene la versión de quien reportó. Está anotado como deuda.
+           * Antes vivían sólo en el socket y este `case` devolvía 1 sin mirar
+           * nada: el reporte se aceptaba a ciegas y quien moderaba tenía
+           * únicamente la versión de quien reportaba.
+           *
+           * Con la tabla, un reporte sobre un mensaje inexistente se rechaza,
+           * y quien revisa ve el texto original. Ver
+           * `live/chat-moderacion.service.ts`.
            */
-          return 1;
+          return this.prisma.liveChatMessage.count({ where: { id: targetId } });
       }
     })();
 

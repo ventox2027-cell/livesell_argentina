@@ -25,6 +25,15 @@ const ENTRADAS = [
   { href: '/devoluciones', etiqueta: 'Devoluciones', contador: 'devolucionesFallidas' },
   { href: '/vendedores', etiqueta: 'Vendedores' },
   { href: '/usuarios', etiqueta: 'Usuarios' },
+  /**
+   * La cola de reportes.
+   *
+   * Va con el resto y no escondida: el día que entre alguien vendiendo algo que
+   * no se puede vender, la única pregunta que importa es cuánto tarda en
+   * desaparecer, y la respuesta depende de que alguien esté mirando esta
+   * pantalla.
+   */
+  { href: '/moderacion', etiqueta: 'Moderación' },
   { href: '/webhooks', etiqueta: 'Webhooks', contador: 'webhooksConError' },
   { href: '/auditoria', etiqueta: 'Auditoría' },
 ] as const;

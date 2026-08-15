@@ -148,7 +148,7 @@ async function call(
  * y un test que contaba registros encontraba los de ayer. Falló exactamente
  * así, y sólo cuando corría la suite entera.
  */
-const CORRIDA = Date.now().toString(36).slice(-6);
+const CORRIDA = Math.random().toString(36).slice(2, 8);
 let n = 0;
 
 /**
@@ -3098,5 +3098,164 @@ describe('Bloqueo entre personas', () => {
     expect(registros).toHaveLength(1);
     expect(registros[0]!.actorId).toBe(a.userId);
     expect(JSON.stringify(registros)).not.toContain('un relato personal');
+  });
+});
+
+describe('Reportar, desde todos lados', () => {
+  /**
+   * ═══════════════════════════════════════════════════════════════════════
+   * QUÉ CAMBIÓ
+   * ═══════════════════════════════════════════════════════════════════════
+   *
+   * Antes se podía reportar un producto, un vivo, una tienda, una reseña y
+   * —a ciegas— un mensaje de chat. Faltaban dos cosas:
+   *
+   *   · **reportar a una persona**. Quien acosa en un chat puede no tener
+   *     tienda, y sin el destino `USER` no había forma de reportarlo. Y hay
+   *     casos donde ningún mensaje suelto alcanza para explicar el problema:
+   *     lo reportable es el comportamiento sostenido;
+   *   · **verificar que el mensaje exista**. El `case` de `CHAT_MESSAGE`
+   *     devolvía 1 sin mirar nada, porque los mensajes no se guardaban.
+   */
+
+  it('se puede reportar a una persona', async () => {
+    const denunciante = await nuevoUsuario();
+    const denunciado = await nuevoUsuario();
+
+    const r = await call('POST', '/api/v1/reports', {
+      token: denunciante.token,
+      body: {
+        targetType: 'USER',
+        targetId: denunciado.userId,
+        reason: 'VIOLENCIA',
+        detail: 'me viene escribiendo cosas en todos los vivos',
+      },
+    });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+
+    const guardado = await prisma.report.findFirst({
+      where: { targetType: 'USER', targetId: denunciado.userId },
+    });
+    expect(guardado?.reporterUserId).toBe(denunciante.userId);
+    expect(guardado?.status).toBe('PENDIENTE');
+  });
+
+  it('⛔ reportar a alguien que no existe se rechaza', async () => {
+    // Sin esto, la cola se llena de reportes contra ids inventados que nadie
+    // puede revisar.
+    const denunciante = await nuevoUsuario();
+
+    const r = await call('POST', '/api/v1/reports', {
+      token: denunciante.token,
+      body: {
+        targetType: 'USER',
+        targetId: 'usr_00000000000000000000000000',
+        reason: 'SPAM',
+      },
+    });
+
+    expect(r.status).toBe(404);
+  });
+
+  it('⛔ reportar a una persona NO la sanciona sola', async () => {
+    /**
+     * El invariante que sostiene todo el sistema de reportes.
+     *
+     * El ocultamiento automático es SÓLO para productos. Suspender a alguien
+     * tiene consecuencias económicas y lo decide una persona — si un umbral
+     * pudiera suspender cuentas, un grupo organizado bajaría a cualquiera.
+     */
+    const denunciado = await nuevoUsuario();
+
+    // Diez personas distintas lo reportan por lo más grave que hay.
+    for (let i = 0; i < 10; i++) {
+      const denunciante = await nuevoUsuario();
+      await call('POST', '/api/v1/reports', {
+        token: denunciante.token,
+        body: { targetType: 'USER', targetId: denunciado.userId, reason: 'PROHIBIDO' },
+      });
+    }
+
+    const enBase = await prisma.user.findUniqueOrThrow({ where: { id: denunciado.userId } });
+    expect(enBase.status).toBe('active');
+    expect(enBase.deletedAt).toBeNull();
+
+    // Y no hay ninguna acción de moderación automática sobre la cuenta.
+    const acciones = await prisma.moderationAction.count({
+      where: { targetType: 'USER', targetId: denunciado.userId },
+    });
+    expect(acciones).toBe(0);
+  }, 30_000);
+
+  it('⛔ la misma persona no puede reportar dos veces lo mismo', async () => {
+    // Sin el índice único, alguien reporta veinte veces y dispara solo el
+    // umbral de ocultamiento. Convierte una campaña en un solo reporte.
+    const denunciante = await nuevoUsuario();
+    const denunciado = await nuevoUsuario();
+    const cuerpo = {
+      targetType: 'USER',
+      targetId: denunciado.userId,
+      reason: 'SPAM',
+    };
+
+    expect((await call('POST', '/api/v1/reports', { token: denunciante.token, body: cuerpo })).status)
+      .toBe(201);
+
+    const segunda = await call('POST', '/api/v1/reports', {
+      token: denunciante.token,
+      body: cuerpo,
+    });
+
+    expect(segunda.status).toBe(409);
+    expect(segunda.body.error.code).toBe('ALREADY_REPORTED');
+  });
+
+  it('un producto sí se puede reportar', async () => {
+    const { productId } = await nuevaVarianteConStock(3);
+    const denunciante = await nuevoUsuario();
+
+    const r = await call('POST', '/api/v1/reports', {
+      token: denunciante.token,
+      body: { targetType: 'PRODUCT', targetId: productId, reason: 'FALSIFICADO' },
+    });
+
+    expect(r.status).toBe(201);
+  });
+
+  it('⛔ sin sesión no se reporta nada', async () => {
+    // Un reporte anónimo no se puede deduplicar ni pesar: cualquiera dispararía
+    // umbrales con un script.
+    const { productId } = await nuevaVarianteConStock(1);
+
+    const r = await call('POST', '/api/v1/reports', {
+      body: { targetType: 'PRODUCT', targetId: productId, reason: 'SPAM' },
+    });
+
+    expect(r.status).toBe(401);
+  });
+
+  it('a quien reporta se le contesta SIEMPRE lo mismo', async () => {
+    /**
+     * Decirle "con el tuyo lo bajamos" convertiría el umbral en un juego: la
+     * gente aprendería cuántos reportes hacen falta y los coordinaría.
+     */
+    const { productId } = await nuevaVarianteConStock(3);
+
+    const primero = await nuevoUsuario();
+    const uno = await call('POST', '/api/v1/reports', {
+      token: primero.token,
+      body: { targetType: 'PRODUCT', targetId: productId, reason: 'PROHIBIDO' },
+    });
+
+    // `PROHIBIDO` tiene umbral 1, así que este reporte YA ocultó el producto.
+    const segundo = await nuevoUsuario();
+    const dos = await call('POST', '/api/v1/reports', {
+      token: segundo.token,
+      body: { targetType: 'PRODUCT', targetId: productId, reason: 'PROHIBIDO' },
+    });
+
+    // La misma respuesta, aunque uno disparó el ocultamiento y el otro no.
+    expect(JSON.stringify(uno.body)).toBe(JSON.stringify(dos.body));
   });
 });

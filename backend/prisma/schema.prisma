@@ -2924,6 +2924,11 @@ enum ReportTarget {
   REVIEW
   /// Un mensaje del chat de un vivo.
   CHAT_MESSAGE
+  /// Una persona, por su comportamiento sostenido.
+  ///
+  /// Apunta al id de la CUENTA, no al del vendedor: quien acosa en un chat
+  /// puede no tener tienda, y sin este destino no habría forma de reportarlo.
+  USER
 }
 
 enum ReportReason {
