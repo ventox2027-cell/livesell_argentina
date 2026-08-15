@@ -9,6 +9,8 @@ import { DomainEventBus } from '@/shared/events/domain-events';
 import { CommerceController } from './commerce.controller';
 import { CuponesDelCompradorController, CuponesDelVendedorController } from './cupones.controller';
 import { CuponesService } from './cupones.service';
+import { PromocionesController } from './promociones.controller';
+import { PromocionesService } from './promociones.service';
 import { CategoriasService } from './categorias.service';
 import { ImagesService } from './images.service';
 import { OwnershipService } from './ownership.service';
@@ -35,7 +37,12 @@ import { SellersService } from './sellers.service';
   // Para exigir Mercado Pago conectado antes de publicar. Ver `puede-vender.ts`.
   // `SellersModule` por las membresías: los cupones son función de VendoX Pro.
   imports: [SellerOAuthModule, SellersModule],
-  controllers: [CommerceController, CuponesDelVendedorController, CuponesDelCompradorController],
+  controllers: [
+    CommerceController,
+    CuponesDelVendedorController,
+    CuponesDelCompradorController,
+    PromocionesController,
+  ],
   providers: [
     SellersService,
     ProductsService,
@@ -44,9 +51,10 @@ import { SellersService } from './sellers.service';
     ImagesService,
     OwnershipService,
     CuponesService,
+    PromocionesService,
     AuditService,
     DomainEventBus,
   ],
-  exports: [OwnershipService, ProductsService, SellersService, CategoriasService, CuponesService],
+  exports: [OwnershipService, ProductsService, SellersService, CategoriasService, CuponesService, PromocionesService],
 })
 export class CommerceModule {}

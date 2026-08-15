@@ -23,6 +23,8 @@ import type {
 import { categoriaResultante, exigirCategoriaParaPublicar } from './categorias';
 import { CategoriasService } from './categorias.service';
 import { OwnershipService } from './ownership.service';
+import { intercalarPromocionados } from './promociones';
+import { PromocionesService } from './promociones.service';
 import { ordenarPorPuntaje } from './ranking';
 import { SearchService } from './search.service';
 import { SellerOAuthService } from '@/modules/payments/seller-oauth.service';
@@ -117,6 +119,59 @@ const PRODUCT_SELECT = {
 } satisfies Prisma.ProductSelect;
 
 /**
+ * Lo que trae cada tarjeta del feed.
+ *
+ * Extraído a una constante porque lo usan DOS consultas: la página orgánica y
+ * la de los productos promocionados. Con el bloque repetido, agregar un campo
+ * en una y olvidarlo en la otra deja tarjetas promocionadas sin foto —y el
+ * error se ve recién en producción, en la posición que alguien pagó.
+ */
+const FEED_SELECT = {
+  ...PRODUCT_SELECT,
+  likesCount: true,
+  createdAt: true,
+  images: { orderBy: { position: 'asc' }, take: 1, select: { id: true, url: true, position: true } },
+  // Un solo join en vez de una consulta por producto. Con 20 productos
+  // por página, el N+1 serían 41 viajes a la base para armar un scroll.
+  store: {
+    select: {
+      id: true,
+      name: true,
+      slug: true,
+      logoUrl: true,
+      seller: {
+        select: { id: true, displayName: true, slug: true, avatarUrl: true, verificationStatus: true },
+      },
+    },
+  },
+  /**
+   * Las variantes vendibles, con su inventario.
+   *
+   * Van en el feed —y no en una segunda consulta al tocar "Comprar"—
+   * porque el botón tiene que poder apartar stock de UNA. Pedirlas
+   * después agregaría un viaje justo en el momento en que la persona ya
+   * decidió comprar, que es el peor momento para hacerla esperar.
+   *
+   * Se limitan a 10: alcanzan para saber si hay algo que apartar y para
+   * el caso simple de una sola variante. El detalle completo de un
+   * producto con muchas combinaciones se resuelve en su propia pantalla.
+   */
+  variants: {
+    where: { deletedAt: null, status: 'ACTIVE' },
+    orderBy: { position: 'asc' },
+    take: 10,
+    select: {
+      id: true,
+      title: true,
+      priceOverrideCents: true,
+      isDefault: true,
+      inventory: { select: { onHand: true, reserved: true, lowStockThreshold: true } },
+    },
+  },
+  _count: { select: { variants: { where: { deletedAt: null, status: 'ACTIVE' } } } },
+} satisfies Prisma.ProductSelect;
+
+/**
  * Tope de combinaciones por producto.
  *
  * No es una limitación técnica: es que un producto con más de cien variantes
@@ -138,6 +193,7 @@ export class ProductsService {
     private readonly search: SearchService,
     private readonly sellerOAuth: SellerOAuthService,
     private readonly categorias: CategoriasService,
+    private readonly promociones: PromocionesService,
   ) {}
 
   /**
@@ -619,50 +675,7 @@ export class ProductsService {
           : {}),
       },
       orderBy,
-      select: {
-        ...PRODUCT_SELECT,
-        likesCount: true,
-        createdAt: true,
-        images: { orderBy: { position: 'asc' }, take: 1, select: { id: true, url: true, position: true } },
-        // Un solo join en vez de una consulta por producto. Con 20 productos
-        // por página, el N+1 serían 41 viajes a la base para armar un scroll.
-        store: {
-          select: {
-            id: true,
-            name: true,
-            slug: true,
-            logoUrl: true,
-            seller: {
-              select: { id: true, displayName: true, slug: true, avatarUrl: true, verificationStatus: true },
-            },
-          },
-        },
-        /**
-         * Las variantes vendibles, con su inventario.
-         *
-         * Van en el feed —y no en una segunda consulta al tocar "Comprar"—
-         * porque el botón tiene que poder apartar stock de UNA. Pedirlas
-         * después agregaría un viaje justo en el momento en que la persona ya
-         * decidió comprar, que es el peor momento para hacerla esperar.
-         *
-         * Se limitan a 10: alcanzan para saber si hay algo que apartar y para
-         * el caso simple de una sola variante. El detalle completo de un
-         * producto con muchas combinaciones se resuelve en su propia pantalla.
-         */
-        variants: {
-          where: { deletedAt: null, status: 'ACTIVE' },
-          orderBy: { position: 'asc' },
-          take: 10,
-          select: {
-            id: true,
-            title: true,
-            priceOverrideCents: true,
-            isDefault: true,
-            inventory: { select: { onHand: true, reserved: true, lowStockThreshold: true } },
-          },
-        },
-        _count: { select: { variants: { where: { deletedAt: null, status: 'ACTIVE' } } } },
-      },
+      select: FEED_SELECT,
       take: query.limit + 1,
     });
 
@@ -703,15 +716,76 @@ export class ProductsService {
 
     const vivos = await this.vendedoresEnVivo(pagina.items.map((p) => p.store.seller.id));
 
-    return {
-      ...pagina,
-      items: ordenarPorPuntaje(pagina.items, (p) => ({
-        creadoEl: p.createdAt,
-        likes: p.likesCount,
-        enVivo: vivos.has(p.store.seller.id),
-        verificado: p.store.seller.verificationStatus === 'VERIFIED',
-      })),
-    };
+    const ordenados = ordenarPorPuntaje(pagina.items, (p) => ({
+      creadoEl: p.createdAt,
+      likes: p.likesCount,
+      enVivo: vivos.has(p.store.seller.id),
+      verificado: p.store.seller.verificationStatus === 'VERIFIED',
+    }));
+
+    /**
+     * Y recién ACÁ entran los promocionados.
+     *
+     * ⚠️ Después de ordenar, nunca antes. Lo pago no participa del puntaje: se
+     * inserta en posiciones reservadas y el orgánico corre un lugar sin
+     * reordenarse. Ver `promociones.ts` para por qué esto no es un detalle de
+     * implementación sino la decisión central del módulo.
+     *
+     * Sólo en la primera página: promocionar en la página siete es cobrarle a
+     * alguien por un lugar que casi nadie ve.
+     */
+    const items =
+      query.cursor === undefined
+        ? await this.conPromocionados(ordenados)
+        : ordenados.map((item) => ({ ...item, promocionado: false }));
+
+    return { ...pagina, items };
+  }
+
+  /**
+   * Trae los productos promocionados y los mezcla.
+   *
+   * Usa `FEED_SELECT`, el mismo `select` que la página orgánica: una tarjeta
+   * promocionada tiene que traer exactamente los mismos campos, o se ve rota
+   * justo en la posición que alguien pagó.
+   *
+   * Y pasa por `PRODUCTO_VISIBLE`: una promoción no puede mostrar algo que la
+   * tienda pausó o borró después de comprarla.
+   */
+  private async conPromocionados<T extends { id: string; store: { seller: { id: string } } }>(
+    organicos: T[],
+  ) {
+    const ids = await this.promociones.productosPromocionadosAhora();
+    if (ids.length === 0) return organicos.map((item) => ({ ...item, promocionado: false }));
+
+    const filas = await this.prisma.product.findMany({
+      where: { id: { in: ids }, ...PRODUCTO_VISIBLE },
+      select: FEED_SELECT,
+    });
+
+    // El orden de compra lo define `productosPromocionadosAhora`; la base
+    // devuelve lo que quiere, así que se reordena según los ids.
+    const porId = new Map(filas.map((f) => [f.id, f]));
+    const enOrden = ids.map((id) => porId.get(id)).filter((f) => f !== undefined);
+
+    const conDisponibilidad = enOrden.map((p) => ({
+      ...p,
+      variants: p.variants.map((v) => {
+        const { inventory: inv, ...resto } = v;
+        return {
+          ...resto,
+          priceCents: v.priceOverrideCents ?? p.basePriceCents,
+          ...vistaPublicaDeStock(inv),
+        };
+      }),
+    }));
+
+    return intercalarPromocionados(
+      organicos,
+      conDisponibilidad as unknown as T[],
+      (p) => p.id,
+      (p) => p.store.seller.id,
+    ).map(({ item, promocionado }) => ({ ...item, promocionado }));
   }
 
   /**

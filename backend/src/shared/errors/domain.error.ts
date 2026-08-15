@@ -206,6 +206,17 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<string, number>> = {
    * estado del pedido, que cambió mientras la persona miraba la pantalla.
    */
   ORDER_NOT_EDITABLE: 409,
+
+  /** El vendedor cargó mal una promoción. 422: la regla, no el formato. */
+  PROMOTION_INVALID: 422,
+  /**
+   * No le alcanzan los créditos.
+   *
+   * 402, igual que `PRO_REQUIRED`: la función existe y está bien pedida, lo que
+   * falta es haber pagado. La app tiene que ofrecer conseguir créditos, no
+   * decir «no podés hacer eso».
+   */
+  NOT_ENOUGH_CREDITS: 402,
   /**
    * 422 y no 400: el pedido está bien formado, lo que falla es una regla del
    * negocio. La app lo distingue para llevar al selector de categoría en lugar

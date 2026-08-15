@@ -961,6 +961,9 @@ model Seller {
   /// comentario de `SellerMembership`.
   membership   SellerMembership?
   coupons      Coupon[]
+  promotions   Promotion[]
+  /// Libro mayor de créditos. El saldo es la suma, no una columna.
+  promotionCredits PromotionCredit[]
 
   @@index([status, createdAt])
   @@index([riskLevel, status])
@@ -1111,6 +1114,91 @@ model CouponRedemption {
 enum CouponType {
   PORCENTAJE
   MONTO_FIJO
+}
+
+/// Una promoción paga.
+///
+/// ═══════════════════════════════════════════════════════════════════════════
+/// PAGAR COMPRA UN LUGAR, NO PUNTOS
+/// ═══════════════════════════════════════════════════════════════════════════
+///
+/// Un producto promocionado NO recibe puntaje. Ocupa una de tres posiciones
+/// reservadas del feed, etiquetada como publicidad. `puntaje()` no sabe que
+/// esta tabla existe y no va a saberlo.
+///
+/// ⚠️ Y no toca la reputación: ni estrellas, ni cumplimiento, ni el sello de
+/// identidad, ni el distintivo de destacado. Nada de este flujo escribe en
+/// `Seller`. Ver `commerce/promociones.ts`.
+model Promotion {
+  id       String @id // pro_<ulid>
+  sellerId String @map("seller_id")
+
+  tipo PromotionType
+
+  /// El producto o el vivo. Sin clave foránea a propósito: apunta a dos tablas
+  /// distintas según `tipo`, y el servicio valida que sea del vendedor.
+  targetId String @map("target_id")
+
+  desde DateTime
+  hasta DateTime
+
+  /// Cuántos créditos se cobraron. Foto: el costo puede cambiar mañana y esta
+  /// promoción tiene que seguir explicando qué se pagó por ella.
+  creditos Int
+
+  cancelada   Boolean   @default(false)
+  canceladaEl DateTime? @map("cancelada_el")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  seller Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  /// El barrido del feed busca las que corren ahora.
+  @@index([tipo, desde, hasta])
+  @@index([sellerId, createdAt])
+  @@map("promotions")
+}
+
+/// Movimientos de créditos de promoción.
+///
+/// ═══════════════════════════════════════════════════════════════════════════
+/// UN LIBRO MAYOR, NO UN SALDO
+/// ═══════════════════════════════════════════════════════════════════════════
+///
+/// No hay una columna `creditos` en `Seller`. El saldo es la suma de estas
+/// filas, y eso es deliberado: un saldo suelto se puede corromper con un
+/// `UPDATE` mal escrito y después nadie puede reconstruir de dónde salió.
+///
+/// Con el libro mayor, cada crédito tiene un origen y un motivo. Y el saldo se
+/// puede recalcular siempre.
+///
+/// ⚠️ No hay ningún campo de pesos acá. Cuánto sale un crédito es una decisión
+/// comercial que todavía no está tomada. Ver `promociones.ts`.
+model PromotionCredit {
+  id       String @id // pcr_<ulid>
+  sellerId String @map("seller_id")
+
+  /// Positivo cuando se otorgan, negativo cuando se gastan.
+  delta Int
+
+  motivo String
+
+  /// Quién lo otorgó. `null` cuando lo gastó el propio vendedor.
+  otorgadoPor String? @map("otorgado_por")
+  /// La promoción que lo consumió, si fue un gasto.
+  promotionId String? @map("promotion_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  seller Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  @@index([sellerId, createdAt])
+  @@map("promotion_credits")
+}
+
+enum PromotionType {
+  PRODUCTO_EN_FEED
+  VIVO_PROGRAMADO
 }
 
 enum MembershipPlan {

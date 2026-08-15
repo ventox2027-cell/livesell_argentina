@@ -8,6 +8,7 @@ import { ZodValidationPipe } from '@/shared/http/zod-validation.pipe';
 
 import { AdminSearchService } from './admin-search.service';
 import { AdminTimelineService } from './admin-timeline.service';
+import { PromocionesService } from '@/modules/commerce/promociones.service';
 import { MembresiasService } from '@/modules/sellers/membresias.service';
 import { RiskService } from '@/modules/sellers/risk.service';
  import { VerificationService } from '@/modules/sellers/verification.service';
@@ -23,6 +24,7 @@ import {
   ListaUsuariosSchema,
   ListaVendedoresSchema,
   ListaWebhooksSchema,
+  OtorgarCreditosSchema,
   OtorgarProSchema,
   PaginaSchema,
   type AccionAdminDto,
@@ -34,6 +36,7 @@ import {
   type ListaUsuariosDto,
   type ListaVendedoresDto,
   type ListaWebhooksDto,
+  type OtorgarCreditosDto,
   type OtorgarProDto,
   type PaginaDto,
 } from './dto/admin.dto';
@@ -75,6 +78,7 @@ export class AdminController {
     private readonly verificacion: VerificationService,
     private readonly riesgo: RiskService,
     private readonly membresias: MembresiasService,
+    private readonly promociones: PromocionesService,
   ) {}
 
   // ─── Inicio y búsqueda ─────────────────────────────────────────────────────
@@ -240,6 +244,21 @@ export class AdminController {
       nota: dto.reason,
       otorgadoPor: actor.id,
     });
+  }
+
+  /**
+   * Otorga créditos de promoción.
+   *
+   * ⚠️ Una promoción compra un LUGAR del feed, no puntaje, y no toca la
+   * reputación del vendedor. Ver `commerce/promociones.ts`.
+   */
+  @Post('sellers/:id/promotion-credits')
+  otorgarCreditos(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(OtorgarCreditosSchema)) dto: OtorgarCreditosDto,
+  ) {
+    return this.promociones.otorgarCreditos(id, dto.cantidad, dto.reason, actor.id);
   }
 
   /** Le saca Pro ya, sin esperar al vencimiento. No borra el historial. */

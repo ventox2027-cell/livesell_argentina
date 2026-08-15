@@ -75,6 +75,9 @@ export const ID_PREFIX = {
   oauthState: 'oas',
   oauthCredential: 'soc',
   coupon: 'cup',
+  promotion: 'pro',
+  /// Movimiento del libro mayor de créditos. Ver `commerce/promociones.ts`.
+  promotionCredit: 'pcr',
   couponRedemption: 'cur',
   auditLog: 'aud',
 } as const;

@@ -280,6 +280,10 @@ class _InfoPublicacion extends StatelessWidget {
                       // se ve en el perfil, con su propia insignia.
                       const Icon(Icons.verified_rounded, size: 15, color: AppColor.acento),
                     ],
+                    if (datos.promocionado) ...[
+                      const SizedBox(width: Gap.sm),
+                      const _EtiquetaPromocionado(),
+                    ],
                   ],
                 ),
               ),
@@ -320,6 +324,50 @@ class _InfoPublicacion extends StatelessWidget {
 /// Ahora el estado sale del backend y el contador lo devuelve él. Ver
 /// `stores.service.ts`: el follow es idempotente —un P2002 se trata como éxito—
 /// así que tocar dos veces no rompe nada.
+/// «Promocionado».
+///
+/// ═══════════════════════════════════════════════════════════════════════════
+/// ESTA ETIQUETA NO ES OPCIONAL
+/// ═══════════════════════════════════════════════════════════════════════════
+///
+/// La ley argentina de defensa del consumidor exige que la publicidad se
+/// distinga de un resultado. Sin la etiqueta, alguien lee una recomendación
+/// donde hay un aviso pagado.
+///
+/// ─── Por qué es discreta y no llamativa ───
+///
+/// Tiene que **leerse**, no gritar. Una etiqueta enorme castiga al vendedor que
+/// pagó —la gente saltea lo que parece publicidad— y una escondida no cumple.
+/// Gris sobre el video, del mismo tamaño que el resto de los metadatos:
+/// presente para quien mira, sin robarle la atención al producto.
+///
+/// Y no lleva el violeta de marca: el acento significa «esto es de VendoX», y
+/// una promoción es del vendedor.
+class _EtiquetaPromocionado extends StatelessWidget {
+  const _EtiquetaPromocionado();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(Redondeo.sm),
+        border: Border.all(color: Colors.white24),
+      ),
+      child: const Text(
+        'Promocionado',
+        style: TextStyle(
+          fontSize: 10.5,
+          fontWeight: FontWeight.w600,
+          color: Colors.white70,
+          letterSpacing: 0.2,
+        ),
+      ),
+    );
+  }
+}
+
 class _BotonSeguir extends ConsumerStatefulWidget {
   const _BotonSeguir({required this.sellerId});
 

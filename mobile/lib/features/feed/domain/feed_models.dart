@@ -26,6 +26,7 @@ class PublicacionFeed {
     this.variantes = 1,
     this.variantePorDefectoId,
     this.disponibilidad,
+    this.promocionado = false,
   });
 
   factory PublicacionFeed.fromJson(Map<String, dynamic> j) {
@@ -68,6 +69,18 @@ class PublicacionFeed {
       disponibilidad: variantes.isEmpty
           ? null
           : Disponibilidad.fromJson(variantes.first as Map<String, dynamic>),
+      /**
+       * ⚠️ `is bool` y no `as bool?`.
+       *
+       * El cast TIRA si llega un texto o un número, y acá eso reventaría la
+       * tarjeta entera por un campo decorativo. Ya nos pasó con `as String`
+       * sobre la foto de un producto: la lista completa dejaba de cargar.
+       *
+       * Cualquier cosa que no sea un booleano se lee como `false`, que además
+       * es la respuesta correcta: marcar como publicidad algo orgánico es tan
+       * mentira como lo contrario.
+       */
+      promocionado: j['promocionado'] is bool ? j['promocionado'] as bool : false,
     );
   }
 
@@ -100,6 +113,16 @@ class PublicacionFeed {
 
   /// Disponibilidad de esa variante, resuelta por el backend.
   final Disponibilidad? disponibilidad;
+
+  /// Si esta publicación ocupa una posición paga del feed.
+  ///
+  /// ⚠️ **Se muestra siempre que sea `true`.** No es una decisión de diseño que
+  /// se pueda ajustar después: la ley de defensa del consumidor exige que la
+  /// publicidad se distinga de un resultado, y sin la etiqueta no hay forma.
+  ///
+  /// Lo decide el servidor. Y pagar no mejora el puntaje: compra un lugar
+  /// reservado y nada más. Ver `commerce/promociones.ts`.
+  final bool promocionado;
 
   bool get sePuedeComprar => variantePorDefectoId != null && (disponibilidad?.hay ?? false);
 

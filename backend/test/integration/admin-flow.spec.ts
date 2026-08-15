@@ -180,6 +180,11 @@ const RUTAS: Array<[string, string, unknown?]> = [
     '/api/v1/admin/sellers/sel_x/membership',
     { reason: 'motivo suficientemente largo' },
   ],
+  [
+    'POST',
+    '/api/v1/admin/sellers/sel_x/promotion-credits',
+    { cantidad: 10, reason: 'motivo suficientemente largo' },
+  ],
   ['GET', '/api/v1/admin/products/prd_x'],
   ['POST', '/api/v1/admin/products/prd_x/pause', { reason: 'motivo suficientemente largo' }],
   ['POST', '/api/v1/admin/products/prd_x/reactivate', { reason: 'motivo suficientemente largo' }],

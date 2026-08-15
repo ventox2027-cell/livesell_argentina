@@ -70,6 +70,18 @@ export const OtorgarProSchema = z.object({
 export type OtorgarProDto = z.infer<typeof OtorgarProSchema>;
 
 /**
+ * Otorgar créditos de promoción.
+ *
+ * ⚠️ Sin campo de precio: no hay compra de créditos en la app. El cobro está
+ * desacoplado igual que en las membresías. Ver `commerce/promociones.ts`.
+ */
+export const OtorgarCreditosSchema = z.object({
+  cantidad: z.number().int().positive().max(1000),
+  reason: MotivoSchema,
+});
+export type OtorgarCreditosDto = z.infer<typeof OtorgarCreditosSchema>;
+
+/**
  * Paginación por cursor.
  *
  * No hay `?page=847`. Con OFFSET, la base tiene que recorrer y descartar las

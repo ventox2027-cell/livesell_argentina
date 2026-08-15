@@ -3214,3 +3214,320 @@ describe('Enlaces compartidos', () => {
     expect(r.body).toEqual([]);
   });
 });
+
+describe('Promociones pagas', () => {
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * PAGAR COMPRA UN LUGAR, NO PUNTOS — Y NO TOCA LA REPUTACIÓN
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * Un producto promocionado ocupa una posición reservada del feed, etiquetada
+   * como tal. No recibe puntaje, no sube estrellas, no verifica a nadie.
+   */
+
+  /** Un vendedor con un producto publicado. Los helpers de este archivo no
+   *  devuelven el sellerId, así que se resuelve acá. */
+  async function nuevoVendedorConProducto() {
+    const v = await nuevoVendedor();
+    const producto = await crearProducto(v.token, { status: 'ACTIVE' });
+    return {
+      token: v.token,
+      sellerId: v.seller.id as string,
+      productId: producto.id as string,
+    };
+  }
+
+  /** Un administrador. El rol se pone en la base: no hay endpoint. */
+  async function nuevoAdmin() {
+    const u = await nuevoUsuario();
+    await prisma.user.update({ where: { id: u.userId }, data: { role: 'admin' } });
+    return u;
+  }
+
+  /** Un vendedor con créditos y un producto publicado. */
+  async function vendedorConCreditos(creditos = 10) {
+    const v = await nuevoVendedorConProducto();
+    const admin = await nuevoAdmin();
+
+    // Con cero no se otorga nada: el endpoint exige una cantidad positiva
+    // —un movimiento de cero ensucia el libro mayor sin decir nada—.
+    if (creditos > 0) {
+      const r = await call('POST', `/api/v1/admin/sellers/${v.sellerId}/promotion-credits`, {
+        token: admin.token,
+        body: { cantidad: creditos, reason: 'créditos de bienvenida del beta cerrado' },
+      });
+      expect(r.status, JSON.stringify(r.body)).toBe(201);
+    }
+
+    return { ...v, admin };
+  }
+
+  it('el saldo sale del libro mayor', async () => {
+    // No hay una columna `creditos` en `Seller`: el saldo es la suma de los
+    // movimientos, y por eso siempre se puede reconstruir.
+    const v = await vendedorConCreditos(10);
+
+    const panel = await call('GET', '/api/v1/seller/promotions', { token: v.token });
+
+    expect(panel.status, JSON.stringify(panel.body)).toBe(200);
+    expect(panel.body.saldoEnCreditos).toBe(10);
+  });
+
+  it('comprar descuenta los créditos y deja la promoción corriendo', async () => {
+    const v = await vendedorConCreditos(10);
+
+    const r = await call('POST', '/api/v1/seller/promotions', {
+      token: v.token,
+      body: { tipo: 'PRODUCTO_EN_FEED', targetId: v.productId, horas: 24 },
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+
+    const panel = await call('GET', '/api/v1/seller/promotions', { token: v.token });
+    expect(panel.body.saldoEnCreditos).toBe(10 - (r.body.creditos as number));
+    expect(panel.body.promociones[0].corriendo).toBe(true);
+  });
+
+  it('⛔ sin créditos suficientes NO se compra', async () => {
+    const v = await vendedorConCreditos(0);
+
+    const r = await call('POST', '/api/v1/seller/promotions', {
+      token: v.token,
+      body: { tipo: 'PRODUCTO_EN_FEED', targetId: v.productId, horas: 168 },
+    });
+
+    expect(r.status).toBe(402);
+    expect(r.body.error.code).toBe('NOT_ENOUGH_CREDITS');
+  });
+
+  it('⛔ no se puede promocionar el producto de OTRO', async () => {
+    /**
+     * Le daría visibilidad a alguien que no la pidió y le cobraría los créditos
+     * a quien no corresponde. La pertenencia va en el `where`: 404, no 403.
+     */
+    const mio = await vendedorConCreditos(10);
+    const ajeno = await nuevoVendedorConProducto();
+
+    const r = await call('POST', '/api/v1/seller/promotions', {
+      token: mio.token,
+      body: { tipo: 'PRODUCTO_EN_FEED', targetId: ajeno.productId, horas: 24 },
+    });
+
+    expect(r.status).toBe(404);
+  });
+
+  it('⛔ tampoco un producto pausado', async () => {
+    // Promocionar algo que no se puede comprar es cobrarle al vendedor por
+    // mandar gente a una pantalla sin botón.
+    const v = await vendedorConCreditos(10);
+    await prisma.product.update({ where: { id: v.productId }, data: { status: 'PAUSED' } });
+
+    const r = await call('POST', '/api/v1/seller/promotions', {
+      token: v.token,
+      body: { tipo: 'PRODUCTO_EN_FEED', targetId: v.productId, horas: 24 },
+    });
+
+    expect(r.status).toBe(404);
+  });
+
+  it('⛔ una duración inventada se rechaza', async () => {
+    const v = await vendedorConCreditos(10);
+
+    const r = await call('POST', '/api/v1/seller/promotions', {
+      token: v.token,
+      body: { tipo: 'PRODUCTO_EN_FEED', targetId: v.productId, horas: 5 },
+    });
+
+    expect(r.status).toBe(400);
+  });
+
+  it('⛔ otorgar créditos NO toca la reputación ni la verificación', async () => {
+    /**
+     * EL TEST QUE IMPORTA.
+     *
+     * Pagar por exposición no puede comprar confianza. Ni estrellas, ni
+     * cumplimiento, ni el sello de identidad.
+     */
+    const v = await nuevoVendedorConProducto();
+    const admin = await nuevoAdmin();
+    const antes = await prisma.seller.findUniqueOrThrow({ where: { id: v.sellerId } });
+
+    await call('POST', `/api/v1/admin/sellers/${v.sellerId}/promotion-credits`, {
+      token: admin.token,
+      body: { cantidad: 50, reason: 'acuerdo comercial con la marca' },
+    });
+    await call('POST', '/api/v1/seller/promotions', {
+      token: v.token,
+      body: { tipo: 'PRODUCTO_EN_FEED', targetId: v.productId, horas: 168 },
+    });
+
+    const despues = await prisma.seller.findUniqueOrThrow({ where: { id: v.sellerId } });
+    expect(despues.ratingSum).toBe(antes.ratingSum);
+    expect(despues.ratingCount).toBe(antes.ratingCount);
+    expect(despues.salesCount).toBe(antes.salesCount);
+    expect(despues.verificationStatus).toBe(antes.verificationStatus);
+    expect(despues.riskLevel).toBe(antes.riskLevel);
+  });
+
+  it('cancelar la saca del feed y NO devuelve créditos', async () => {
+    /**
+     * Ya se mostró. Devolver el total sería regalar la exposición que ya tuvo;
+     * devolver una parte proporcional sería inventar una cuenta que nadie
+     * pactó.
+     */
+    const v = await vendedorConCreditos(10);
+
+    const compra = await call('POST', '/api/v1/seller/promotions', {
+      token: v.token,
+      body: { tipo: 'PRODUCTO_EN_FEED', targetId: v.productId, horas: 24 },
+    });
+    const saldoDespuesDeComprar = 10 - (compra.body.creditos as number);
+
+    const r = await call('DELETE', `/api/v1/seller/promotions/${compra.body.id}`, {
+      token: v.token,
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+
+    const panel = await call('GET', '/api/v1/seller/promotions', { token: v.token });
+    expect(panel.body.saldoEnCreditos).toBe(saldoDespuesDeComprar);
+    expect(panel.body.promociones[0].corriendo).toBe(false);
+  });
+
+  it('⛔ no se puede cancelar la promoción de otro', async () => {
+    const mio = await vendedorConCreditos(10);
+    const ajeno = await vendedorConCreditos(10);
+
+    const compra = await call('POST', '/api/v1/seller/promotions', {
+      token: ajeno.token,
+      body: { tipo: 'PRODUCTO_EN_FEED', targetId: ajeno.productId, horas: 24 },
+    });
+
+    const r = await call('DELETE', `/api/v1/seller/promotions/${compra.body.id}`, {
+      token: mio.token,
+    });
+
+    expect(r.status).toBe(404);
+  });
+
+  it('los costos viajan en CRÉDITOS, sin ningún precio en pesos', async () => {
+    /**
+     * Cuánto sale un crédito es una decisión comercial que todavía no está
+     * tomada y que va a cambiar con la inflación varias veces por año. Un
+     * precio en la respuesta sería un número que la app muestra viejo.
+     */
+    const v = await vendedorConCreditos(1);
+
+    const r = await call('GET', '/api/v1/seller/promotions/options', { token: v.token });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.body.duracionesEnHoras).toEqual([24, 72, 168]);
+    expect(JSON.stringify(r.body)).not.toMatch(/pesos|ARS|precio/i);
+  });
+
+  it('⛔ queda en la bitácora, con el motivo', async () => {
+    // Es la función que regala exposición: sin registro, un crédito de
+    // cortesía es indistinguible de uno puesto por error.
+    const v = await nuevoVendedorConProducto();
+    const admin = await nuevoAdmin();
+
+    await call('POST', `/api/v1/admin/sellers/${v.sellerId}/promotion-credits`, {
+      token: admin.token,
+      body: { cantidad: 25, reason: 'compensación por la caída del sábado' },
+    });
+
+    const registro = await prisma.auditLog.findFirst({
+      where: { action: 'promotion.credits_granted', entityId: v.sellerId },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    expect(registro).not.toBeNull();
+    expect(registro?.actorId).toBe(admin.userId);
+    expect(JSON.stringify(registro?.after)).toContain('sábado');
+  });
+
+  describe('En el feed', () => {
+    /**
+     * ⚠️ Se limpian las promociones antes de cada test de este bloque.
+     *
+     * No es higiene decorativa: sólo hay TRES posiciones promocionadas por
+     * página, y las ocupan las promociones compradas primero. Con las que
+     * dejaron los tests de arriba corriendo, la de este test nunca entra y el
+     * resultado depende del orden en que vitest ejecute los casos.
+     */
+    beforeEach(async () => {
+      await prisma.promotion.deleteMany({});
+    });
+    it('lo promocionado sale ETIQUETADO', async () => {
+      /**
+       * Sin la etiqueta no hay forma de distinguir publicidad de resultado, que
+       * es lo que la ley de defensa del consumidor exige poder hacer.
+       */
+      const v = await vendedorConCreditos(10);
+
+      /**
+       * ⚠️ Se lo envejece y se pide UNA sola tarjeta.
+       *
+       * Es el caso real de una promoción: un producto viejo que paga para
+       * volver a verse. Sin este montaje el test no probaría nada — un producto
+       * recién creado ya sale primero por frescura, y el módulo lo descarta
+       * como promocionado justamente para no mostrarlo dos veces en pantalla.
+       */
+      await prisma.product.update({
+        where: { id: v.productId },
+        data: { createdAt: new Date('2020-01-01T00:00:00.000Z') },
+      });
+
+      // Algo más nuevo que ocupe el lugar orgánico.
+      const otro = await nuevoVendedorConProducto();
+      expect(otro.productId).not.toBe(v.productId);
+
+      await call('POST', '/api/v1/seller/promotions', {
+        token: v.token,
+        body: { tipo: 'PRODUCTO_EN_FEED', targetId: v.productId, horas: 24 },
+      });
+
+      const comprador = await nuevoUsuario();
+      const feed = await call('GET', '/api/v1/discover/products?limit=1', {
+        token: comprador.token,
+      });
+
+      expect(feed.status, JSON.stringify(feed.body)).toBe(200);
+      const items = feed.body.items as Array<{ id: string; promocionado: boolean }>;
+
+      const promocionados = items.filter((i) => i.promocionado);
+      expect(promocionados.map((i) => i.id)).toEqual([v.productId]);
+
+      // Y lo orgánico sigue ahí, sin etiqueta.
+      expect(items.find((i) => i.id === otro.productId)?.promocionado).toBe(false);
+    });
+    it('⛔ sin promociones, TODO sale sin etiqueta', async () => {
+      // El caso normal. Una etiqueta de más sobre algo orgánico sería una
+      // mentira igual de grave que una de menos sobre algo pago.
+      const comprador = await nuevoUsuario();
+      const feed = await call('GET', '/api/v1/discover/products?limit=20&orden=nuevos', {
+        token: comprador.token,
+      });
+
+      expect(feed.status).toBe(200);
+      // Con un orden explícito el feed no intercala nada: quien pidió «nuevos»
+      // quiere eso.
+      const items = feed.body.items as Array<{ promocionado?: boolean }>;
+      expect(items.every((i) => i.promocionado !== true)).toBe(true);
+    });
+
+    it('⛔ una promoción cancelada desaparece del feed', async () => {
+      const v = await vendedorConCreditos(10);
+      const compra = await call('POST', '/api/v1/seller/promotions', {
+        token: v.token,
+        body: { tipo: 'PRODUCTO_EN_FEED', targetId: v.productId, horas: 24 },
+      });
+      await call('DELETE', `/api/v1/seller/promotions/${compra.body.id}`, { token: v.token });
+
+      const comprador = await nuevoUsuario();
+      const feed = await call('GET', '/api/v1/discover/products?limit=20', { token: comprador.token });
+
+      const items = feed.body.items as Array<{ id: string; promocionado: boolean }>;
+      const suyo = items.find((i) => i.id === v.productId);
+      expect(suyo?.promocionado ?? false).toBe(false);
+    });
+  });
+});
