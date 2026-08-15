@@ -246,6 +246,17 @@ class _MercadoPagoScreenState extends ConsumerState<MercadoPagoScreen>
   }
 }
 
+/// `1559520220` → `····0220`.
+///
+/// Los últimos cuatro alcanzan para lo único que hace falta: que el vendedor
+/// confirme que conectó la cuenta que quería. El número entero identifica una
+/// cuenta de Mercado Pago real y no gana nada estando a la vista en una captura
+/// de pantalla que después se manda por WhatsApp.
+String _enmascarar(String cuenta) {
+  if (cuenta.length <= 4) return cuenta;
+  return '····${cuenta.substring(cuenta.length - 4)}';
+}
+
 class _Estado extends StatelessWidget {
   const _Estado({required this.conectada, required this.disponible, this.datos});
 
@@ -256,7 +267,8 @@ class _Estado extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cuenta = datos?['cuentaDeMercadoPago'] as String?;
-    final pista = datos?['tokenTerminaEn'] as String?;
+    // ⚠️ `tokenTerminaEn` viene en la respuesta y NO se muestra. Es para
+    // soporte, que necesita hablar del token sin verlo. Ver abajo.
 
     return Container(
       padding: const EdgeInsets.all(Gap.lg),
@@ -298,10 +310,19 @@ class _Estado extends StatelessWidget {
                 if (conectada && cuenta != null) ...[
                   const SizedBox(height: Gap.sm),
                   Text(
-                    // El id de la cuenta no es un secreto y sirve para que el
-                    // vendedor confirme que conectó la que quería. La pista del
-                    // token es para soporte: permite hablar de él sin verlo.
-                    'Cuenta $cuenta${pista == null ? '' : ' · token $pista'}',
+                    /**
+                     * Sólo la cuenta, enmascarada. Y NO la pista del token.
+                     *
+                     * La pista existe para que soporte pueda decir "el token
+                     * que termina en ····a3f9" sin verlo entero. Eso es útil en
+                     * un ticket, no en la pantalla del vendedor: ahí no le
+                     * sirve para nada y lo único que hace es poner en pantalla
+                     * un pedacito de una credencial.
+                     *
+                     * De la cuenta alcanzan los últimos cuatro dígitos para lo
+                     * que hace falta: confirmar que conectó la que quería.
+                     */
+                    'Cuenta ${_enmascarar(cuenta)}',
                     style: const TextStyle(fontSize: 11.5, color: AppColor.textoDebil),
                   ),
                 ],
@@ -342,8 +363,17 @@ class _ComoFunciona extends StatelessWidget {
         const SizedBox(height: Gap.md),
         const _Punto(
           icono: Icons.account_balance_wallet_outlined,
-          texto: 'El dinero de cada venta entra directo a tu cuenta de Mercado Pago. '
-              'VendoX no lo toca en ningún momento.',
+          /**
+           * "VendoX no lo toca en ningún momento" era demasiado absoluto.
+           *
+           * Técnicamente la plata entra a la cuenta del vendedor y Mercado Pago
+           * separa la comisión en el mismo movimiento — pero decirlo como una
+           * promesa categórica invita a que alguien la use como argumento el
+           * día que haya un reembolso o una contracara. Describir el mecanismo
+           * es más honesto y dice lo mismo.
+           */
+          texto: 'Mercado Pago procesa el cobro en tu cuenta y separa '
+              'automáticamente la comisión de VendoX.',
         ),
         _Punto(
           icono: Icons.percent_rounded,
@@ -356,7 +386,7 @@ class _ComoFunciona extends StatelessWidget {
            * suyo aparte, según la cuenta y el medio de pago. Confundirlos hace
            * que el vendedor calcule mal su ganancia y después reclame.
            */
-          texto: 'VendoX cobra una comisión del $porcentaje % sobre el precio del producto.',
+          texto: 'VendoX cobra $porcentaje % únicamente sobre el precio del producto.',
         ),
         const _Punto(
           icono: Icons.local_shipping_outlined,
@@ -373,8 +403,8 @@ class _ComoFunciona extends StatelessWidget {
            * cobrar. Escribir un número acá sería prometer algo que no
            * controlamos.
            */
-          texto: 'Mercado Pago aplica por separado sus costos de procesamiento, '
-              'según las condiciones de tu cuenta y del medio de pago.',
+          texto: 'Los costos de Mercado Pago se aplican por separado, según las '
+              'condiciones de tu cuenta.',
         ),
         const _Punto(
           icono: Icons.lock_outline_rounded,

@@ -2067,7 +2067,27 @@ describe('Envío y costo del procesador', () => {
     expect(r.body.pickupSelected).toBe(false);
   });
 
-  it('el recargo del procesador se calcula sobre producto MÁS envío', async () => {
+  it('⛔ en la beta el comprador NO paga recargo por el medio de pago', async () => {
+    /**
+     * ═══════════════════════════════════════════════════════════════════════
+     * ESTE TEST CAMBIÓ DE SIGNO A PROPÓSITO
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * Antes verificaba que el recargo se calculara sobre producto + envío.
+     * Sigue calculándose así —el test de `shipping.spec.ts` lo fija— pero
+     * `BUYER_PROCESSOR_SURCHARGE_ENABLED` está en `false` y el comprador paga
+     * producto + envío y nada más.
+     *
+     * El motivo no es técnico: el número que se trasladaba era una ESTIMACIÓN
+     * calculada antes de que Mercado Pago dijera cuánto va a cobrar de verdad.
+     * Cobrar un costo estimado de un tercero, y quedarse con la diferencia
+     * cuando el real resulta menor, es exactamente el tipo de recargo que la
+     * ley de defensa del consumidor mira con lupa.
+     *
+     * La tienda de este test tiene `PASSED_TO_BUYER` guardado a propósito: es
+     * la comprobación de que la bandera del servidor gana sobre la
+     * configuración del vendedor.
+     */
     const { sellerToken, variantId } = await nuevaVarianteConStock(3);
     const storeId = await tiendaDe(sellerToken);
     await definirPolitica(sellerToken, storeId, {
@@ -2081,10 +2101,40 @@ describe('Envío y costo del procesador', () => {
     const r = await crearOrden(comprador.token, reservationId);
 
     expect(r.status, JSON.stringify(r.body)).toBe(201);
-    // (890.000 + 350.000) × 6,19 % = 76.756
-    expect(r.body.processorSurchargeAmount).toBe(76_756);
-    expect(r.body.grossAmount).toBe(890_000 + 350_000 + 76_756);
+    expect(r.body.processorSurchargeAmount).toBe(0);
+    // Producto + envío. Nada más.
+    expect(r.body.grossAmount).toBe(890_000 + 350_000);
+
+    /**
+     * El snapshot guarda lo que la tienda tenía configurado, no lo que se
+     * aplicó.
+     *
+     * Es el registro de la política vigente al comprar, y sirve para explicar
+     * un pedido viejo dentro de dos años. Que el importe haya sido cero lo dice
+     * `processorSurchargeAmount`.
+     */
     expect(r.body.processorFeeModeSnapshot).toBe('PASSED_TO_BUYER');
+  });
+
+  it('⛔ el catálogo tampoco anuncia un recargo que no se va a cobrar', async () => {
+    /**
+     * La app usa `trasladaCostoDelProcesador` para avisarle al comprador
+     * "puede sumarse un costo por el medio de pago". Dejarlo en `true` con el
+     * cálculo apagado sería anunciar un cargo que después no aparece: la
+     * persona desconfía del total y el vendedor queda mal por algo que no hizo.
+     */
+    const { sellerToken, productId } = await nuevaVarianteConStock(3);
+    const storeId = await tiendaDe(sellerToken);
+    await definirPolitica(sellerToken, storeId, {
+      shippingMode: 'FIXED_PRICE',
+      shippingFlatAmount: 350_000,
+      processorFeeMode: 'PASSED_TO_BUYER',
+    });
+
+    const publico = await call('GET', `/api/v1/catalog/products/${productId}`);
+
+    expect(publico.status).toBe(200);
+    expect(publico.body.envio.trasladaCostoDelProcesador).toBe(false);
   });
 
   it('⛔ la comisión del 6 % NO se cobra sobre el envío ni sobre el recargo', async () => {

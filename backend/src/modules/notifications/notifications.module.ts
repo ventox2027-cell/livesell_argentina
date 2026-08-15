@@ -3,6 +3,7 @@ import { Global, Module } from '@nestjs/common';
 import { NotificationsController } from './notifications.controller';
 import { NotificationsDispatcher } from './notifications.dispatcher';
 import { NotificationsService } from './notifications.service';
+import { PushDeFirebase } from './push-firebase.provider';
 import { PushDeConsola, PushProvider } from './push.provider';
 
 /**
@@ -25,15 +26,23 @@ import { PushDeConsola, PushProvider } from './push.provider';
  * EL PROVEEDOR DE PUSH SE ELIGE ACÁ Y EN NINGÚN OTRO LADO
  * ═══════════════════════════════════════════════════════════════════════════
  *
- * `NotificationsService` depende de la clase abstracta `PushProvider`. Hoy la
- * única implementación es la que escribe en el log, porque **todavía no hay
- * credenciales de Firebase** — crearlas es una decisión con consecuencias
- * (proyecto de Google Cloud, clave privada de servicio) que no se toma sin el
- * dueño del producto delante.
+ * `NotificationsService` depende de la clase abstracta `PushProvider`, y cuál
+ * se usa se decide **una sola vez, acá**, mirando la configuración:
  *
- * Todo lo demás funciona igual mientras tanto: las filas se escriben, el centro
- * de notificaciones anda, la deduplicación anda, los reintentos andan. Cuando
- * lleguen las credenciales, se agrega `PushDeFirebase` y se cambia esta línea.
+ *   · con `FIREBASE_SERVICE_ACCOUNT_PATH` cargada y `PUSH_ENABLED`, se usa
+ *     Firebase de verdad;
+ *   · sin eso, la que escribe en el log. Las filas quedan en `SKIPPED`, no en
+ *     `SENT`: marcarlas como enviadas sería mentirle a la base, y después nadie
+ *     sabría cuáles salieron y cuáles no.
+ *
+ * ─── Por qué la decisión va en una fábrica y no en un `if` adentro ───
+ *
+ * Un proveedor que por dentro decide si manda o no obliga a cada llamador a
+ * pensar en las dos ramas. Con dos clases, `NotificationsService` no sabe
+ * —ni tiene por qué saber— si hay Firebase: pregunta `disponible` y actúa.
+ *
+ * Todo lo demás funciona igual en los dos casos: las filas se escriben, el
+ * centro de notificaciones anda, la deduplicación anda, los reintentos andan.
  */
 @Global()
 @Module({
@@ -42,9 +51,22 @@ import { PushDeConsola, PushProvider } from './push.provider';
     NotificationsService,
     NotificationsDispatcher,
     PushDeConsola,
+    PushDeFirebase,
     {
       provide: PushProvider,
-      useExisting: PushDeConsola,
+      /**
+       * ⚠️ Los dos se instancian igual, y es a propósito.
+       *
+       * `PushDeFirebase` implementa `OnModuleInit` y ahí lee la credencial. Si
+       * se creara sólo cuando hace falta, un error de configuración aparecería
+       * recién con el primer aviso — seis horas después del despliegue, con un
+       * pedido pagado esperando.
+       *
+       * Creándolo siempre, el arranque falla o avisa en el momento correcto.
+       */
+      useFactory: (firebase: PushDeFirebase, consola: PushDeConsola): PushProvider =>
+        firebase.disponible ? firebase : consola,
+      inject: [PushDeFirebase, PushDeConsola],
     },
   ],
   exports: [NotificationsService],

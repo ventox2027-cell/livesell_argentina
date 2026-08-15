@@ -1,5 +1,5 @@
 {
-  "id": "prd_01M01Q3YSQ36TEH7A05ABS5Z1S",
+  "id": "prd_01M01ZS6TYG7B75G4PXFMBHM1V",
   "nombre": "Buzo oversize de algodón",
   "descripcion": "Tejido a mano, algodón peinado.",
   "precioCentavos": 890000,
@@ -7,25 +7,25 @@
   "imagenes": [],
   "ejes": [
     {
-      "id": "opt_01M01Q3YSXZMP8YFQ06PBB7T64",
+      "id": "opt_01M01ZS6V42996BBVKN1NQCAAZ",
       "nombre": "Talle",
       "valores": [
         {
-          "id": "opv_01M01Q3YT026SQWDQ3AB9135X9",
+          "id": "opv_01M01ZS6V7NWTBFXC4HY74PWQE",
           "valor": "S"
         },
         {
-          "id": "opv_01M01Q3YT027TVKW8WEQ3KSE0Z",
+          "id": "opv_01M01ZS6V7P3P6HFQR1FP6VQCN",
           "valor": "M"
         }
       ]
     },
     {
-      "id": "opt_01M01Q3YT380HMFC28V92GA459",
+      "id": "opt_01M01ZS6VAAV3ASEKMYNKKB932",
       "nombre": "Color",
       "valores": [
         {
-          "id": "opv_01M01Q3YT4WHX4ANZYSM8GSNS4",
+          "id": "opv_01M01ZS6VCKDFMT186K0SED4PZ",
           "valor": "Negro"
         }
       ]
@@ -33,29 +33,29 @@
   ],
   "variantes": [
     {
-      "id": "var_01M01Q3YT5WJ69JYE456SWVT1W",
+      "id": "var_01M01ZS6VDFHTTQYTSSRNMFXAS",
       "titulo": "S / Negro",
       "precioCentavos": 890000,
       "disponible": 4,
       "valoresDeOpcion": [
-        "opv_01M01Q3YT026SQWDQ3AB9135X9",
-        "opv_01M01Q3YT4WHX4ANZYSM8GSNS4"
+        "opv_01M01ZS6V7NWTBFXC4HY74PWQE",
+        "opv_01M01ZS6VCKDFMT186K0SED4PZ"
       ]
     },
     {
-      "id": "var_01M01Q3YTCSA0HHF49ZPF27Z61",
+      "id": "var_01M01ZS6VKNN50RQ4YMZMJJ322",
       "titulo": "M / Negro",
       "precioCentavos": 890000,
       "disponible": 4,
       "valoresDeOpcion": [
-        "opv_01M01Q3YT027TVKW8WEQ3KSE0Z",
-        "opv_01M01Q3YT4WHX4ANZYSM8GSNS4"
+        "opv_01M01ZS6V7P3P6HFQR1FP6VQCN",
+        "opv_01M01ZS6VCKDFMT186K0SED4PZ"
       ]
     }
   ],
   "tienda": {
-    "id": "sto_01M01Q3YQBQNVXYNBEBDCW5ZMA",
-    "nombre": "Tejidos Marta mstt9piv"
+    "id": "sto_01M01ZS6SEQ8NJAT34SY623PG1",
+    "nombre": "Tejidos Marta mstyofkf"
   },
   "envio": {
     "modo": "FIXED_OR_PICKUP",
@@ -64,7 +64,7 @@
     "permiteEnvio": true,
     "permiteRetiro": true,
     "nota": "Envíos los martes y jueves. Retiro por Palermo.",
-    "trasladaCostoDelProcesador": true
+    "trasladaCostoDelProcesador": false
   },
   "cambios": {
     "modo": "CAMBIO_SIN_CAUSA",

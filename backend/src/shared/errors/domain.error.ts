@@ -20,6 +20,13 @@ export class DomainError extends Error {
 export const HTTP_STATUS_BY_CODE: Readonly<Record<string, number>> = {
   VALIDATION_FAILED: 400,
   UNAUTHORIZED: 401,
+
+  // Login de la cuenta de revisión con contraseña equivocada, o con un email
+  // que no existe. **El mismo código para los dos casos**: responder distinto
+  // le diría a quien prueba qué cuentas existen en el sistema.
+  //
+  // 401 y no 400: el cuerpo está bien formado, lo que falla es la credencial.
+  INVALID_CREDENTIALS: 401,
   FORBIDDEN: 403,
   NOT_FOUND: 404,
   CONFLICT: 409,

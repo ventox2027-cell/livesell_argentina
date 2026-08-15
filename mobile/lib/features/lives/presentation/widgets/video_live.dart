@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:livekit_client/livekit_client.dart';
 
 import '../../../../core/design/tokens.dart';
+import '../../domain/estado_del_video.dart';
 import '../../domain/live_models.dart';
 
 /// El video del vivo, a pantalla completa.
@@ -53,6 +54,28 @@ class _VideoLiveState extends State<VideoLive> {
   int _ultimosCuadros = 0;
   Timer? _guardian;
   bool _congelado = false;
+
+  /// Si alguna vez llegó un cuadro.
+  ///
+  /// ⚠️ Sin esto, el guardián declaraba congelado el arranque de TODOS los
+  /// vivos.
+  ///
+  /// La medición de campo dio unos 4 segundos hasta el primer cuadro. El
+  /// guardián avisa a los 2 segundos sin avance, y al arrancar `cuadros` y
+  /// `_ultimosCuadros` valen los dos cero — así que `cuadros > _ultimosCuadros`
+  /// es falso y el contador de quietud corre desde el primer segundo.
+  ///
+  /// Resultado: durante ~2 segundos, en cada vivo que alguien abría, aparecía
+  /// "el vendedor está recuperando la conexión" sobre un vendedor que estaba
+  /// perfectamente conectado. Después desaparecía solo, que es lo que lo hacía
+  /// difícil de reportar: "a veces tarda y dice algo raro".
+  ///
+  /// Mientras esto sea `false` no hay nada que vigilar: no es una congelación,
+  /// es que todavía no empezó.
+  bool _vioAlgunCuadro = false;
+
+  /// Desde cuándo no llega video. `null` mientras llega.
+  DateTime? _sinVideoDesde;
 
   @override
   void initState() {
@@ -161,20 +184,66 @@ class _VideoLiveState extends State<VideoLive> {
         if (cuadros > _ultimosCuadros) {
           _ultimosCuadros = cuadros;
           _ultimoAvance = DateTime.now();
-          if (_congelado && mounted) setState(() => _congelado = false);
+          _vioAlgunCuadro = true;
+          if (_congelado && mounted) {
+            setState(() {
+              _congelado = false;
+              _sinVideoDesde = null;
+            });
+          }
           return;
         }
+
+        /**
+         * Hasta el primer cuadro no se vigila nada.
+         *
+         * Antes del arreglo, esto declaraba congelado el arranque de todos los
+         * vivos: el primer cuadro tarda unos 4 segundos y el umbral son 2. Ver
+         * `_vioAlgunCuadro`.
+         */
+        if (!_vioAlgunCuadro) return;
 
         // Dos segundos sin un cuadro nuevo: hay video "conectado" pero no está
         // llegando nada.
         final quieto = DateTime.now().difference(_ultimoAvance).inMilliseconds > 2000;
-        if (quieto && !_congelado && mounted) setState(() => _congelado = true);
+        if (quieto && !_congelado && mounted) {
+          setState(() {
+            _congelado = true;
+            _sinVideoDesde = DateTime.now();
+          });
+        }
+
+        /**
+         * El paso de "esperá un momento" a "esto no vuelve".
+         *
+         * Un spinner que gira quince minutos es una mentira educada: le dice a
+         * la persona que espere algo que no va a pasar. Pasado el umbral, el
+         * mensaje cambia de tono y deja de prometer.
+         *
+         * Se fuerza un redibujado porque el estado que cambió es el paso del
+         * tiempo, y eso no dispara `setState` solo.
+         */
+        // Redibuja al cruzar el umbral largo: lo que cambió es el paso del
+        // tiempo, y eso no dispara `setState` solo.
+        if (_congelado && mounted && _estado == EstadoDelVideo.interrumpido) setState(() {});
       } catch (_) {
         // Si las estadísticas no están disponibles, no se concluye nada: es
         // mejor no avisar que avisar de una congelación que no existe.
       }
     });
   }
+
+  /// La decisión vive en `domain/estado_del_video.dart`, que se prueba sin
+  /// LiveKit. Acá sólo se juntan las señales.
+  EstadoDelVideo get _estado => estadoDelVideo(
+        terminado: widget.live.terminado,
+        reconectandoSegunBackend: widget.live.reconectando,
+        vioAlgunCuadro: _vioAlgunCuadro,
+        sinAvance: DateTime.now().difference(_ultimoAvance),
+        desdeElCorte: _sinVideoDesde == null
+            ? null
+            : DateTime.now().difference(_sinVideoDesde!),
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -206,15 +275,23 @@ class _VideoLiveState extends State<VideoLive> {
             fit: VideoViewFit.cover,
           ),
 
-        // El aviso de reconexión, sobre el último cuadro congelado.
-        if ((live.reconectando || _congelado) && !live.terminado)
-          const Positioned(
-            left: 0,
-            right: 0,
-            top: 0,
-            bottom: 0,
-            child: _AvisoDeReconexion(),
-          ),
+        /**
+         * El aviso, sobre el último cuadro. Nunca sobre negro.
+         *
+         * Tres mensajes distintos porque son tres situaciones distintas, y
+         * usar el mismo para las tres es lo que hacía que nadie entendiera qué
+         * estaba pasando:
+         *
+         *   · **terminó** — lo dice el backend. Es definitivo y no hay nada que
+         *     esperar;
+         *   · **se está recuperando** — hace poco que no llega video. Es lo más
+         *     común y casi siempre vuelve;
+         *   · **se interrumpió** — pasaron treinta segundos. Sigue sin haber
+         *     nada, y seguir mostrando un spinner sería prometer algo que ya no
+         *     parece que vaya a pasar.
+         */
+        if (_estado != EstadoDelVideo.enVivo && _estado != EstadoDelVideo.cargando)
+          Positioned.fill(child: _AvisoDelVideo(estado: _estado)),
       ],
     );
   }
@@ -240,18 +317,21 @@ class _FondoVacio extends StatelessWidget {
   }
 }
 
-/// "El vendedor está recuperando la conexión."
+/// El cartel sobre el video, siempre encima del último cuadro.
 ///
-/// Sobre el último cuadro, no sobre negro: conservar la imagen congelada le
-/// dice a quien mira que había algo y va a volver. Una pantalla negra se lee
-/// como que el vivo terminó.
-class _AvisoDeReconexion extends StatelessWidget {
-  const _AvisoDeReconexion();
+/// Nunca sobre negro. Conservar la imagen congelada le dice a quien mira que
+/// había algo y puede volver; una pantalla negra se lee como que el vivo
+/// terminó, y ese malentendido hace que la gente se vaya de un vivo que sigue.
+class _AvisoDelVideo extends StatelessWidget {
+  const _AvisoDelVideo({required this.estado});
+
+  final EstadoDelVideo estado;
 
   @override
   Widget build(BuildContext context) {
     return ColoredBox(
-      color: Colors.black.withValues(alpha: 0.45),
+      // El terminado tapa más: no hay nada atrás que valga la pena mirar.
+      color: Colors.black.withValues(alpha: estado == EstadoDelVideo.terminado ? 0.62 : 0.45),
       child: Center(
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: Gap.lg, vertical: Gap.md),
@@ -259,29 +339,64 @@ class _AvisoDeReconexion extends StatelessWidget {
             color: Colors.black54,
             borderRadius: BorderRadius.circular(Redondeo.md),
           ),
-          child: const Column(
+          child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2, color: AppColor.alerta),
-              ),
-              SizedBox(height: Gap.md),
+              _icono(),
+              const SizedBox(height: Gap.md),
               Text(
-                'El vendedor está recuperando\nla conexión…',
+                _titulo(),
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
+                style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
               ),
-              SizedBox(height: 4),
-              Text(
-                'Podés seguir comprando',
-                style: TextStyle(fontSize: 12, color: AppColor.textoSuave),
-              ),
+              if (_detalle() != null) ...[
+                const SizedBox(height: 4),
+                Text(
+                  _detalle()!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 12, color: AppColor.textoSuave),
+                ),
+              ],
             ],
           ),
         ),
       ),
     );
   }
+
+  /// Sólo el que puede volver tiene spinner.
+  ///
+  /// Un indicador que gira mientras el mensaje dice "se interrumpió" es una
+  /// contradicción: la animación promete lo que el texto niega.
+  Widget _icono() => switch (estado) {
+        EstadoDelVideo.reconectando => const SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(strokeWidth: 2, color: AppColor.alerta),
+          ),
+        EstadoDelVideo.interrumpido =>
+          const Icon(Icons.signal_wifi_bad_rounded, size: 22, color: AppColor.alerta),
+        EstadoDelVideo.terminado =>
+          const Icon(Icons.check_circle_outline_rounded, size: 22, color: AppColor.textoSuave),
+        // No se dibuja el cartel en estos dos. Se listan para que el
+        // compilador avise si algún día se decide mostrarlos.
+        EstadoDelVideo.cargando || EstadoDelVideo.enVivo => const SizedBox.shrink(),
+      };
+
+  String _titulo() => switch (estado) {
+        EstadoDelVideo.reconectando => 'El vendedor está recuperando\nla conexión…',
+        EstadoDelVideo.interrumpido => 'Transmisión interrumpida',
+        EstadoDelVideo.terminado => 'Este vivo terminó',
+        EstadoDelVideo.cargando || EstadoDelVideo.enVivo => '',
+      };
+
+  String? _detalle() => switch (estado) {
+        // Lo importante: el vivo no se cayó para la persona que estaba por
+        // comprar. El chat y la tienda siguen andando.
+        EstadoDelVideo.reconectando => 'Podés seguir comprando',
+        EstadoDelVideo.interrumpido => 'Podés seguir comprando o volver más tarde',
+        // Nada que agregar: terminó y no hay nada que esperar.
+        EstadoDelVideo.terminado => null,
+        EstadoDelVideo.cargando || EstadoDelVideo.enVivo => null,
+      };
 }

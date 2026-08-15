@@ -1,6 +1,7 @@
 import { config as loadDotenv } from 'dotenv';
 import { z } from 'zod';
 
+import { leerCredencialDeFirebase } from '@/modules/notifications/credencial-de-firebase';
 import { leerLlave } from '@/shared/crypto/secretos';
 import { PROVEEDORES } from '@/shared/http/deployment-provider';
 import {
@@ -250,6 +251,18 @@ export const envSchema = z
      */
     AUTH_DEV_LOGIN_ENABLED: envBoolean(false),
 
+    /**
+     * El interruptor del login de la cuenta de revisión de Google Play.
+     *
+     * A diferencia de AUTH_DEV_LOGIN_ENABLED, este SÍ se puede encender en
+     * producción: es la única forma de que un revisor entre. Lo que lo hace
+     * seguro no es el entorno sino el alcance — sólo autentica cuentas con la
+     * marca isDemoAccount, y no hay ningún endpoint que ponga esa marca.
+     *
+     * Apagarlo desactiva el camino entero de inmediato, sin desplegar.
+     */
+    DEMO_LOGIN_ENABLED: envBoolean(false),
+
     // ─── Spike (Sprint 0) ───────────────────────────────────────────────────
     SPIKE_ENABLED: envBoolean(false),
     SPIKE_API_KEY: optionalOrEmpty(z.string().min(16)),
@@ -449,6 +462,36 @@ export const envSchema = z
 
     NOTIFICATIONS_DISPATCHER_ENABLED: envBoolean(true),
 
+    // ─── Push, por Firebase Cloud Messaging ─────────────────────────────────
+
+    /**
+     * El interruptor general del push.
+     *
+     * Apagado, los avisos se siguen escribiendo y se ven en el centro de
+     * notificaciones de la app: lo único que no pasa es que suene el teléfono.
+     * Sirve para apagar el push en un incidente sin tocar nada más.
+     */
+    PUSH_ENABLED: envBoolean(true),
+
+    /**
+     * Ruta ABSOLUTA al JSON de la cuenta de servicio de Firebase Admin.
+     *
+     * ⛔ El archivo vive FUERA del repositorio. En la máquina de desarrollo
+     * está en `C:\VendoX-Secrets\firebase-admin.json`; en el servidor va a un
+     * volumen montado.
+     *
+     * ─── Por qué un archivo y no el JSON en una variable ───
+     *
+     * Es una clave privada RSA con permiso para notificar a todos los teléfonos
+     * que tengan la app. En una variable de entorno viaja en el `docker
+     * inspect`, en el panel del proveedor, en cualquier `printenv` y en el
+     * historial del shell de quien la configuró.
+     *
+     * El detalle de la validación está en
+     * `modules/notifications/credencial-de-firebase.ts`.
+     */
+    FIREBASE_SERVICE_ACCOUNT_PATH: optionalOrEmpty(z.string().min(3)),
+
     /**
      * Cuántos avisos por vuelta.
      *
@@ -502,6 +545,22 @@ export const envSchema = z
      */
     PROCESSOR_FEE_ESTIMATE_BPS: z.coerce.number().int().min(0).max(2000).default(619),
     VENDOX_PLATFORM_FEE_BPS: z.coerce.number().int().min(0).max(5_000).default(600),
+
+    /**
+     * ¿Se le traslada al comprador el costo estimado de Mercado Pago?
+     *
+     * **Apagado.** Para la beta el comprador paga producto + envío y nada más:
+     * el costo del procesador lo absorbe el vendedor.
+     *
+     * El número que se trasladaba era una ESTIMACIÓN calculada antes de que
+     * Mercado Pago dijera cuánto va a cobrar de verdad, y cobrar un costo
+     * estimado de un tercero es exactamente el tipo de recargo que la ley de
+     * defensa del consumidor mira con lupa.
+     *
+     * La explicación completa, y por qué el modelo se conserva en vez de
+     * borrarse, está en `recargoAlComprador` (`modules/orders/shipping.ts`).
+     */
+    BUYER_PROCESSOR_SURCHARGE_ENABLED: envBoolean(false),
 
     /**
      * Cuánto vive una orden sin pagar.
@@ -810,6 +869,69 @@ export const envSchema = z
       'Fuera de ahí, un cobro sin cuenta del vendedor entra en la cuenta de VendoX.',
     path: ['ALLOW_PAYMENT_WITHOUT_SELLER_ACCOUNT'],
   })
+  /**
+   * En producción, con el push encendido, la credencial es obligatoria.
+   *
+   * ═══════════════════════════════════════════════════════════════════════
+   * POR QUÉ ESTO NO PUEDE SER UNA ADVERTENCIA
+   * ═══════════════════════════════════════════════════════════════════════
+   *
+   * Un backend productivo que arranca sin poder mandar avisos es un backend
+   * que **parece sano**: responde todo, las ventas entran, los pedidos se
+   * crean. Lo único que no pasa es que la gente se entere de que le pagaron,
+   * de que su pedido salió, o de que tiene un código de entrega esperando.
+   *
+   * Eso se descubre por un reclamo, días después, y para entonces hay una
+   * cantidad desconocida de avisos en `SKIPPED` que nadie va a reenviar.
+   *
+   * Fallar al arrancar es incómodo exactamente una vez y en el momento
+   * correcto: cuando quien despliega está mirando la consola.
+   *
+   * En desarrollo se degrada a `SKIPPED`, que es lo que corresponde: nadie
+   * tiene que conseguir una clave de Google para trabajar en el catálogo.
+   */
+  .refine((e) => esEntornoLocal(e.NODE_ENV) || !e.PUSH_ENABLED || !!e.FIREBASE_SERVICE_ACCOUNT_PATH, {
+    message:
+      'Con PUSH_ENABLED en producción hace falta FIREBASE_SERVICE_ACCOUNT_PATH, ' +
+      'con la ruta absoluta al JSON de la cuenta de servicio de Firebase Admin. ' +
+      'Si querés arrancar sin push, poné PUSH_ENABLED=false explícitamente.',
+    path: ['FIREBASE_SERVICE_ACCOUNT_PATH'],
+  })
+  /**
+   * Y la credencial tiene que existir y ser legible AHORA, no cuando salga el
+   * primer aviso.
+   *
+   * Una ruta escrita mal pasa la comprobación de arriba —es un string— y
+   * revienta seis horas después, con el primer pedido pagado. Se lee el archivo
+   * en el arranque.
+   *
+   * ⚠️ Lo que se valida es la FORMA. El contenido no se registra en ningún
+   * lado. Ver `leerCredencialDeFirebase`.
+   */
+  .refine(
+    (e) => {
+      if (!e.FIREBASE_SERVICE_ACCOUNT_PATH || !e.PUSH_ENABLED) return true;
+      try {
+        leerCredencialDeFirebase(e.FIREBASE_SERVICE_ACCOUNT_PATH);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    (e) => ({
+      message: (() => {
+        try {
+          leerCredencialDeFirebase(e.FIREBASE_SERVICE_ACCOUNT_PATH ?? '');
+          return '';
+        } catch (err) {
+          // El mensaje del error nombra la ruta y el motivo, nunca el
+          // contenido del archivo.
+          return err instanceof Error ? err.message : 'credencial de Firebase inválida';
+        }
+      })(),
+      path: ['FIREBASE_SERVICE_ACCOUNT_PATH'],
+    }),
+  )
   .refine((e) => !e.MP_CLIENT_ID || !!e.CREDENTIALS_ENCRYPTION_KEY, {
     message:
       'Con el OAuth de Mercado Pago configurado hace falta CREDENTIALS_ENCRYPTION_KEY. ' +

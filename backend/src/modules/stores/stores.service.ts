@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { env } from '@/config/env.schema';
 import { Prisma } from '@prisma/client';
 
 import { diasEfectivos, resumenParaElComprador } from '@/modules/commerce/politicas';
@@ -667,7 +668,22 @@ export class StoresService {
         permiteEnvio: permiteEnvio(producto.store.shippingMode),
         permiteRetiro: permiteRetiro(producto.store.shippingMode),
         nota: producto.store.shippingNote,
-        trasladaCostoDelProcesador: producto.store.processorFeeMode === 'PASSED_TO_BUYER',
+        /**
+         * Siempre `false` mientras el recargo esté apagado.
+         *
+         * Es lo que la app usa para avisarle al comprador "puede sumarse un
+         * costo por el medio de pago". Dejarlo en `true` con el cálculo
+         * desactivado sería anunciar un cargo que después no aparece: la
+         * persona desconfía del total y el vendedor queda mal por algo que no
+         * hizo.
+         *
+         * Se lee la configuración del servidor, no la de la tienda: la tienda
+         * puede seguir teniendo `PASSED_TO_BUYER` guardado, y ese ajuste vuelve
+         * a tener efecto solo el día que se encienda la bandera.
+         */
+        trasladaCostoDelProcesador:
+          env.BUYER_PROCESSOR_SURCHARGE_ENABLED &&
+          producto.store.processorFeeMode === 'PASSED_TO_BUYER',
       },
       cambios: {
         modo: producto.store.exchangeMode,

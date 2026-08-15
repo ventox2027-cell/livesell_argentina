@@ -72,6 +72,14 @@ class SesionNotifier extends Notifier<EstadoSesion> {
     );
   }
 
+  /// Login de la cuenta de revisión de Google Play.
+  ///
+  /// Del otro lado sólo autentica cuentas marcadas como demostración. Ver
+  /// `AuthRepository.loginDeRevision`.
+  Future<void> deRevision({required String email, required String password}) async {
+    state = await _repo.loginDeRevision(email: email, password: password);
+  }
+
   Future<void> completarPerfil({
     String? firstName,
     String? lastName,

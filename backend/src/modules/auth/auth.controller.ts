@@ -13,12 +13,14 @@ import { AuthService } from './auth.service';
 import {
   AppleLoginSchema,
   CompleteProfileSchema,
+  DemoLoginSchema,
   DevLoginSchema,
   GoogleLoginSchema,
   RefreshSchema,
   UpdatePushTokenSchema,
   type AppleLoginDto,
   type CompleteProfileDto,
+  type DemoLoginDto,
   type DevLoginDto,
   type GoogleLoginDto,
   type RefreshDto,
@@ -75,6 +77,14 @@ export class AuthController {
       // Permite que la app esconda el acceso de prueba cuando no está
       // disponible, en vez de ofrecer un botón que va a fallar.
       devLoginEnabled: env.AUTH_DEV_LOGIN_ENABLED,
+      /**
+       * Si este servidor acepta el login de la cuenta de revisión.
+       *
+       * La app lo usa para mostrar u ocultar ese acceso. NO es una medida de
+       * seguridad —el endpoint se puede llamar igual— sino de interfaz: no
+       * tiene sentido ofrecer un camino que va a fallar.
+       */
+      demoLoginEnabled: env.DEMO_LOGIN_ENABLED,
     };
   }
 
@@ -105,6 +115,33 @@ export class AuthController {
       dto.device,
       this.ctx(req),
     );
+  }
+
+  /**
+   * Login de la cuenta de revisión de Google Play.
+   *
+   * ⛔ **Sólo autentica cuentas marcadas como demostración en la base.** Una
+   * cuenta normal no se puede autenticar por acá ni con la contraseña
+   * correcta: el WHERE de la consulta no la encuentra. Ver
+   * `AuthService.loginDemo`.
+   *
+   * ─── El límite es agresivo a propósito ───
+   *
+   * Cinco por hora y por IP. Es un endpoint con contraseña, que es la única
+   * superficie del sistema donde tiene sentido probar combinaciones — el resto
+   * exige un token firmado por Google o por Apple.
+   *
+   * Cinco por hora no molesta a un revisor, que entra una vez y se queda con la
+   * sesión, y convierte cualquier intento de adivinar en algo que tarda años.
+   */
+  @Public()
+  @RateLimit({ limit: 5, windowSec: 3600, bucket: 'auth:demo' })
+  @Post('demo')
+  demo(
+    @Body(new ZodValidationPipe(DemoLoginSchema)) dto: DemoLoginDto,
+    @Req() req: FastifyRequest,
+  ) {
+    return this.auth.loginDemo(dto, dto.device, this.ctx(req));
   }
 
   /** Sólo con `AUTH_DEV_LOGIN_ENABLED=true`. Prohibido en producción. */

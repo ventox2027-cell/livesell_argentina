@@ -93,6 +93,19 @@ const TEST_DEFAULTS: Record<string, string> = {
   SELLER_MUST_CONNECT_MP: 'false',
 
   /**
+   * ⛔ El push APAGADO en toda la suite.
+   *
+   * El `.env` de la máquina de desarrollo tiene la credencial real de Firebase
+   * cargada, y sin esto los tests inicializaban el SDK de verdad: cualquier
+   * aviso que un test dispare sale a los teléfonos reales que tengan la app
+   * instalada.
+   *
+   * No es hipotético — se descubrió porque el cierre del SDK hacía fallar la
+   * suite. El fallo era el síntoma; el problema era que estaba conectado.
+   */
+  PUSH_ENABLED: 'false',
+
+  /**
    * ⛔ Respaldo de cobro sin cuenta del vendedor. **Sólo acá.**
    *
    * La suite prueba el flujo de cobro de punta a punta —tres desenlaces,

@@ -99,6 +99,23 @@ class AuthRepository {
         'device': await _dispositivo(),
       });
 
+  /// Login de la cuenta de revisión de Google Play.
+  ///
+  /// ⛔ Del otro lado, esto **sólo** autentica cuentas marcadas como
+  /// demostración en la base. Una cuenta normal no entra por acá ni con la
+  /// contraseña correcta.
+  ///
+  /// No es un login de usuarios: VendoX no tiene registro con contraseña.
+  Future<ConSesion> loginDeRevision({
+    required String email,
+    required String password,
+  }) async =>
+      _login('/auth/demo', {
+        'email': email,
+        'password': password,
+        'device': await _dispositivo(),
+      });
+
   Future<ConSesion> _login(String ruta, Map<String, dynamic> cuerpo) async {
     final res = await _api.post<Map<String, dynamic>>(ruta, data: cuerpo, sinAuth: true);
     final datos = res.data;

@@ -126,6 +126,24 @@ class _WelcomeScreenState extends ConsumerState<WelcomeScreen> {
                         ),
                         const Text('·', style: TextStyle(color: AppColor.textoDebil)),
                       ],
+                      /**
+                       * El acceso de la cuenta de revisión de Google Play.
+                       *
+                       * Va acá, discreto y con nombre explícito, y no escondido
+                       * detrás de un gesto secreto: quien revisa la app recibe
+                       * instrucciones y tiene que poder encontrarlo sin
+                       * adivinar. Y una persona normal lee "revisión" y sigue
+                       * de largo.
+                       *
+                       * Sólo aparece si el servidor lo tiene habilitado.
+                       */
+                      if (config.demoLoginEnabled) ...[
+                        TextButton(
+                          onPressed: _ocupado ? null : _accesoDeRevision,
+                          child: const Text('Acceso de revisión'),
+                        ),
+                        const Text('·', style: TextStyle(color: AppColor.textoDebil)),
+                      ],
                       /// Configurar el backend TIENE que estar disponible antes
                       /// de entrar. Escondido detrás del login, una instalación
                       /// nueva apuntando a una URL vieja no tiene salida: no se
@@ -292,6 +310,26 @@ class _WelcomeScreenState extends ConsumerState<WelcomeScreen> {
     if (email == null || !mounted) return;
 
     await _correr(() => ref.read(sesionProvider.notifier).deDesarrollo(email: email));
+  }
+
+  /// El acceso de la cuenta de revisión de Google Play.
+  ///
+  /// Del otro lado sólo autentica cuentas marcadas como demostración: una
+  /// cuenta normal no entra por acá ni con la contraseña correcta.
+  Future<void> _accesoDeRevision() async {
+    final credenciales = await showModalBottomSheet<({String email, String password})>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => const _HojaAccesoRevision(),
+    );
+    if (credenciales == null || !mounted) return;
+
+    await _correr(
+      () => ref.read(sesionProvider.notifier).deRevision(
+            email: credenciales.email,
+            password: credenciales.password,
+          ),
+    );
   }
 }
 
@@ -498,6 +536,103 @@ class _HojaAccesoPruebaState extends State<_HojaAccesoPrueba> {
             onPressed: () => Navigator.of(context).pop(_ctrl.text.trim()),
             child: const Text('Entrar'),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// La hoja del acceso de revisión.
+///
+/// ═══════════════════════════════════════════════════════════════════════════
+/// NO ES UN LOGIN DE USUARIOS
+/// ═══════════════════════════════════════════════════════════════════════════
+///
+/// VendoX no tiene registro con contraseña. Esta pantalla existe para que quien
+/// revisa la app en Google Play pueda entrar con credenciales que le entregamos
+/// nosotros, sin depender de una cuenta de Google real —que puede pedirle una
+/// verificación cuando entra desde otro país—.
+///
+/// El texto lo dice explícitamente: si alguien que no es revisor llega hasta
+/// acá, tiene que entender de inmediato que no es para él.
+class _HojaAccesoRevision extends StatefulWidget {
+  const _HojaAccesoRevision();
+
+  @override
+  State<_HojaAccesoRevision> createState() => _HojaAccesoRevisionState();
+}
+
+class _HojaAccesoRevisionState extends State<_HojaAccesoRevision> {
+  final _email = TextEditingController();
+  final _password = TextEditingController();
+  bool _verContrasena = false;
+
+  @override
+  void dispose() {
+    _email.dispose();
+    _password.dispose();
+    super.dispose();
+  }
+
+  void _entrar() {
+    final email = _email.text.trim();
+    final password = _password.text;
+    if (email.isEmpty || password.isEmpty) return;
+    Navigator.of(context).pop((email: email, password: password));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        left: Gap.xl,
+        right: Gap.xl,
+        top: Gap.sm,
+        bottom: MediaQuery.viewInsetsOf(context).bottom + Gap.xl,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('Acceso de revisión', style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: Gap.sm),
+          const Text(
+            'Para quien revisa la app en Google Play. Si sos una persona '
+            'usuaria, entrá con Google o con Apple.',
+            style: TextStyle(color: AppColor.textoSuave, fontSize: 13, height: 1.4),
+          ),
+          const SizedBox(height: Gap.lg),
+          TextField(
+            controller: _email,
+            autofocus: true,
+            keyboardType: TextInputType.emailAddress,
+            autocorrect: false,
+            // Sin autocapitalización: un email con la primera en mayúscula es
+            // el error más común de este formulario en Android.
+            textCapitalization: TextCapitalization.none,
+            decoration: const InputDecoration(labelText: 'Email'),
+          ),
+          const SizedBox(height: Gap.md),
+          TextField(
+            controller: _password,
+            obscureText: !_verContrasena,
+            autocorrect: false,
+            enableSuggestions: false,
+            decoration: InputDecoration(
+              labelText: 'Contraseña',
+              // Poder verla importa: la contraseña de revisión es larga y se
+              // tipea desde una hoja de instrucciones.
+              suffixIcon: IconButton(
+                icon: Icon(
+                  _verContrasena ? Icons.visibility_off_rounded : Icons.visibility_rounded,
+                ),
+                onPressed: () => setState(() => _verContrasena = !_verContrasena),
+              ),
+            ),
+            onSubmitted: (_) => _entrar(),
+          ),
+          const SizedBox(height: Gap.lg),
+          FilledButton(onPressed: _entrar, child: const Text('Entrar')),
         ],
       ),
     );

@@ -539,6 +539,28 @@ model User {
   /// proceso interno sería indistinguible de uno que escribió la persona.
   birthDateDeclaredAt DateTime? @map("birth_date_declared_at")
 
+  /// ⚠️ Cuenta de DEMOSTRACIÓN. Es lo único que habilita el login con
+  /// contraseña.
+  ///
+  /// VendoX no tiene registro con contraseña: se entra con Google o con Apple.
+  /// Esta marca existe para la cuenta que se le entrega a quien revisa la app
+  /// en Google Play, que necesita credenciales tipeables y no puede depender de
+  /// una cuenta de Google real.
+  ///
+  /// `POST /auth/demo` filtra por esta columna en el WHERE. Una cuenta sin la
+  /// marca **no se puede autenticar por ahí ni con la contraseña correcta**,
+  /// porque la consulta no la encuentra.
+  ///
+  /// Se pone con un script administrativo (`scripts/cuenta-de-revision.mjs`),
+  /// nunca por la API. No hay ningún endpoint que la escriba.
+  isDemoAccount Boolean @default(false) @map("is_demo_account")
+
+  /// El hash de la contraseña de demostración. `scrypt$1$sal$hash`.
+  ///
+  /// ⛔ Sólo tiene valor en cuentas con `isDemoAccount`. Ver
+  /// `shared/crypto/contrasenas.ts`.
+  passwordHash String? @map("password_hash")
+
   role   UserRole   @default(buyer)
   status UserStatus @default(active)
 

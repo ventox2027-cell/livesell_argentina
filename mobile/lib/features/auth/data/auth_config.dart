@@ -13,6 +13,7 @@ class AuthConfig {
     this.googleServerClientId,
     this.appleBundleId,
     this.devLoginEnabled = false,
+    this.demoLoginEnabled = false,
     this.alcanzable = true,
   });
 
@@ -23,6 +24,12 @@ class AuthConfig {
   final String? googleServerClientId;
   final String? appleBundleId;
   final bool devLoginEnabled;
+
+  /// Si este servidor acepta el login de la cuenta de revisión de Google Play.
+  ///
+  /// No es una medida de seguridad: el endpoint se puede llamar igual. Sirve
+  /// para no ofrecer un camino que va a fallar.
+  final bool demoLoginEnabled;
 
   /// ¿Contestó el servidor?
   ///
@@ -77,6 +84,7 @@ final authConfigProvider = FutureProvider<AuthConfig>((ref) async {
       googleServerClientId: d['googleServerClientId'] as String?,
       appleBundleId: d['appleBundleId'] as String?,
       devLoginEnabled: d['devLoginEnabled'] as bool? ?? false,
+      demoLoginEnabled: d['demoLoginEnabled'] as bool? ?? false,
     );
   } on DioException {
     return const AuthConfig.sinConexion();

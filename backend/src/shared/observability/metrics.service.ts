@@ -11,9 +11,36 @@ import { Counter, Histogram, Registry, collectDefaultMetrics } from 'prom-client
  */
 @Injectable()
 export class MetricsService implements OnModuleInit {
+  /**
+   * Registro propio, y cada métrica declara `registers: []`.
+   *
+   * ═══════════════════════════════════════════════════════════════════════
+   * POR QUÉ NO ALCANZA CON `registry.registerMetric`
+   * ═══════════════════════════════════════════════════════════════════════
+   *
+   * `new Histogram({...})` sin `registers` se anota **también** en el registro
+   * global de `prom-client`. O sea que cada métrica vivía en dos lados: en el
+   * global, que nadie sirve, y en éste, que sí.
+   *
+   * Dos consecuencias, y la segunda es la que lo hizo visible:
+   *
+   *   · el registro global acumula métricas que ningún endpoint expone;
+   *   · **el servicio no se puede instanciar dos veces en un proceso**. El
+   *     registro global rechaza un nombre repetido con
+   *     `A metric with the name ... has already been registered`, y eso
+   *     revienta cualquier test que levante dos instancias de la aplicación —
+   *     que es justo lo que hace falta para probar el realtime con varias
+   *     máquinas.
+   *
+   * Con `registers: []` la métrica no se anota en ningún lado sola, y las
+   * `registerMetric` de abajo son las únicas que la ponen donde va.
+   */
   readonly registry = new Registry();
 
   readonly httpDuration = new Histogram({
+    // Ver el comentario de `registry`: sin esto se registran en el registro
+    // global de prom-client, que no es el que servimos.
+    registers: [],
     name: 'http_request_duration_seconds',
     help: 'Duración de las peticiones HTTP',
     labelNames: ['method', 'route', 'status'] as const,
@@ -21,12 +48,18 @@ export class MetricsService implements OnModuleInit {
   });
 
   readonly livekitTokenIssued = new Counter({
+    // Ver el comentario de `registry`: sin esto se registran en el registro
+    // global de prom-client, que no es el que servimos.
+    registers: [],
     name: 'livekit_tokens_issued_total',
     help: 'Tokens de LiveKit emitidos',
     labelNames: ['role', 'result'] as const,
   });
 
   readonly livekitApiDuration = new Histogram({
+    // Ver el comentario de `registry`: sin esto se registran en el registro
+    // global de prom-client, que no es el que servimos.
+    registers: [],
     name: 'livekit_api_duration_seconds',
     help: 'Duración de las llamadas a la API de LiveKit',
     labelNames: ['operation', 'result'] as const,
@@ -34,6 +67,9 @@ export class MetricsService implements OnModuleInit {
   });
 
   readonly spikeSamplesIngested = new Counter({
+    // Ver el comentario de `registry`: sin esto se registran en el registro
+    // global de prom-client, que no es el que servimos.
+    registers: [],
     name: 'spike_samples_ingested_total',
     help: 'Muestras del spike ingeridas',
     labelNames: ['role'] as const,
@@ -44,6 +80,9 @@ export class MetricsService implements OnModuleInit {
    * GO/NO-GO de LiveKit se lee de este histograma.
    */
   readonly spikeObservedLatency = new Histogram({
+    // Ver el comentario de `registry`: sin esto se registran en el registro
+    // global de prom-client, que no es el que servimos.
+    registers: [],
     name: 'spike_observed_latency_ms',
     help: 'Latencia observada en el spike, en milisegundos',
     labelNames: ['kind', 'network', 'carrier'] as const, // kind: probe | estimated_e2e | glass_to_glass
@@ -51,6 +90,9 @@ export class MetricsService implements OnModuleInit {
   });
 
   readonly spikeReconnectDuration = new Histogram({
+    // Ver el comentario de `registry`: sin esto se registran en el registro
+    // global de prom-client, que no es el que servimos.
+    registers: [],
     name: 'spike_reconnect_duration_ms',
     help: 'Tiempo de reconexión tras una caída de red',
     labelNames: ['role', 'network'] as const,
@@ -58,6 +100,9 @@ export class MetricsService implements OnModuleInit {
   });
 
   readonly webhookReceived = new Counter({
+    // Ver el comentario de `registry`: sin esto se registran en el registro
+    // global de prom-client, que no es el que servimos.
+    registers: [],
     name: 'webhook_received_total',
     help: 'Webhooks recibidos',
     labelNames: ['provider', 'event', 'result'] as const,
@@ -76,6 +121,9 @@ export class MetricsService implements OnModuleInit {
    * problemas técnicos. Son dos conversaciones muy distintas.
    */
   readonly inventoryReservation = new Counter({
+    // Ver el comentario de `registry`: sin esto se registran en el registro
+    // global de prom-client, que no es el que servimos.
+    registers: [],
     name: 'inventory_reservation_total',
     help: 'Reservas de inventario por desenlace',
     // created | out_of_stock | idempotent_replay | reused | expired | cancelled | consumed
@@ -91,6 +139,9 @@ export class MetricsService implements OnModuleInit {
    * pasan por la última unidad.
    */
   readonly inventoryReservationLatency = new Histogram({
+    // Ver el comentario de `registry`: sin esto se registran en el registro
+    // global de prom-client, que no es el que servimos.
+    registers: [],
     name: 'inventory_reservation_duration_seconds',
     help: 'Duración de la operación de reserva',
     buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.2, 0.5, 1, 2],
@@ -104,6 +155,9 @@ export class MetricsService implements OnModuleInit {
    * cero. Si sube, hay una carrera que el diseño no contempló.
    */
   readonly inventoryConcurrencyConflicts = new Counter({
+    // Ver el comentario de `registry`: sin esto se registran en el registro
+    // global de prom-client, que no es el que servimos.
+    registers: [],
     name: 'inventory_concurrency_conflicts_total',
     help: 'Conflictos de concurrencia no resueltos al reservar',
   });
@@ -117,6 +171,9 @@ export class MetricsService implements OnModuleInit {
    * Pago — son las dos causas posibles.
    */
   readonly latePaymentStock = new Counter({
+    // Ver el comentario de `registry`: sin esto se registran en el registro
+    // global de prom-client, que no es el que servimos.
+    registers: [],
     name: 'late_payment_stock_total',
     help: 'Recuperación de stock tras un pago tardío',
     labelNames: ['result'] as const, // reacquired | out_of_stock
@@ -125,6 +182,9 @@ export class MetricsService implements OnModuleInit {
   // ─── Órdenes ───
 
   readonly orders = new Counter({
+    // Ver el comentario de `registry`: sin esto se registran en el registro
+    // global de prom-client, que no es el que servimos.
+    registers: [],
     name: 'orders_total',
     help: 'Órdenes por desenlace',
     // created | confirmed | expired | cancelled | refund_required | refunded
@@ -132,6 +192,9 @@ export class MetricsService implements OnModuleInit {
   });
 
   readonly paymentAttempts = new Counter({
+    // Ver el comentario de `registry`: sin esto se registran en el registro
+    // global de prom-client, que no es el que servimos.
+    registers: [],
     name: 'payment_attempts_total',
     help: 'Intentos de cobro por desenlace',
     // created | approved | rejected | unknown | reconciled
@@ -146,6 +209,9 @@ export class MetricsService implements OnModuleInit {
    * "Pagar" a orden acreditada.
    */
   readonly paymentConfirmation = new Histogram({
+    // Ver el comentario de `registry`: sin esto se registran en el registro
+    // global de prom-client, que no es el que servimos.
+    registers: [],
     name: 'payment_confirmation_seconds',
     help: 'Duración del cobro, de la petición a la respuesta definitiva',
     labelNames: ['result'] as const,
@@ -153,6 +219,9 @@ export class MetricsService implements OnModuleInit {
   });
 
   readonly refunds = new Counter({
+    // Ver el comentario de `registry`: sin esto se registran en el registro
+    // global de prom-client, que no es el que servimos.
+    registers: [],
     name: 'refunds_total',
     help: 'Devoluciones por desenlace',
     labelNames: ['result'] as const, // started | completed | failed

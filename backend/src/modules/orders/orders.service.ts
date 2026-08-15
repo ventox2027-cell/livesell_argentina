@@ -342,6 +342,9 @@ export class OrdersService {
       itemsSubtotal,
       envio,
       bps: env.PROCESSOR_FEE_ESTIMATE_BPS,
+      // Apagado en la beta: el comprador paga producto + envío y nada más. El
+      // motivo, largo, está en `recargoAlComprador`.
+      habilitado: env.BUYER_PROCESSOR_SURCHARGE_ENABLED,
     });
 
     const precio = calcularPrecio({

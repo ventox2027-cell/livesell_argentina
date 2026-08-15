@@ -112,6 +112,32 @@ export function baseDelCostoDeProcesador(itemsSubtotal: number, envio: number): 
  *
  * Cero si el vendedor lo absorbe, que es lo predeterminado.
  *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * ⛔ APAGADO PARA LA BETA
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * `habilitado` viene de `BUYER_PROCESSOR_SURCHARGE_ENABLED`, que arranca en
+ * `false`. Con eso, el comprador paga **producto + envío** y nada más: el costo
+ * de Mercado Pago lo absorbe el vendedor.
+ *
+ * ─── Por qué se apaga y no se borra ───
+ *
+ * El número que se trasladaba era una ESTIMACIÓN —`PROCESSOR_FEE_ESTIMATE_BPS`,
+ * 6,19 %— calculada antes de que Mercado Pago dijera cuánto va a cobrar de
+ * verdad. Cobrarle a alguien un costo estimado de un tercero, y quedarse con la
+ * diferencia cuando el real resulta menor, es exactamente el tipo de recargo
+ * que la ley de defensa del consumidor mira con lupa.
+ *
+ * Hacerlo bien requiere conocer el costo real ANTES de cerrar el total, y eso
+ * depende del medio de pago que la persona elija en el checkout, que todavía no
+ * sabemos en ese momento. Es un problema resoluble, pero no para la beta.
+ *
+ * Se deja el modelo entero —la columna, el modo por tienda, el snapshot en cada
+ * orden— porque borrarlo significaría una migración destructiva y volver a
+ * escribirlo todo el día que se decida implementarlo bien. Y porque las órdenes
+ * históricas ya tienen su `processorSurchargeAmount` guardado: si el cálculo
+ * desapareciera, esos pedidos dejarían de cuadrar.
+ *
  * ⚠️ El recargo queda CERRADO antes de pagar. Si el costo real resulta mayor,
  * la diferencia la absorbe el vendedor: cambiar el total después de que alguien
  * aceptó pagarlo no es una opción.
@@ -121,7 +147,10 @@ export function recargoAlComprador(params: {
   itemsSubtotal: number;
   envio: number;
   bps: number;
+  /** `BUYER_PROCESSOR_SURCHARGE_ENABLED`. Apagado en la beta. */
+  habilitado: boolean;
 }): number {
+  if (!params.habilitado) return 0;
   if (params.modo === 'ABSORBED') return 0;
 
   const base = baseDelCostoDeProcesador(params.itemsSubtotal, params.envio);

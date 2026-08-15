@@ -142,15 +142,26 @@ class _PoliticasScreenState extends ConsumerState<PoliticasScreen> {
 
           const SizedBox(height: Gap.xl),
           const _Seccion('Costo de Mercado Pago'),
-          _Interruptor(
-            titulo: 'Sumarlo al total',
-            detalle: _envio.trasladaCostoDelProcesador
-                ? 'Quien compre paga el costo del cobro. Lo ve desglosado.'
-                : 'Vos absorbés el costo del cobro. Quien compre no lo ve.',
-            valor: _envio.trasladaCostoDelProcesador,
-            onCambio: (v) =>
-                setState(() => _envio = _envio.copiarCon(trasladaCostoDelProcesador: v)),
-          ),
+          if (_envio.recargoDisponible)
+            _Interruptor(
+              titulo: 'Sumarlo al total',
+              detalle: _envio.trasladaCostoDelProcesador
+                  ? 'Quien compre paga el costo del cobro. Lo ve desglosado.'
+                  : 'Vos absorbés el costo del cobro. Quien compre no lo ve.',
+              valor: _envio.trasladaCostoDelProcesador,
+              onCambio: (v) =>
+                  setState(() => _envio = _envio.copiarCon(trasladaCostoDelProcesador: v)),
+            )
+          else
+            // Deshabilitado, no oculto: quien ya lo tenía elegido tiene que
+            // poder ver qué pasó con su configuración.
+            const _Aviso(
+              'Por ahora el costo de Mercado Pago lo absorbe el vendedor. Quien '
+              'compra paga el producto y el envío, nada más.\n\n'
+              'Trasladarlo requiere conocer el costo exacto antes de cerrar el '
+              'total, y eso depende del medio de pago que elija quien compra. '
+              'Lo vamos a habilitar cuando podamos hacerlo bien.',
+            ),
 
           const SizedBox(height: Gap.lg),
           _Ejemplo(envio: _envio, precio: _ejemplo),
@@ -258,7 +269,11 @@ class _Ejemplo extends StatelessWidget {
   Widget build(BuildContext context) {
     final costoEnvio = envio.modo.necesitaMonto ? envio.montoFijo : 0;
     final base = precio + costoEnvio;
-    final recargo = envio.trasladaCostoDelProcesador
+    // La misma condición que aplica el backend: el ajuste de la tienda sólo
+    // cuenta si el servidor tiene el traslado habilitado. Si el ejemplo
+    // mostrara un recargo que el pedido real no va a tener, el vendedor
+    // configuraría su tienda mirando un número falso.
+    final recargo = envio.recargoDisponible && envio.trasladaCostoDelProcesador
         ? ((base * _bpsProcesador + 5000) ~/ 10000)
         : 0;
 
@@ -364,6 +379,40 @@ class _AvisoLegal extends StatelessWidget {
               'corridos para arrepentirse desde que recibe el producto, sin dar '
               'motivos y sin costo. Se lo mostramos siempre en tu tienda.',
               style: TextStyle(fontSize: 12, color: AppColor.textoSuave, height: 1.45),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Una explicación de por qué algo no está disponible.
+///
+/// No es un error ni una advertencia: es información. Por eso va en gris y no
+/// en ámbar — el vendedor no tiene nada que corregir.
+class _Aviso extends StatelessWidget {
+  const _Aviso(this.texto);
+  final String texto;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(Gap.md),
+      decoration: BoxDecoration(
+        color: AppColor.superficieAlta,
+        borderRadius: BorderRadius.circular(Redondeo.md),
+        border: Border.all(color: AppColor.borde),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.info_outline_rounded, size: 18, color: AppColor.textoSuave),
+          const SizedBox(width: Gap.sm),
+          Expanded(
+            child: Text(
+              texto,
+              style: const TextStyle(fontSize: 13, color: AppColor.textoSuave, height: 1.45),
             ),
           ),
         ],

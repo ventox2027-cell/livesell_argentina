@@ -216,4 +216,78 @@ void main() {
       );
     });
   });
+
+  group('Cuando alguien sube a leer', () {
+    testWidgets('⛔ un mensaje nuevo NO lo arrastra de vuelta abajo', (tester) async {
+      /**
+       * El comportamiento que el comentario de `ChatOverlay` promete y que no
+       * estaba verificado.
+       *
+       * Alguien sube a releer algo. Si cada mensaje nuevo lo devolviera al
+       * fondo, leer durante un vivo activo sería imposible: la lista se le
+       * escapa de las manos cada dos segundos.
+       *
+       * Con la lista invertida sale gratis —los mensajes nacen en el extremo
+       * del desplazamiento 0, y si la persona se movió de ahí su posición no se
+       * toca— pero "sale gratis" es exactamente el tipo de propiedad que alguien
+       * rompe sin darse cuenta el día que agregue un `ScrollController`.
+       */
+      final mensajes = [for (var i = 1; i <= 40; i++) msj('m$i.')];
+      await tester.pumpWidget(enCaja(mensajes));
+      await tester.pump();
+
+      /**
+       * Se sube a leer arrastrando con el dedo, no moviendo un controlador.
+       *
+       * `ChatOverlay` no crea un `ScrollController` propio: la posición la
+       * maneja el gesto. En una lista invertida, subir es desplazarse hacia
+       * valores POSITIVOS de `pixels`.
+       */
+      await tester.drag(find.byType(ListView), const Offset(0, 200));
+      await tester.pump();
+
+      final posicionTrasSubir = tester
+          .state<ScrollableState>(find.byType(Scrollable))
+          .position
+          .pixels;
+      expect(posicionTrasSubir, greaterThan(0), reason: 'no se llegó a subir');
+
+      // Llegan mensajes nuevos mientras está leyendo.
+      for (var i = 41; i <= 50; i++) {
+        mensajes.add(msj('m$i.'));
+      }
+      await tester.pumpWidget(enCaja(mensajes));
+      await tester.pump();
+
+      final posicionDespues = tester
+          .state<ScrollableState>(find.byType(Scrollable))
+          .position
+          .pixels;
+
+      // Sigue donde estaba. Un `animateTo(0)` acá la habría devuelto al fondo.
+      expect(posicionDespues, posicionTrasSubir);
+    });
+
+    testWidgets('al volver al fondo vuelve a seguir el hilo', (tester) async {
+      final mensajes = [for (var i = 1; i <= 40; i++) msj('m$i.')];
+      await tester.pumpWidget(enCaja(mensajes));
+      await tester.pump();
+
+      await tester.drag(find.byType(ListView), const Offset(0, 200));
+      await tester.pump();
+
+      // Vuelve abajo.
+      await tester.drag(find.byType(ListView), const Offset(0, -400));
+      await tester.pumpAndSettle();
+
+      mensajes.add(msj('recien llegado.'));
+      await tester.pumpWidget(enCaja(mensajes));
+      await tester.pump();
+
+      expect(
+        find.textContaining('recien llegado.', findRichText: true),
+        findsOneWidget,
+      );
+    });
+  });
 }

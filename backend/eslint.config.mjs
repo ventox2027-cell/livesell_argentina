@@ -4,7 +4,10 @@ import prettier from 'eslint-config-prettier';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['dist/**', 'node_modules/**', 'coverage/**', '**/*.js', '**/*.mjs'] },
+  // `**/*.cjs` va con los otros: son scripts sueltos de mantenimiento que no
+  // están en el `tsconfig`, y sin esto el linter falla al no poder tipar un
+  // archivo que nunca se compila.
+  { ignores: ['dist/**', 'node_modules/**', 'coverage/**', '**/*.js', '**/*.mjs', '**/*.cjs'] },
   eslint.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
   prettier,

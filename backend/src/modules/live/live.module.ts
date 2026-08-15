@@ -17,13 +17,20 @@ import { LiveService } from './live.service';
  * `AuthModule` porque el gateway verifica el token en el handshake: un socket
  * sin sesión válida se cierra antes de unirse a ninguna sala.
  *
- * `LiveGateway` se exporta para que el módulo de inventario pueda avisar
- * cambios de stock a las salas donde ese producto está destacado.
+ * `LiveGateway` se exporta para que `/ready` pueda preguntarle si el adaptador
+ * de Redis quedó activo. Es la única degradación del sistema que no se ve desde
+ * afuera: sin adaptador la app funciona igual, y lo único que se rompe es que
+ * un evento emitido en una instancia no llega a quien está en otra.
+ *
+ * ⚠️ Este comentario decía que se exportaba "para que el módulo de inventario
+ * avise cambios de stock", y no era cierto: `exports` sólo tenía `LiveService`.
+ * Quien avisa el stock es `LiveStockListener`, que vive acá adentro y por eso
+ * nunca necesitó la exportación.
  */
 @Module({
   imports: [AuthModule, LiveKitModule, SellerOAuthModule],
   controllers: [LiveController],
   providers: [LiveService, LiveGateway, LiveStockListener, AuditService],
-  exports: [LiveService],
+  exports: [LiveService, LiveGateway],
 })
 export class LiveModule {}

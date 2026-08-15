@@ -155,13 +155,37 @@ export class LiveGateway implements OnGatewayConnection, OnGatewayDisconnect, On
       await Promise.all([this.publicador.connect(), this.suscriptor.connect()]);
 
       servidorDe(this.server).adapter(createAdapter(this.publicador, this.suscriptor));
+      this.adaptadorActivo = true;
       this.logger.log('adaptador de Redis activo: el realtime funciona con varias instancias');
     } catch (err) {
+      this.adaptadorActivo = false;
       this.logger.error({
         msg: '⚠️ sin adaptador de Redis: el realtime SÓLO funciona con una instancia',
         error: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+
+  /**
+   * ¿Quedó activo el adaptador?
+   *
+   * ═══════════════════════════════════════════════════════════════════════
+   * POR QUÉ ESTO ES UN CAMPO Y NO SÓLO UNA LÍNEA DE LOG
+   * ═══════════════════════════════════════════════════════════════════════
+   *
+   * La degradación a una sola instancia es deliberada —Redis es precisión, no
+   * una dependencia— pero es **silenciosa desde afuera**: la app funciona, los
+   * endpoints responden, y nada indica que media sala dejó de ver el chat.
+   *
+   * Un mensaje de error en el arranque lo ve quien esté mirando la consola en
+   * ese segundo. Un campo que sale por `/health/ready` lo ve el monitoreo
+   * siempre, y es la diferencia entre enterarse ahora o el día que escale a dos
+   * máquinas y alguien reporte que "el chat anda a veces".
+   */
+  private adaptadorActivo = false;
+
+  get adaptadorDeRedisActivo(): boolean {
+    return this.adaptadorActivo;
   }
 
   /**

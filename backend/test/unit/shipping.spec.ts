@@ -111,6 +111,7 @@ describe('Costo del procesador', () => {
         itemsSubtotal: 1_000_000,
         envio: 350_000,
         bps: 619,
+        habilitado: true,
       }),
     ).toBe(0);
   });
@@ -121,6 +122,7 @@ describe('Costo del procesador', () => {
       itemsSubtotal: 1_000_000,
       envio: 350_000,
       bps: 619,
+      habilitado: true,
     });
 
     // 1.350.000 × 6,19 % = 83.565
@@ -132,7 +134,7 @@ describe('Costo del procesador', () => {
     // por un centavo, y ese centavo aparece en la conciliación.
     for (const base of [1, 99, 100, 12_345, 999_999, 1_000_000]) {
       expect(
-        recargoAlComprador({ modo: 'PASSED_TO_BUYER', itemsSubtotal: base, envio: 0, bps: 619 }),
+        recargoAlComprador({ modo: 'PASSED_TO_BUYER', itemsSubtotal: base, envio: 0, bps: 619, habilitado: true }),
         `base ${base}`,
       ).toBe(porcentajeDe(base, 619));
     }
@@ -147,6 +149,7 @@ describe('Costo del procesador', () => {
         itemsSubtotal: base,
         envio: 0,
         bps: 619,
+        habilitado: true,
       });
       expect(Number.isInteger(r), `base ${base}`).toBe(true);
     }
@@ -155,7 +158,69 @@ describe('Costo del procesador', () => {
   it('con importes chicos no se cobra de más', () => {
     // Un peso: 100 centavos × 6,19 % = 6,19 → 6.
     expect(
-      recargoAlComprador({ modo: 'PASSED_TO_BUYER', itemsSubtotal: 100, envio: 0, bps: 619 }),
+      recargoAlComprador({ modo: 'PASSED_TO_BUYER', itemsSubtotal: 100, envio: 0, bps: 619, habilitado: true }),
     ).toBe(6);
+  });
+});
+
+describe('El recargo está apagado para la beta', () => {
+  /**
+   * El comprador paga producto + envío y nada más.
+   *
+   * El número que se trasladaba era una ESTIMACIÓN calculada antes de que
+   * Mercado Pago dijera cuánto va a cobrar de verdad. Cobrarle a alguien un
+   * costo estimado de un tercero, y quedarse con la diferencia cuando el real
+   * resulta menor, es exactamente el tipo de recargo que la ley de defensa del
+   * consumidor mira con lupa.
+   */
+  it('⛔ apagado, no suma nada aunque la tienda lo tenga trasladado', () => {
+    expect(
+      recargoAlComprador({
+        modo: 'PASSED_TO_BUYER',
+        itemsSubtotal: 1_000_000,
+        envio: 350_000,
+        bps: 619,
+        habilitado: false,
+      }),
+    ).toBe(0);
+  });
+
+  it('⛔ la bandera gana sobre cualquier configuración de tienda', () => {
+    // Ninguna combinación produce un recargo con la bandera apagada.
+    for (const modo of ['ABSORBED', 'PASSED_TO_BUYER'] as const) {
+      for (const bps of [0, 619, 2000]) {
+        expect(
+          recargoAlComprador({
+            modo,
+            itemsSubtotal: 5_000_000,
+            envio: 900_000,
+            bps,
+            habilitado: false,
+          }),
+          `${modo} con ${bps} bps`,
+        ).toBe(0);
+      }
+    }
+  });
+
+  it('el cálculo sigue existiendo para el día que se encienda', () => {
+    /**
+     * Se apaga, no se borra. El modelo entero —la columna, el modo por tienda,
+     * el snapshot en cada orden— se conserva: borrarlo significaría una
+     * migración destructiva y volver a escribir todo el día que se decida
+     * implementarlo bien.
+     *
+     * Y las órdenes históricas ya tienen su `processorSurchargeAmount`
+     * guardado: si el cálculo desapareciera, esos pedidos dejarían de cuadrar.
+     */
+    expect(
+      recargoAlComprador({
+        modo: 'PASSED_TO_BUYER',
+        itemsSubtotal: 1_000_000,
+        envio: 350_000,
+        bps: 619,
+        habilitado: true,
+      }),
+    ).toBe(83_565);
   });
 });

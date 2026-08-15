@@ -15,6 +15,7 @@ import {
   mismaFecha,
   parsearFechaDeNacimiento,
 } from '@/modules/users/edad';
+import { contrasenaCoincide } from '@/shared/crypto/contrasenas';
 import { PrismaService } from '@/shared/prisma/prisma.service';
 import { newId } from '@/shared/utils/id';
 
@@ -36,6 +37,24 @@ import { normalizeEmail, normalizePhoneAr } from './tokens';
  * usuario existe con datos incompletos, y cada paso posterior tiene que
  * comprobar lo suyo en vez de asumir que ya está todo.
  */
+
+/**
+ * Un hash válido contra el que comparar cuando el usuario NO existe.
+ *
+ * Sin esto, un email inexistente responde en un milisegundo y uno real en cien:
+ * la diferencia se mide desde afuera y dice qué cuentas existen en el sistema.
+ *
+ * El valor no importa —nadie conoce su preimagen y nunca sirve para
+ * autenticar— pero tiene que tener la FORMA correcta, para que
+ * `contrasenaCoincide` haga el trabajo completo de derivación en vez de salir
+ * por el camino corto del formato inválido.
+ */
+const HASH_DESCARTABLE = [
+  'scrypt',
+  '1',
+  'A'.repeat(22),
+  'A'.repeat(86),
+].join('$');
 
 export class AccountSuspendedError extends DomainError {
   constructor(status: string) {
@@ -128,6 +147,141 @@ export class AuthService {
       ctx,
       params.role,
     );
+  }
+
+  /**
+   * Login con contraseña, EXCLUSIVAMENTE para cuentas de demostración.
+   *
+   * ═══════════════════════════════════════════════════════════════════════
+   * POR QUÉ EXISTE
+   * ═══════════════════════════════════════════════════════════════════════
+   *
+   * Quien revisa la app en Google Play necesita credenciales que pueda tipear.
+   * VendoX entra con Google o con Apple, y darle una cuenta de Google real
+   * significa depender de que Google no le pida una verificación adicional
+   * cuando el revisor entre desde otro país — que es exactamente lo que hace.
+   *
+   * ═══════════════════════════════════════════════════════════════════════
+   * POR QUÉ NO ES UN AGUJERO
+   * ═══════════════════════════════════════════════════════════════════════
+   *
+   * El aislamiento **no es un `if`**: está en el WHERE.
+   *
+   *     where: { email, isDemoAccount: true, ... }
+   *
+   * Una cuenta sin la marca no se encuentra. No es que se encuentre y se
+   * rechace: la consulta no la devuelve. Aunque alguien conozca la contraseña
+   * de la cuenta de revisión, no puede usarla para entrar a ninguna otra —no
+   * hay ninguna otra con hash, y la base lo garantiza con un CHECK—.
+   *
+   * Las tres barreras, en orden:
+   *
+   *   1. `DEMO_LOGIN_ENABLED` apagado → el endpoint no existe;
+   *   2. el WHERE exige la marca;
+   *   3. un CHECK de la base impide que una cuenta sin la marca tenga hash.
+   *
+   * Y la marca sólo la pone `scripts/cuenta-de-revision.mjs`. No hay ningún
+   * endpoint que la escriba.
+   *
+   * ⚠️ La contraseña no aparece en ningún log, ni en la bitácora, ni en el
+   * mensaje de error. Ver `registrarIntento`.
+   */
+  async loginDemo(
+    params: { email: string; password: string },
+    device: DeviceDto,
+    ctx: SessionContext,
+  ): Promise<LoginResult> {
+    if (!env.DEMO_LOGIN_ENABLED) {
+      /**
+       * El mismo error que una ruta inexistente.
+       *
+       * Un "login de demo deshabilitado" le confirma a quien prueba que el
+       * endpoint existe y que hay cuentas de demostración en este servidor.
+       */
+      throw new DomainError('NOT_FOUND', 'No disponible');
+    }
+
+    const email = normalizeEmail(params.email);
+
+    /**
+     * El WHERE es el aislamiento. `isDemoAccount` no es un filtro más.
+     *
+     * `deletedAt: null` y `status: 'active'` también van acá y no en un `if`
+     * posterior, por el mismo motivo de siempre: una condición en la consulta
+     * no se puede saltear reordenando el código.
+     */
+    const usuario = await this.prisma.user.findFirst({
+      where: { email, isDemoAccount: true, deletedAt: null, status: 'active' },
+    });
+
+    /**
+     * Se verifica un hash aunque el usuario no exista.
+     *
+     * Sin esto, un email inexistente responde en un milisegundo y uno real en
+     * cien: la diferencia se mide desde afuera y dice qué cuentas existen.
+     * Comparar contra un hash descartable iguala los tiempos.
+     */
+    const hash = usuario?.passwordHash ?? HASH_DESCARTABLE;
+    const coincide = await contrasenaCoincide(params.password, hash);
+
+    if (!usuario || !coincide) {
+      await this.registrarIntento({ email, exito: false, ctx });
+      // El mismo mensaje para "no existe" y para "contraseña equivocada".
+      throw new DomainError('INVALID_CREDENTIALS', 'Email o contraseña incorrectos');
+    }
+
+    const dispositivo = await this.registrarDispositivo(usuario.id, device);
+    const sesion = await this.sessions.createSession(
+      { id: usuario.id, role: usuario.role },
+      { ...ctx, deviceId: dispositivo.id },
+    );
+
+    await this.registrarIntento({ email, exito: true, ctx, userId: usuario.id });
+
+    return {
+      ...sesion,
+      user: this.toPublic(usuario),
+      isNewUser: false,
+      missing: this.faltantes(usuario),
+    };
+  }
+
+  /**
+   * Deja constancia del intento. Con o sin éxito.
+   *
+   * ⛔ NUNCA la contraseña, ni recortada, ni su largo. Un intento fallido con
+   * la contraseña adentro es una contraseña real —la que alguien tipeó mal por
+   * un carácter— guardada en texto plano en una tabla de auditoría.
+   *
+   * El email sí: es el identificador que se está probando y sin él la bitácora
+   * no sirve para nada. La IP la aporta el contexto de la petición.
+   */
+  private async registrarIntento(params: {
+    email: string;
+    exito: boolean;
+    ctx: SessionContext;
+    userId?: string;
+  }): Promise<void> {
+    await this.prisma.auditLog.create({
+      data: {
+        id: newId('aud'),
+        actorType: 'user',
+        action: params.exito ? 'auth.demo_login_success' : 'auth.demo_login_failed',
+        entityType: 'user',
+        entityId: params.userId ?? params.email,
+        actorId: params.userId ?? null,
+        ip: params.ctx.ip ?? null,
+        userAgent: params.ctx.userAgent ?? null,
+      },
+    });
+
+    if (!params.exito) {
+      this.logger.warn({
+        msg: 'intento fallido de login de demostración',
+        email: params.email,
+        // ⛔ Sin la contraseña. Ni su largo.
+      });
+    }
   }
 
   /**

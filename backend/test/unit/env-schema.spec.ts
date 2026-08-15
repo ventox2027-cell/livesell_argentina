@@ -40,6 +40,14 @@ const VALID_STAGING = {
   R2_SECRET_ACCESS_KEY: 'secreto-de-prueba-largo',
   R2_ENDPOINT: 'https://cuenta.r2.cloudflarestorage.com',
   R2_BUCKET: 'vendox-products',
+  /**
+   * Fuera de local, el push exige la credencial de Firebase o estar apagado
+   * explícitamente.
+   *
+   * Se apaga en la base para que los tests de OTRAS reglas no fallen por ésta;
+   * la regla en sí se prueba abajo, en su propio bloque.
+   */
+  PUSH_ENABLED: 'false',
 };
 
 describe('envSchema', () => {
@@ -481,6 +489,96 @@ describe('envSchema', () => {
       // interprete algo distinto de lo que quiso decir quien lo escribió.
       const r = envSchema.safeParse({ ...VALID, SPIKE_ENABLED: 'si' });
       expect(r.success).toBe(false);
+    });
+  });
+
+  // ─── Push ──────────────────────────────────────────────────────────────────
+
+  describe('La credencial de Firebase', () => {
+    /**
+     * ═══════════════════════════════════════════════════════════════════════
+     * POR QUÉ PRODUCCIÓN NO ARRANCA SIN ELLA
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * Un backend productivo que levanta sin poder mandar avisos **parece
+     * sano**: responde todo, las ventas entran, los pedidos se crean. Lo único
+     * que no pasa es que la gente se entere de que le pagaron, de que su pedido
+     * salió, o de que tiene un código de entrega esperando.
+     *
+     * Eso se descubre por un reclamo, días después, y para entonces hay una
+     * cantidad desconocida de avisos en `SKIPPED` que nadie va a reenviar.
+     */
+
+    it('⛔ fuera de local, con push encendido y sin ruta, no arranca', () => {
+      const r = envSchema.safeParse({
+        ...VALID_STAGING,
+        PUSH_ENABLED: 'true',
+        FIREBASE_SERVICE_ACCOUNT_PATH: undefined,
+      });
+
+      expect(r.success).toBe(false);
+      expect(JSON.stringify(r.error?.issues)).toContain('FIREBASE_SERVICE_ACCOUNT_PATH');
+    });
+
+    it('se puede arrancar sin push, pero hay que decirlo', () => {
+      /**
+       * La salida honesta: apagar el push explícitamente. No es lo mismo que
+       * olvidarse la credencial, y el esquema obliga a distinguirlo.
+       */
+      const r = envSchema.safeParse({ ...VALID_STAGING, PUSH_ENABLED: 'false' });
+      expect(r.success).toBe(true);
+    });
+
+    it('en desarrollo se degrada sin protestar', () => {
+      // Nadie tiene que conseguir una clave de Google para trabajar en el
+      // catálogo. Los avisos quedan en SKIPPED.
+      const r = envSchema.safeParse({ ...VALID, PUSH_ENABLED: 'true' });
+      expect(r.success).toBe(true);
+    });
+
+    it('⛔ una ruta que no existe se rechaza AL ARRANCAR', () => {
+      /**
+       * Una ruta escrita mal pasa cualquier validación de tipo —es un string— y
+       * revienta seis horas después, con el primer pedido pagado. Se lee el
+       * archivo ahora.
+       */
+      const r = envSchema.safeParse({
+        ...VALID,
+        PUSH_ENABLED: 'true',
+        FIREBASE_SERVICE_ACCOUNT_PATH: 'C:\\no\\existe\\firebase-admin.json',
+      });
+
+      expect(r.success).toBe(false);
+      expect(JSON.stringify(r.error?.issues)).toContain('no existe');
+    });
+
+    it('⛔ una ruta relativa se rechaza', () => {
+      // Se resuelve contra el directorio de trabajo del proceso, que no es el
+      // mismo desde la consola, desde un contenedor o desde un gestor.
+      const r = envSchema.safeParse({
+        ...VALID,
+        PUSH_ENABLED: 'true',
+        FIREBASE_SERVICE_ACCOUNT_PATH: './firebase-admin.json',
+      });
+
+      expect(r.success).toBe(false);
+      expect(JSON.stringify(r.error?.issues)).toContain('absoluta');
+    });
+
+    it('con el push apagado, ni se mira la ruta', () => {
+      /**
+       * Apagar el push tiene que ser una salida de emergencia que funcione
+       * siempre. Si además exigiera que la credencial siga siendo válida, no
+       * serviría para el caso en que se apaga justamente porque la credencial
+       * se rompió.
+       */
+      const r = envSchema.safeParse({
+        ...VALID,
+        PUSH_ENABLED: 'false',
+        FIREBASE_SERVICE_ACCOUNT_PATH: 'C:\\no\\existe\\nada.json',
+      });
+
+      expect(r.success).toBe(true);
     });
   });
 });

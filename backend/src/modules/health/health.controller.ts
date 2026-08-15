@@ -5,6 +5,7 @@ import type { FastifyReply } from 'fastify';
 
 import { Public } from '@/modules/auth/auth.guard';
 import { env } from '@/config/env.schema';
+import { LiveGateway } from '@/modules/live/live.gateway';
 import { PrismaService } from '@/shared/prisma/prisma.service';
 import { RedisService } from '@/shared/redis/redis.service';
 import { MetricsService } from '@/shared/observability/metrics.service';
@@ -15,6 +16,8 @@ interface Check {
   status: CheckState;
   latencyMs?: number;
   error?: string;
+  /** Por qué está degradado, en castellano. Para el humano que lo lea. */
+  detalle?: string;
 }
 
 const startedAt = Date.now();
@@ -47,6 +50,7 @@ export class HealthController {
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
     private readonly metrics: MetricsService,
+    private readonly gateway: LiveGateway,
   ) {}
 
   /**
@@ -106,11 +110,36 @@ export class HealthController {
     const redis: Check =
       redisCheck.status === 'error' ? { ...redisCheck, status: 'degraded' } : redisCheck;
 
+    /**
+     * El adaptador de Socket.IO, que es una degradación invisible.
+     *
+     * Sin él la app funciona: los endpoints responden, el vivo se ve, el chat
+     * anda. Lo único que se rompe es que un mensaje emitido en la instancia A
+     * no le llega a quien está conectado a la B — y eso, con una sola máquina,
+     * no se nota nunca.
+     *
+     * El día que haya dos, el síntoma es "el chat anda a veces". Que salga por
+     * acá permite que el monitoreo lo vea antes que un usuario.
+     *
+     * No cambia el estado general a `error`: con una instancia es correcto
+     * funcionar así, y sacar la API de servicio por esto sería peor.
+     */
+    const realtime: Check = this.gateway.adaptadorDeRedisActivo
+      ? { status: 'ok' }
+      : {
+          status: 'degraded',
+          detalle: 'sin adaptador de Redis: el realtime sólo funciona con una instancia',
+        };
+
     const status: CheckState =
-      database.status === 'error' ? 'error' : redis.status === 'degraded' ? 'degraded' : 'ok';
+      database.status === 'error'
+        ? 'error'
+        : redis.status === 'degraded' || realtime.status === 'degraded'
+          ? 'degraded'
+          : 'ok';
 
     reply.status(status === 'error' ? 503 : 200);
-    return { status, version: env.GIT_SHA, checks: { database, redis } };
+    return { status, version: env.GIT_SHA, checks: { database, redis, realtime } };
   }
 
   /**

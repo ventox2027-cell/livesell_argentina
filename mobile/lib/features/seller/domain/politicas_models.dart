@@ -64,6 +64,7 @@ class PoliticaDeEnvioEditable {
     required this.montoFijo,
     required this.trasladaCostoDelProcesador,
     this.nota,
+    this.recargoDisponible = false,
   });
 
   factory PoliticaDeEnvioEditable.fromJson(Map<String, dynamic> j) => PoliticaDeEnvioEditable(
@@ -71,6 +72,7 @@ class PoliticaDeEnvioEditable {
         montoFijo: (j['shippingFlatAmount'] as num?)?.toInt() ?? 0,
         nota: j['shippingNote'] as String?,
         trasladaCostoDelProcesador: j['processorFeeMode'] == 'PASSED_TO_BUYER',
+        recargoDisponible: j['recargoAlCompradorDisponible'] as bool? ?? false,
       );
 
   final ModoDeEnvio modo;
@@ -85,6 +87,13 @@ class PoliticaDeEnvioEditable {
   /// El costo es del vendedor de todas formas: esto sólo decide si lo absorbe o
   /// lo traslada.
   final bool trasladaCostoDelProcesador;
+
+  /// Si ESTE servidor permite trasladarlo. Apagado en la beta.
+  ///
+  /// La opcion se muestra deshabilitada y no oculta: el vendedor que ya la
+  /// tenia elegida tiene que poder ver que paso con su configuracion, no
+  /// encontrarse con que desaparecio.
+  final bool recargoDisponible;
 
   PoliticaDeEnvioEditable copiarCon({
     ModoDeEnvio? modo,
@@ -101,6 +110,7 @@ class PoliticaDeEnvioEditable {
         nota: nota ?? this.nota,
         trasladaCostoDelProcesador:
             trasladaCostoDelProcesador ?? this.trasladaCostoDelProcesador,
+        recargoDisponible: recargoDisponible,
       );
 
   /// ¿Se puede guardar tal como está?

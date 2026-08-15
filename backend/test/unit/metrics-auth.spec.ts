@@ -40,6 +40,8 @@ async function cargarControlador(metricsToken: string | undefined) {
     {} as never,
     {} as never,
     metrics as never,
+    // El gateway sólo lo usa `/ready`, que este archivo no prueba.
+    { adaptadorDeRedisActivo: true } as never,
   );
 
   return { controller, metrics, reply };

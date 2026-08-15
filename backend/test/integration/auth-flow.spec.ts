@@ -6,7 +6,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import type { PrismaService } from '@/shared/prisma/prisma.service';
 import type { RedisService } from '@/shared/redis/redis.service';
 
+import { hashearContrasena } from '@/shared/crypto/contrasenas';
+
 import { crearAppDePrueba } from '../helpers/app';
+import { datosDeAdulto } from '../helpers/edad';
 
 /**
  * Recorrido completo de autenticación, contra PostgreSQL REAL.
@@ -104,7 +107,13 @@ async function call(
     .getInstance()
     .inject({ method: method as never, url, headers, payload: opts.body as never });
 
-  return { status: res.statusCode, body: res.body ? JSON.parse(res.body) : null };
+  // `texto` va además del cuerpo parseado: varios tests comprueban que un
+  // secreto NO aparece en la respuesta, y eso se busca sobre el crudo.
+  return {
+    status: res.statusCode,
+    texto: res.body,
+    body: res.body ? JSON.parse(res.body) : null,
+  };
 }
 
 let n = 0;
@@ -517,5 +526,347 @@ describe('Sesiones activas', () => {
     expect(r.status).toBe(200);
     expect(r.body.length).toBeGreaterThanOrEqual(2);
     expect(r.body[0].device?.platform).toBe('android');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LA CUENTA DE REVISIÓN DE GOOGLE PLAY
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * El login con contraseña, y por qué no es un agujero.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * LO QUE ESTOS TESTS TIENEN QUE GARANTIZAR
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * VendoX no tiene registro con contraseña. Este camino existe para UNA cuenta:
+ * la que se le entrega a quien revisa la app en Google Play.
+ *
+ * La pregunta que hay que poder responder con un test, no con un argumento:
+ * **si alguien conoce la contraseña de la cuenta de revisión, ¿puede entrar a
+ * otra cuenta?** La respuesta tiene que ser no, y no por un `if` que alguien
+ * puede reordenar, sino porque la consulta no encuentra la fila.
+ */
+describe('Login de la cuenta de revisión', () => {
+  /** Enciende el interruptor para un caso y lo deja como estaba. */
+  async function conLoginDemo<T>(fn: () => Promise<T>): Promise<T> {
+    const { env } = await import('@/config/env.schema');
+    const antes = env.DEMO_LOGIN_ENABLED;
+    (env as { DEMO_LOGIN_ENABLED: boolean }).DEMO_LOGIN_ENABLED = true;
+    try {
+      return await fn();
+    } finally {
+      (env as { DEMO_LOGIN_ENABLED: boolean }).DEMO_LOGIN_ENABLED = antes;
+    }
+  }
+
+  const CONTRASENA = 'una-contrasena-de-revision-larga';
+
+  let n = 0;
+
+  /**
+   * Un id único POR CORRIDA, no sólo por test.
+   *
+   * Con ids deterministas —`usr_demo` más un contador— una corrida anterior
+   * deja filas de auditoría con el mismo `entityId`, y el test que cuenta
+   * registros encuentra los de ayer. Falló exactamente así: esperaba uno y
+   * había dos.
+   *
+   * La base de tests no se trunca entre corridas a propósito —es lento y la
+   * mayoría de los tests no lo necesita— así que la unicidad la aporta el id.
+   */
+  const CORRIDA = Date.now().toString(36).slice(-6);
+  const idDe = (prefijo: string): string =>
+    `${prefijo}_${CORRIDA}${String(n).padStart(14, '0')}`;
+
+  /** Una cuenta con la marca de demostración y contraseña. */
+  async function cuentaDemo() {
+    n += 1;
+    const email = `review-${n}-${Date.now()}@vendox.com.ar`;
+    const usuario = await prisma.user.create({
+      data: {
+        id: idDe('usr_demo'),
+        email,
+        emailVerified: true,
+        firstName: 'Revisión',
+        lastName: 'Google Play',
+        role: 'seller',
+        isDemoAccount: true,
+        passwordHash: await hashearContrasena(CONTRASENA),
+        ...datosDeAdulto(),
+      },
+    });
+    return { email, userId: usuario.id };
+  }
+
+  /** Una cuenta normal, sin la marca. Es la que NUNCA tiene que poder entrar. */
+  async function cuentaNormal() {
+    n += 1;
+    const email = `normal-${n}-${Date.now()}@test.com`;
+    const usuario = await prisma.user.create({
+      data: {
+        id: idDe('usr_norm'),
+        email,
+        emailVerified: true,
+        firstName: 'Persona',
+        lastName: 'Normal',
+        role: 'buyer',
+        ...datosDeAdulto(),
+      },
+    });
+    return { email, userId: usuario.id };
+  }
+
+  function dispositivo() {
+    return {
+      installId: `install-demo-${n}-${Date.now()}`,
+      platform: 'android',
+      appVersion: '1.0.0',
+      osVersion: '14',
+    };
+  }
+
+  function entrar(email: string, password: string) {
+    return call('POST', '/api/v1/auth/demo', {
+      body: { email, password, device: dispositivo() },
+    });
+  }
+
+  // ─── El caso feliz ───────────────────────────────────────────────────────
+
+  it('la cuenta de revisión entra con su contraseña', async () => {
+    const { email, userId } = await cuentaDemo();
+
+    const r = await conLoginDemo(() => entrar(email, CONTRASENA));
+
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(r.body.accessToken).toBeTruthy();
+    expect(r.body.user.id).toBe(userId);
+  });
+
+  // ─── El aislamiento ──────────────────────────────────────────────────────
+
+  it('⛔ una cuenta NORMAL no entra, ni con la contraseña correcta', async () => {
+    /**
+     * El test que justifica todo el bloque.
+     *
+     * Se le pone a una cuenta normal exactamente el mismo hash que a la de
+     * revisión. Si el aislamiento fuera un `if` sobre el resultado, esto
+     * entraría; como está en el WHERE, la consulta no la encuentra.
+     */
+    const normal = await cuentaNormal();
+    await prisma.$executeRawUnsafe(
+      'UPDATE users SET password_hash = (SELECT password_hash FROM users WHERE id = $1) WHERE id = $2',
+      (await cuentaDemo()).userId,
+      normal.userId,
+    ).catch(() => {
+      /**
+       * La base lo rechaza con el CHECK `users_password_only_for_demo_check`, y
+       * eso YA es la respuesta correcta: no se puede ni escribir un hash en una
+       * cuenta sin la marca.
+       *
+       * Se sigue igual para comprobar la otra barrera.
+       */
+    });
+
+    const r = await conLoginDemo(() => entrar(normal.email, CONTRASENA));
+
+    expect(r.status).toBe(401);
+    expect(r.body.error.code).toBe('INVALID_CREDENTIALS');
+  });
+
+  it('⛔ el WHERE bloquea aunque la base no ayude', async () => {
+    /**
+     * ═══════════════════════════════════════════════════════════════════════
+     * POR QUÉ ESTE TEST TIRA UN CONSTRAINT ABAJO
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * Las dos barreras —el CHECK de la base y el `isDemoAccount` del WHERE— se
+     * tapan mutuamente. Se descubrió sabotéandolas: al sacar `isDemoAccount`
+     * del WHERE, los tests seguían en verde, porque el CHECK impide que una
+     * cuenta normal llegue siquiera a tener un hash.
+     *
+     * Eso es exactamente lo que se busca de una defensa en capas. Pero
+     * significa que la segunda capa **no estaba probada**: si mañana alguien
+     * quita el CHECK en una migración, nada avisaría de que el WHERE es lo
+     * único que queda.
+     *
+     * Así que se quita el CHECK acá adentro, se crea el estado imposible, y se
+     * comprueba que el WHERE sigue frenando solo. Se restaura al final pase lo
+     * que pase.
+     */
+    const normal = await cuentaNormal();
+    const hash = await hashearContrasena(CONTRASENA);
+
+    await prisma.$executeRawUnsafe(
+      'ALTER TABLE users DROP CONSTRAINT users_password_only_for_demo_check',
+    );
+
+    try {
+      // El estado que el CHECK vuelve imposible: cuenta normal, con hash.
+      await prisma.$executeRawUnsafe(
+        'UPDATE users SET password_hash = $1 WHERE id = $2',
+        hash,
+        normal.userId,
+      );
+
+      const r = await conLoginDemo(() => entrar(normal.email, CONTRASENA));
+
+      // La contraseña es correcta y la cuenta tiene el hash. Igual no entra.
+      expect(r.status).toBe(401);
+      expect(r.body.error.code).toBe('INVALID_CREDENTIALS');
+    } finally {
+      await prisma.$executeRawUnsafe(
+        'UPDATE users SET password_hash = NULL WHERE id = $1',
+        normal.userId,
+      );
+      await prisma.$executeRawUnsafe(
+        'ALTER TABLE users ADD CONSTRAINT users_password_only_for_demo_check ' +
+          'CHECK (password_hash IS NULL OR is_demo_account = true)',
+      );
+    }
+  });
+
+  it('⛔ la base impide poner una contraseña en una cuenta sin la marca', async () => {
+    /**
+     * La tercera barrera, comprobada directamente.
+     *
+     * Sin el CHECK, el WHERE sería lo único que separa la cuenta de revisión de
+     * las demás, y una barrera sola es una barrera que alguien saltea.
+     */
+    const normal = await cuentaNormal();
+
+    await expect(
+      prisma.user.update({
+        where: { id: normal.userId },
+        data: { passwordHash: await hashearContrasena(CONTRASENA) },
+      }),
+    ).rejects.toThrow();
+  });
+
+  it('⛔ un email que no existe da el MISMO error que la contraseña mala', async () => {
+    // Responder distinto le dice a quien prueba qué cuentas existen.
+    const { email } = await cuentaDemo();
+
+    const inexistente = await conLoginDemo(() =>
+      entrar('nadie-aca@vendox.com.ar', CONTRASENA),
+    );
+    const malaContrasena = await conLoginDemo(() => entrar(email, 'la-equivocada-larga'));
+
+    expect(inexistente.status).toBe(401);
+    expect(malaContrasena.status).toBe(401);
+    expect(inexistente.body.error.message).toBe(malaContrasena.body.error.message);
+  });
+
+  it('⛔ una cuenta demo suspendida no entra', async () => {
+    const { email, userId } = await cuentaDemo();
+    await prisma.user.update({ where: { id: userId }, data: { status: 'suspended' } });
+
+    const r = await conLoginDemo(() => entrar(email, CONTRASENA));
+    expect(r.status).toBe(401);
+  });
+
+  it('⛔ una cuenta demo cerrada no entra', async () => {
+    const { email, userId } = await cuentaDemo();
+    await prisma.user.update({ where: { id: userId }, data: { deletedAt: new Date() } });
+
+    const r = await conLoginDemo(() => entrar(email, CONTRASENA));
+    expect(r.status).toBe(401);
+  });
+
+  // ─── El interruptor ──────────────────────────────────────────────────────
+
+  it('⛔ apagado, el endpoint responde como si no existiera', async () => {
+    /**
+     * 404 y no 403. Un "login de demo deshabilitado" le confirma a quien prueba
+     * que el endpoint existe y que hay cuentas de demostración en este
+     * servidor.
+     */
+    const { email } = await cuentaDemo();
+
+    const r = await entrar(email, CONTRASENA);
+
+    expect(r.status).toBe(404);
+    expect(r.body.error.code).toBe('NOT_FOUND');
+  });
+
+  // ─── La bitácora ─────────────────────────────────────────────────────────
+
+  it('queda registrado el intento exitoso, SIN la contraseña', async () => {
+    const { email, userId } = await cuentaDemo();
+
+    await conLoginDemo(() => entrar(email, CONTRASENA));
+
+    const registros = await prisma.auditLog.findMany({
+      where: { action: 'auth.demo_login_success', entityId: userId },
+    });
+
+    expect(registros).toHaveLength(1);
+    expect(JSON.stringify(registros)).not.toContain(CONTRASENA);
+  });
+
+  it('queda registrado el intento FALLIDO, sin la contraseña probada', async () => {
+    /**
+     * Guardar la contraseña que alguien tipeó mal es guardar una contraseña
+     * real en texto plano: casi siempre es la correcta con un carácter de
+     * diferencia.
+     */
+    const { email } = await cuentaDemo();
+
+    await conLoginDemo(() => entrar(email, 'esta-es-la-que-probe-y-fallo'));
+
+    const registros = await prisma.auditLog.findMany({
+      where: { action: 'auth.demo_login_failed', entityId: email },
+    });
+
+    expect(registros.length).toBeGreaterThan(0);
+    expect(JSON.stringify(registros)).not.toContain('esta-es-la-que-probe');
+  });
+
+  it('⛔ la respuesta nunca devuelve el hash', async () => {
+    const { email } = await cuentaDemo();
+
+    const r = await conLoginDemo(() => entrar(email, CONTRASENA));
+
+    expect(r.texto).not.toContain('scrypt$');
+    expect(r.texto).not.toContain('passwordHash');
+    expect(r.texto).not.toContain(CONTRASENA);
+  });
+
+  it('⛔ el perfil tampoco devuelve el hash ni la marca de demo', async () => {
+    const { email } = await cuentaDemo();
+    const login = await conLoginDemo(() => entrar(email, CONTRASENA));
+
+    const me = await call('GET', '/api/v1/auth/me', {
+      token: login.body.accessToken as string,
+    });
+
+    expect(me.texto).not.toContain('scrypt$');
+    expect(me.texto).not.toContain('passwordHash');
+    expect(me.texto).not.toContain('isDemoAccount');
+  });
+
+  // ─── El límite ───────────────────────────────────────────────────────────
+
+  it('⛔ cinco intentos por hora y se corta', async () => {
+    /**
+     * Es la única superficie del sistema donde tiene sentido probar
+     * combinaciones: el resto exige un token firmado por Google o por Apple.
+     *
+     * Cinco por hora no molesta a un revisor —entra una vez y se queda con la
+     * sesión— y convierte adivinar en algo que tarda años.
+     */
+    const { email } = await cuentaDemo();
+
+    const respuestas: number[] = [];
+    await conLoginDemo(async () => {
+      for (let i = 0; i < 7; i++) {
+        const r = await entrar(email, `intento-equivocado-${i}`);
+        respuestas.push(r.status);
+      }
+    });
+
+    expect(respuestas.filter((s) => s === 429).length).toBeGreaterThan(0);
   });
 });

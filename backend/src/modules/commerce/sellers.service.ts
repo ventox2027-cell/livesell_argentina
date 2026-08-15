@@ -19,6 +19,7 @@ import { AuditService } from '@/shared/audit/audit.service';
 import { DomainEvent, DomainEventBus } from '@/shared/events/domain-events';
 import { DomainError } from '@/shared/errors/domain.error';
 import { exigirMayoriaDeEdad } from '@/modules/users/edad';
+import { env } from '@/config/env.schema';
 import { PrismaService } from '@/shared/prisma/prisma.service';
 import { newId } from '@/shared/utils/id';
 import { slugDisponible } from '@/shared/utils/slug';
@@ -354,6 +355,19 @@ export class SellersService {
       permiteRetiro: permiteRetiro(store.shippingMode),
       etiquetaEnvio: etiquetaDeEnvio(politica, false),
       costoEnvio: costoDeEnvio(politica, false),
+      /**
+       * ¿Este servidor permite trasladarle al comprador el costo de Mercado
+       * Pago?
+       *
+       * `false` en la beta. La app usa esto para deshabilitar la opción
+       * "Sumarlo al total" en vez de ocultarla: el vendedor que ya la tenía
+       * elegida tiene que poder ver qué pasó con su configuración, no
+       * encontrarse con que desapareció.
+       *
+       * El valor guardado en `processorFeeMode` no se toca. Vuelve a tener
+       * efecto el día que se encienda `BUYER_PROCESSOR_SURCHARGE_ENABLED`.
+       */
+      recargoAlCompradorDisponible: env.BUYER_PROCESSOR_SURCHARGE_ENABLED,
     };
   }
 

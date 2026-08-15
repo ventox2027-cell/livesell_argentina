@@ -3,10 +3,30 @@ import { z } from 'zod';
 /**
  * Contratos de entrada de autenticación.
  *
- * Regla que gobierna estos esquemas: **ningún campo de contraseña**. No hay
- * contraseñas en este producto. El acceso es por proveedor externo, y si
- * mañana alguien agrega un campo `password`, la conversación tiene que ser
- * sobre por qué, no sobre cómo hashearla.
+ * ═══════════════════════════════════════════════════════════════════════════
+ * HAY EXACTAMENTE UN CAMPO DE CONTRASEÑA, Y ACÁ ESTÁ EL PORQUÉ
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Este archivo decía: "ningún campo de contraseña. No hay contraseñas en este
+ * producto. Si mañana alguien agrega un campo `password`, la conversación tiene
+ * que ser sobre por qué, no sobre cómo hashearla."
+ *
+ * Esta es esa conversación.
+ *
+ * `DemoLoginSchema` existe para **una cuenta**: la que se le entrega a quien
+ * revisa la app en Google Play. Un revisor necesita credenciales que pueda
+ * tipear, y las dos alternativas eran peores:
+ *
+ *   · darle una cuenta de Google real — depende de que Google no le pida una
+ *     verificación cuando entre desde otro país, que es exactamente lo que
+ *     hace, y ata la revisión a la cuenta personal de alguien del equipo;
+ *   · habilitar `/auth/dev` en producción — eso sí es un agujero: emite
+ *     sesiones para cualquier email sin verificar nada.
+ *
+ * El acceso de todos los demás sigue siendo por proveedor externo. La regla no
+ * cambió: sigue sin haber registro con contraseña, y el aislamiento no es una
+ * promesa sino tres barreras —el interruptor, el WHERE con `isDemoAccount`, y
+ * un CHECK en la base—. Ver `AuthService.loginDemo`.
  */
 
 /** Datos del dispositivo. Llegan en cada login para poder cerrar sesiones. */
@@ -100,6 +120,20 @@ export const CompleteProfileSchema = z
     message: 'No hay nada que actualizar',
   });
 export type CompleteProfileDto = z.infer<typeof CompleteProfileSchema>;
+
+/**
+ * Login de la cuenta de revisión.
+ *
+ * Sin reglas de complejidad sobre la contraseña: quien la manda ya la tiene, y
+ * rechazarla acá por corta le diría a quien está probando cuál es la política.
+ * El mínimo se exige al CARGARLA, en el script administrativo.
+ */
+export const DemoLoginSchema = z.object({
+  email: z.string().email().max(254),
+  password: z.string().min(1).max(200),
+  device: DeviceSchema,
+});
+export type DemoLoginDto = z.infer<typeof DemoLoginSchema>;
 
 export const UpdatePushTokenSchema = z.object({
   installId: z.string().min(8).max(128),
