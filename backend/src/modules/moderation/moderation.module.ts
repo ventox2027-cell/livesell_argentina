@@ -2,7 +2,12 @@ import { Module } from '@nestjs/common';
 
 import { AuditService } from '@/shared/audit/audit.service';
 
-import { ModerationAdminController, ModerationController } from './moderation.controller';
+import { BloqueosService } from './bloqueos.service';
+import {
+  BloqueosController,
+  ModerationAdminController,
+  ModerationController,
+} from './moderation.controller';
 import { ModerationService } from './moderation.service';
 
 /**
@@ -15,8 +20,8 @@ import { ModerationService } from './moderation.service';
  * reportar, la respuesta es "hasta que alguien nos escriba por Instagram".
  */
 @Module({
-  controllers: [ModerationController, ModerationAdminController],
-  providers: [ModerationService, AuditService],
-  exports: [ModerationService],
+  controllers: [ModerationController, ModerationAdminController, BloqueosController],
+  providers: [ModerationService, BloqueosService, AuditService],
+  exports: [ModerationService, BloqueosService],
 })
 export class ModerationModule {}

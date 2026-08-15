@@ -5,6 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/design/tokens.dart';
+import '../../../shared/widgets/app_snack.dart';
+import '../../moderation/data/bloqueos_api.dart';
+import '../../moderation/presentation/reportar_sheet.dart';
 import '../data/live_api.dart';
 import '../domain/live_models.dart';
 import 'shop_sheet.dart';
@@ -44,6 +47,10 @@ class SellerProfileScreen extends ConsumerStatefulWidget {
 
 class _SellerProfileScreenState extends ConsumerState<SellerProfileScreen> {
   PerfilDeVendedor? _perfil;
+
+  /// `null` mientras no se sabe: evita pintar "Bloquear" y que al abrir el
+  /// menú diga "Desbloquear".
+  bool? _loBloquee;
   bool _cargando = true;
   bool _alternandoFollow = false;
 
@@ -65,6 +72,21 @@ class _SellerProfileScreenState extends ConsumerState<SellerProfileScreen> {
       }
     } catch (_) {
       if (mounted) setState(() => _cargando = false);
+    }
+
+    /**
+     * El estado del bloqueo se pide APARTE y sin bloquear la pantalla.
+     *
+     * Va después y en su propio `try` porque es información secundaria: si esa
+     * consulta falla, el perfil tiene que verse igual. Lo único que pasa es que
+     * el menú va a ofrecer "Bloquear" cuando quizás ya está bloqueado, y tocarlo
+     * es idempotente del lado del servidor.
+     */
+    try {
+      final bloqueado = await ref.read(bloqueosApiProvider).bloqueeAlVendedor(widget.sellerId);
+      if (mounted) setState(() => _loBloquee = bloqueado);
+    } catch (_) {
+      // Sin cartel: no es algo que la persona pidió.
     }
   }
 
@@ -126,6 +148,14 @@ class _SellerProfileScreenState extends ConsumerState<SellerProfileScreen> {
       appBar: AppBar(
         backgroundColor: AppColor.fondo,
         title: Text(perfil?.tiendaNombre ?? perfil?.nombre ?? 'Vendedor'),
+        actions: [
+          if (perfil != null)
+            IconButton(
+              icon: const Icon(Icons.more_vert_rounded),
+              tooltip: 'Más opciones',
+              onPressed: () => unawaited(_menu()),
+            ),
+        ],
       ),
       body: _cargando
           ? const Center(child: CircularProgressIndicator())
@@ -185,6 +215,126 @@ class _SellerProfileScreenState extends ConsumerState<SellerProfileScreen> {
                   ),
                 ),
     );
+  }
+
+  /// El menú de "…" del perfil de un vendedor.
+  ///
+  /// ═══════════════════════════════════════════════════════════════════════
+  /// BLOQUEAR Y REPORTAR SON COSAS DISTINTAS
+  /// ═══════════════════════════════════════════════════════════════════════
+  ///
+  /// Llegan del mismo lugar y los textos tienen que dejar clarísima la
+  /// diferencia:
+  ///
+  ///   · **bloquear** es para uno mismo. Inmediato, reversible, la otra persona
+  ///     no se entera;
+  ///   · **reportar** es pedirle a VendoX que lo revise. Lo mira una persona.
+  ///
+  /// Quien quiere que alguien desaparezca de su vista no debería tener que
+  /// denunciarlo; y quien vio algo grave no debería creer que bloqueando ya
+  /// avisó.
+  Future<void> _menu() async {
+    final bloqueado = _loBloquee ?? false;
+
+    final opcion = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: AppColor.superficie,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: Icon(
+                bloqueado ? Icons.lock_open_rounded : Icons.block_rounded,
+                color: bloqueado ? AppColor.textoSuave : AppColor.error,
+              ),
+              title: Text(bloqueado ? 'Desbloquear' : 'Bloquear'),
+              subtitle: Text(
+                bloqueado
+                    ? 'Vas a volver a ver su tienda y sus vivos.'
+                    : 'No vas a ver más su tienda ni sus vivos, y no van a poder '
+                        'escribirse en el chat. No se entera.',
+                style: const TextStyle(fontSize: 12.5, height: 1.35),
+              ),
+              onTap: () => Navigator.pop(ctx, bloqueado ? 'desbloquear' : 'bloquear'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.flag_outlined, color: AppColor.alerta),
+              title: const Text('Reportar'),
+              subtitle: const Text(
+                'Lo revisa una persona de VendoX.',
+                style: TextStyle(fontSize: 12.5),
+              ),
+              onTap: () => Navigator.pop(ctx, 'reportar'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (opcion == null || !mounted) return;
+
+    switch (opcion) {
+      case 'bloquear':
+        await _confirmarBloqueo();
+      case 'desbloquear':
+        await _desbloquear();
+      case 'reportar':
+        await ReportarSheet.mostrar(
+          context,
+          targetType: 'SELLER',
+          targetId: widget.sellerId,
+        );
+    }
+  }
+
+  /// Se confirma antes de bloquear.
+  ///
+  /// No por burocracia: bloquear a un vendedor le esconde su tienda a quien lo
+  /// hace, y si tiene un pedido en curso conviene que sepa que eso NO se
+  /// cancela — es lo primero que la gente asume.
+  Future<void> _confirmarBloqueo() async {
+    final confirma = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColor.superficie,
+        title: const Text('¿Bloquear a esta tienda?'),
+        content: const Text(
+          'Dejás de ver sus productos y sus vivos, y no van a poder escribirse '
+          'en el chat. No se entera y lo podés deshacer cuando quieras.\n\n'
+          'Tus pedidos en curso con esta tienda siguen igual.',
+          style: TextStyle(color: AppColor.textoSuave, height: 1.45),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: AppColor.error),
+            child: const Text('Bloquear'),
+          ),
+        ],
+      ),
+    );
+    if (confirma != true || !mounted) return;
+
+    try {
+      await ref.read(bloqueosApiProvider).bloquearVendedor(widget.sellerId);
+      if (!mounted) return;
+      setState(() => _loBloquee = true);
+      AppSnack.info(context, 'Bloqueada. No va a aparecer más en tu feed.');
+    } catch (_) {
+      if (mounted) AppSnack.error(context, 'No pudimos bloquear. Probá de nuevo.');
+    }
+  }
+
+  Future<void> _desbloquear() async {
+    try {
+      await ref.read(bloqueosApiProvider).desbloquearVendedor(widget.sellerId);
+      if (!mounted) return;
+      setState(() => _loBloquee = false);
+      AppSnack.info(context, 'Desbloqueada.');
+    } catch (_) {
+      if (mounted) AppSnack.error(context, 'No pudimos desbloquear. Probá de nuevo.');
+    }
   }
 }
 

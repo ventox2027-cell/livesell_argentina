@@ -2882,3 +2882,212 @@ describe('Derechos sobre los propios datos', () => {
     });
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BLOQUEAR A ALGUIEN
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * El bloqueo entre personas.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * LO QUE HAY QUE GARANTIZAR
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Dos cosas que tiran para lados opuestos:
+ *
+ *   · **que funcione** — quien bloquea deja de ver a la otra persona en el
+ *     feed, y el chat se corta en los dos sentidos;
+ *   · **que no se pueda usar como arma** — bloquear no puede tener
+ *     consecuencias para quien es bloqueado, ni hacerle desaparecer la tienda,
+ *     ni avisarle nada.
+ *
+ * Si lo primero falla, la función no sirve. Si falla lo segundo, se convierte
+ * en una herramienta para sabotear competidores.
+ */
+describe('Bloqueo entre personas', () => {
+  async function dosPersonas() {
+    const a = await nuevoUsuario();
+    const b = await nuevoUsuario();
+    return { a, b };
+  }
+
+  it('bloquear y desbloquear', async () => {
+    const { a, b } = await dosPersonas();
+
+    const bloqueo = await call('POST', `/api/v1/blocks/${b.userId}`, { token: a.token });
+    expect(bloqueo.status, JSON.stringify(bloqueo.body)).toBe(201);
+    expect(bloqueo.body.bloqueado).toBe(true);
+
+    const estado = await call('GET', `/api/v1/blocks/${b.userId}`, { token: a.token });
+    expect(estado.body.bloqueado).toBe(true);
+
+    const quitar = await call('DELETE', `/api/v1/blocks/${b.userId}`, { token: a.token });
+    expect(quitar.status).toBe(200);
+
+    const despues = await call('GET', `/api/v1/blocks/${b.userId}`, { token: a.token });
+    expect(despues.body.bloqueado).toBe(false);
+  });
+
+  it('bloquear dos veces no falla', async () => {
+    /**
+     * Idempotente a propósito. Alguien que toca el botón dos veces por nervios
+     * —que es exactamente el estado de quien está bloqueando a alguien que lo
+     * molesta— no tiene por qué ver un mensaje rojo.
+     */
+    const { a, b } = await dosPersonas();
+
+    const uno = await call('POST', `/api/v1/blocks/${b.userId}`, { token: a.token });
+    const dos = await call('POST', `/api/v1/blocks/${b.userId}`, { token: a.token });
+
+    expect(uno.status).toBe(201);
+    expect(dos.status).toBe(201);
+    expect(dos.body.bloqueado).toBe(true);
+    // Y queda UNA fila, no dos.
+    expect(await prisma.userBlock.count({ where: { blockerId: a.userId } })).toBe(1);
+  });
+
+  it('desbloquear a quien no estaba tampoco falla', async () => {
+    const { a, b } = await dosPersonas();
+    const r = await call('DELETE', `/api/v1/blocks/${b.userId}`, { token: a.token });
+    expect(r.status).toBe(200);
+  });
+
+  it('⛔ nadie se bloquea a sí mismo', async () => {
+    const a = await nuevoUsuario();
+    const r = await call('POST', `/api/v1/blocks/${a.userId}`, { token: a.token });
+
+    expect(r.status).toBe(422);
+    expect(r.body.error.code).toBe('CANNOT_BLOCK_SELF');
+  });
+
+  it('⛔ no se puede bloquear a alguien que no existe', async () => {
+    // Sin esta comprobación, la lista de bloqueados se llena de fantasmas que
+    // la interfaz no puede mostrar.
+    const a = await nuevoUsuario();
+    const r = await call('POST', '/api/v1/blocks/usr_00000000000000000000000000', {
+      token: a.token,
+    });
+
+    expect(r.status).toBe(404);
+  });
+
+  it('la lista muestra a quién bloqueó, con la inicial del apellido', async () => {
+    /**
+     * El apellido completo de alguien no tiene por qué quedar en una lista que
+     * se abre delante de otra persona. "Comprador P." alcanza para
+     * reconocerlo.
+     */
+    const { a, b } = await dosPersonas();
+    await call('POST', `/api/v1/blocks/${b.userId}`, {
+      token: a.token,
+      body: { reason: 'me escribía cosas raras' },
+    });
+
+    const lista = await call('GET', '/api/v1/blocks', { token: a.token });
+
+    expect(lista.status).toBe(200);
+    expect(lista.body).toHaveLength(1);
+    expect(lista.body[0].userId).toBe(b.userId);
+    expect(lista.body[0].motivo).toBe('me escribía cosas raras');
+    // Nombre y una inicial con punto, no el apellido entero.
+    expect(lista.body[0].nombre).toMatch(/^\S+ \S\.$/);
+  });
+
+  // ─── Lo que NO tiene que pasar ───────────────────────────────────────────
+
+  it('⛔ quien es bloqueado NO se entera', async () => {
+    /**
+     * Avisarle a alguien que lo bloquearon es darle un motivo y un objetivo.
+     * Quien bloquea suele estar tratando de que la otra persona pierda interés,
+     * no de confrontarla.
+     */
+    const { a, b } = await dosPersonas();
+    await call('POST', `/api/v1/blocks/${b.userId}`, { token: a.token });
+
+    // Desde el lado de B no hay nada: ni en su lista, ni en el estado.
+    const suLista = await call('GET', '/api/v1/blocks', { token: b.token });
+    expect(suLista.body).toHaveLength(0);
+
+    const suEstado = await call('GET', `/api/v1/blocks/${a.userId}`, { token: b.token });
+    expect(suEstado.body.bloqueado).toBe(false);
+
+    // Y no le llegó ningún aviso.
+    const avisos = await prisma.notification.count({ where: { userId: b.userId } });
+    expect(avisos).toBe(0);
+  });
+
+  it('⛔ el bloqueo NO cancela pedidos en curso', async () => {
+    /**
+     * Una compra hecha es un contrato entre dos personas y no se deshace porque
+     * una deje de querer ver a la otra.
+     *
+     * Si bloquear cancelara pedidos, sería la forma más barata de arrepentirse
+     * de una compra sin pasar por la cancelación —que tiene sus reglas— y de
+     * dejarle una venta caída al vendedor.
+     */
+    const { variantId, sellerUserId } = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, variantId));
+    expect(orden.status).toBe(201);
+
+    await call('POST', `/api/v1/blocks/${sellerUserId}`, { token: comprador.token });
+
+    const enBase = await prisma.order.findUniqueOrThrow({
+      where: { id: orden.body.id as string },
+    });
+    expect(enBase.status).not.toBe('CANCELLED');
+
+    // Y el comprador lo sigue viendo en sus pedidos.
+    const detalle = await call('GET', `/api/v1/orders/${orden.body.id}`, {
+      token: comprador.token,
+    });
+    expect(detalle.status).toBe(200);
+  });
+
+  it('⛔ bloquear a un vendedor no le esconde la tienda a NADIE MÁS', async () => {
+    /**
+     * El ocultamiento es unilateral. Si fuera recíproco, bloquear sería una
+     * forma de hacerle desaparecer la tienda a un competidor.
+     */
+    const { sellerUserId, productId } = await nuevaVarianteConStock(3);
+    const quienBloquea = await nuevoUsuario();
+    const otraPersona = await nuevoUsuario();
+
+    await call('POST', `/api/v1/blocks/${sellerUserId}`, { token: quienBloquea.token });
+
+    // Para cualquier otro, el producto sigue estando.
+    const publico = await call('GET', `/api/v1/catalog/products/${productId}`, {
+      token: otraPersona.token,
+    });
+    expect(publico.status).toBe(200);
+
+    // Y sin sesión también.
+    const sinSesion = await call('GET', `/api/v1/catalog/products/${productId}`);
+    expect(sinSesion.status).toBe(200);
+  });
+
+  it('queda en la bitácora, sin el motivo', async () => {
+    /**
+     * La secuencia de bloqueos es media investigación de acoso: quién, a quién,
+     * cuándo, y si hubo desbloqueos en el medio.
+     *
+     * El motivo NO va: puede contener el relato de algo que le pasó a la
+     * persona, y la bitácora se lee entera cuando se investiga cualquier otra
+     * cosa.
+     */
+    const { a, b } = await dosPersonas();
+    await call('POST', `/api/v1/blocks/${b.userId}`, {
+      token: a.token,
+      body: { reason: 'un relato personal que no tiene que quedar en la auditoría' },
+    });
+
+    const registros = await prisma.auditLog.findMany({
+      where: { action: 'user.blocked', entityId: b.userId },
+    });
+
+    expect(registros).toHaveLength(1);
+    expect(registros[0]!.actorId).toBe(a.userId);
+    expect(JSON.stringify(registros)).not.toContain('un relato personal');
+  });
+});

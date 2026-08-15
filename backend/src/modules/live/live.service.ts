@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 
 import { LiveKitService } from '@/modules/livekit/livekit.service';
 import { SellerOAuthService } from '@/modules/payments/seller-oauth.service';
+import { BloqueosService } from '@/modules/moderation/bloqueos.service';
 import { AuditService } from '@/shared/audit/audit.service';
 import { DomainError } from '@/shared/errors/domain.error';
 import { PrismaService } from '@/shared/prisma/prisma.service';
@@ -61,6 +62,7 @@ export class LiveService {
     private readonly gateway: LiveGateway,
     private readonly audit: AuditService,
     private readonly sellerOAuth: SellerOAuthService,
+    private readonly bloqueos: BloqueosService,
   ) {}
 
   /**
@@ -697,10 +699,29 @@ export class LiveService {
     };
   }
 
-  /** Los vivos activos, para el feed. */
-  async activos(limite = 20) {
+  /**
+   * Los vivos activos, para el feed.
+   *
+   * ─── Sin los vendedores que esta persona bloqueó ───
+   *
+   * `userId` es opcional porque el feed también se ve sin sesión. Con sesión,
+   * los vivos de quien bloqueó no aparecen.
+   *
+   * Es unilateral: si B bloqueó a A, A sigue viendo los vivos de B. Lo
+   * contrario permitiría hacerle desaparecer la tienda a alguien
+   * bloqueándolo, que es una forma barata de sabotear a un competidor.
+   */
+  async activos(limite = 20, userId?: string) {
+    const bloqueados = userId ? await this.bloqueos.bloqueadosPor(userId) : [];
+
     const sesiones = await this.prisma.liveSession.findMany({
-      where: { state: { in: ['LIVE', 'RECONNECTING'] } },
+      where: {
+        state: { in: ['LIVE', 'RECONNECTING'] },
+        // El filtro va en el WHERE y no en un `.filter()` posterior: filtrar
+        // después rompe la paginación —se piden veinte y llegan diecisiete— y
+        // acá el tope es `take`.
+        ...(bloqueados.length > 0 ? { seller: { userId: { notIn: bloqueados } } } : {}),
+      },
       orderBy: { startedAt: 'desc' },
       take: limite,
       include: {

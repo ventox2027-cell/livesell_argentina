@@ -1,10 +1,11 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Query } from '@nestjs/common';
 import { z } from 'zod';
 
 import { CurrentUser, Roles, type AuthenticatedUser } from '@/modules/auth/auth.guard';
 import { RateLimit } from '@/shared/http/rate-limit.guard';
 import { ZodValidationPipe } from '@/shared/http/zod-validation.pipe';
 
+import { BloqueosService } from './bloqueos.service';
 import { ModerationService } from './moderation.service';
 
 const DESTINOS = ['PRODUCT', 'LIVE', 'SELLER', 'REVIEW', 'CHAT_MESSAGE'] as const;
@@ -108,5 +109,127 @@ export class ModerationAdminController {
   ) {
     const valido = DESTINOS.find((d) => d === targetType) ?? 'PRODUCT';
     return this.moderation.historial(valido, targetId);
+  }
+}
+
+const BloquearSchema = z.object({
+  /**
+   * Por qué, si lo quiere decir. Opcional a propósito.
+   *
+   * Obligar a explicar es una fricción que hace que alguien no bloquee a quien
+   * lo está molestando, que es exactamente lo contrario de lo que se busca.
+   */
+  reason: z.string().trim().max(500).optional(),
+})
+  /**
+   * Sin cuerpo también vale.
+   *
+   * Bloquear sin explicar es el caso NORMAL: el motivo es opcional. Sin este
+   * `default`, un POST sin cuerpo lo rechaza Zod con "Required" y el botón de
+   * bloquear no funciona nunca.
+   */
+  .default({});
+type BloquearDto = z.infer<typeof BloquearSchema>;
+
+/**
+ * Bloquear personas.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * SEPARADO DE LOS REPORTES A PROPÓSITO
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Bloquear es una decisión personal: inmediata, reversible, sin revisión y sin
+ * consecuencias para la otra persona. Reportar es pedirle a VendoX que revise
+ * algo, con umbrales y revisión humana.
+ *
+ * Mezclarlos sería peligroso en las dos direcciones: si bloquear tuviera
+ * consecuencias, bloqueos coordinados podrían bajar a un vendedor; si reportar
+ * sólo ocultara contenido para quien reporta, nadie moderaría nada.
+ */
+@Controller({ path: 'blocks', version: '1' })
+export class BloqueosController {
+  constructor(private readonly bloqueos: BloqueosService) {}
+
+  /** A quiénes bloqueé. */
+  @Get()
+  lista(@CurrentUser() user: AuthenticatedUser) {
+    return this.bloqueos.lista(user.id);
+  }
+
+  /**
+   * Lo mismo, pero por vendedor.
+   *
+   * ⚠️ Las tres rutas de `seller/...` van ANTES que las de `:userId`. Nest
+   * resuelve por orden de declaración, y declaradas después, `/blocks/seller/x`
+   * entraría por `/blocks/:userId` con `userId = 'seller'`.
+   *
+   * Existen porque la app no conoce el `userId` de un vendedor: su perfil
+   * público devuelve el `sellerId` y nada más. Ver `userIdDeVendedor`.
+   */
+  @Get('seller/:sellerId')
+  async estadoDeVendedor(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('sellerId') sellerId: string,
+  ) {
+    const userId = await this.bloqueos.userIdDeVendedor(sellerId);
+    return { bloqueado: await this.bloqueos.estaBloqueado(user.id, userId) };
+  }
+
+  @RateLimit({ limit: 60, windowSec: 3600, bucket: 'blocks:create' })
+  @Post('seller/:sellerId')
+  async bloquearVendedor(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('sellerId') sellerId: string,
+    @Body(new ZodValidationPipe(BloquearSchema)) dto: BloquearDto,
+  ) {
+    const userId = await this.bloqueos.userIdDeVendedor(sellerId);
+    return this.bloqueos.bloquear(user.id, userId, dto.reason);
+  }
+
+  @Delete('seller/:sellerId')
+  async desbloquearVendedor(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('sellerId') sellerId: string,
+  ) {
+    const userId = await this.bloqueos.userIdDeVendedor(sellerId);
+    return this.bloqueos.desbloquear(user.id, userId);
+  }
+
+  /**
+   * ¿Bloqueé a esta persona?
+   *
+   * Lo consulta el perfil de un vendedor para pintar el botón. Va aparte de la
+   * lista porque cargar doscientos bloqueos para saber si uno está adentro es
+   * absurdo.
+   */
+  @Get(':userId')
+  estado(@CurrentUser() user: AuthenticatedUser, @Param('userId') userId: string) {
+    return this.bloqueos
+      .estaBloqueado(user.id, userId)
+      .then((bloqueado) => ({ bloqueado }));
+  }
+
+  /**
+   * Bloquear.
+   *
+   * El límite es generoso —sesenta por hora— porque bloquear es defensivo:
+   * alguien que está recibiendo acoso coordinado puede necesitar bloquear a
+   * varias personas seguidas, y frenarlo ahí sería dejarlo indefenso.
+   *
+   * Pero hay límite igual: sin él, un script puede crear millones de filas.
+   */
+  @RateLimit({ limit: 60, windowSec: 3600, bucket: 'blocks:create' })
+  @Post(':userId')
+  bloquear(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('userId') userId: string,
+    @Body(new ZodValidationPipe(BloquearSchema)) dto: BloquearDto,
+  ) {
+    return this.bloqueos.bloquear(user.id, userId, dto.reason);
+  }
+
+  @Delete(':userId')
+  desbloquear(@CurrentUser() user: AuthenticatedUser, @Param('userId') userId: string) {
+    return this.bloqueos.desbloquear(user.id, userId);
   }
 }

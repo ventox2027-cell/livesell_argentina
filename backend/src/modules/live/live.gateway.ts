@@ -13,6 +13,7 @@ import type { Server, Socket as SocketBase } from 'socket.io';
 import { z } from 'zod';
 
 import { JwtService } from '@/modules/auth/jwt.service';
+import { BloqueosService } from '@/modules/moderation/bloqueos.service';
 import { PrismaService } from '@/shared/prisma/prisma.service';
 import { RedisService } from '@/shared/redis/redis.service';
 import { newId } from '@/shared/utils/id';
@@ -134,6 +135,7 @@ export class LiveGateway implements OnGatewayConnection, OnGatewayDisconnect, On
     private readonly jwt: JwtService,
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
+    private readonly bloqueos: BloqueosService,
   ) {}
 
   /**
@@ -364,6 +366,35 @@ export class LiveGateway implements OnGatewayConnection, OnGatewayDisconnect, On
     if (!usuario || usuario.status !== 'active') return { ok: false, error: 'sin permiso' };
     if (!sesion || sesion.state === 'ENDED' || sesion.state === 'FAILED') {
       return { ok: false, error: 'el vivo terminó' };
+    }
+
+    /**
+     * Si hay bloqueo con el vendedor, no se puede escribir en su vivo.
+     *
+     * ═══════════════════════════════════════════════════════════════════════
+     * EN LOS DOS SENTIDOS, Y ESO ES DELIBERADO
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * El bloqueo se declara en una dirección —A bloquea a B— pero en el chat
+     * el silencio tiene que ir en las dos: de nada le sirve a A no leer a B si
+     * B puede seguir escribiéndole en cada vivo.
+     *
+     * Y al revés también: si un vendedor bloqueó a alguien que lo acosaba, esa
+     * persona no puede seguir apareciendo en su chat.
+     *
+     * ─── El mensaje es vago a propósito ───
+     *
+     * "No podés escribir en este vivo" y no "te bloquearon". Quien es bloqueado
+     * no se entera: avisarle es darle un motivo y un objetivo.
+     *
+     * ─── Y sólo se comprueba contra el VENDEDOR ───
+     *
+     * No contra cada persona de la sala. Un vivo con mil espectadores haría mil
+     * consultas por mensaje, y el chat pasaría de instantáneo a inservible.
+     * Bloquear a alguien no te saca de una sala pública; te saca de su chat.
+     */
+    if (await this.bloqueos.hayBloqueoEntre(userId, sesion.seller.userId)) {
+      return { ok: false, error: 'No podés escribir en este vivo' };
     }
 
     const evento: EventoChat = {

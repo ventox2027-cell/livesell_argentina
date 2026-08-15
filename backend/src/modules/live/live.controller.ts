@@ -41,8 +41,15 @@ export class LiveController {
    */
   @Public()
   @Get()
-  activos(@Query('limit') limit?: string) {
-    return this.live.activos(Math.min(Number(limit) || 20, 50));
+  activos(
+    @Query('limit') limit: string | undefined,
+    @CurrentUser() user?: AuthenticatedUser,
+  ) {
+    /**
+     * `@CurrentUser()` es opcional acá: la ruta es pública y muchas veces no
+     * hay sesión. Con sesión, el feed esconde a quienes esta persona bloqueó.
+     */
+    return this.live.activos(Math.min(Number(limit) || 20, 50), user?.id);
   }
 
   /**

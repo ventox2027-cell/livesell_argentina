@@ -61,6 +61,8 @@ export const ID_PREFIX = {
   like: 'lik',
   report: 'rep',
   moderationAction: 'mod',
+  /** Bloqueo de una persona a otra. Ver `moderation/bloqueos.service.ts`. */
+  userBlock: 'blk',
   supportTicket: 'sup',
   supportMessage: 'sms',
   oauthState: 'oas',

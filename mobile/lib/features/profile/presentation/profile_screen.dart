@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../auth/data/auth_repository.dart';
+import '../../moderation/presentation/bloqueados_screen.dart';
 import '../../notifications/data/notifications_api.dart';
 import '../../notifications/presentation/notifications_screen.dart';
 import '../../../core/config/runtime_config.dart';
@@ -97,6 +98,16 @@ class ProfileScreen extends ConsumerWidget {
             icono: Icons.devices_outlined,
             texto: 'Sesiones activas',
             onTap: () => _verSesiones(context, ref),
+          ),
+          _Fila(
+            icono: Icons.block_outlined,
+            texto: 'Personas bloqueadas',
+            // Tiene que ser fácil de encontrar: bloquear a veces se hace en
+            // caliente, y una lista escondida convierte una decisión de un
+            // segundo en algo permanente por accidente.
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const BloqueadosScreen()),
+            ),
           ),
           _Fila(
             icono: Icons.download_outlined,

@@ -90,6 +90,13 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<string, number>> = {
   // significa un conflicto de estado.
   ACCOUNT_HAS_OPEN_ORDERS: 409,
 
+  // Bloqueo entre personas.
+  //
+  // 422 y no 400: el cuerpo está bien formado. Lo que no tiene sentido es la
+  // operación — nadie se bloquea a sí mismo.
+  CANNOT_BLOCK_SELF: 422,
+  USER_NOT_FOUND: 404,
+
   // Moderación
   //
   // 409 y no 400: el reporte es válido, lo que pasa es que esta persona ya

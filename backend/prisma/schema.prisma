@@ -587,6 +587,8 @@ model User {
   supportTickets SupportTicket[]
   likes          Like[]
   reportesHechos Report[] @relation("reportesHechos")
+  bloqueosHechos    UserBlock[] @relation("bloqueosHechos")
+  bloqueosRecibidos UserBlock[] @relation("bloqueosRecibidos")
 
   @@index([phoneE164])
   @@index([status, createdAt])
@@ -2987,6 +2989,51 @@ model Report {
   /// Cuántos reportes distintos tiene una cosa. Es lo que dispara el umbral.
   @@index([targetType, targetId, status])
   @@map("reports")
+}
+
+/// Alguien no quiere saber más nada con alguien.
+///
+/// ═══════════════════════════════════════════════════════════════════════════
+/// ES UNILATERAL Y ASIMÉTRICO
+/// ═══════════════════════════════════════════════════════════════════════════
+///
+/// Si A bloquea a B, **B no se entera**. No hay aviso, no hay pantalla, y desde
+/// su lado todo se ve igual. Es deliberado: avisarle a alguien que lo
+/// bloquearon es darle un motivo y un objetivo, y quien bloquea suele estar
+/// tratando de que la otra persona pierda interés, no de confrontarla.
+///
+/// Y no es recíproco: A deja de ver a B, pero B sigue viendo a A —salvo en el
+/// chat, donde el silencio tiene que funcionar en los dos sentidos o no
+/// funciona—. Ver `chat` en `live.gateway.ts`.
+///
+/// ─── Por qué no es un campo en User ───
+///
+/// Porque son muchos a muchos y porque el bloqueo tiene fecha: sirve para
+/// investigar un caso de acoso, y "desde cuándo" es la primera pregunta.
+model UserBlock {
+  id String @id // blk_<ulid>
+
+  /// Quién bloquea.
+  blockerId String @map("blocker_id")
+  /// A quién bloquea.
+  blockedId String @map("blocked_id")
+
+  /// Por qué, si lo dijo. Opcional: obligarlo a explicar es una fricción que
+  /// hace que alguien no bloquee a quien lo está molestando.
+  reason String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  blocker User @relation("bloqueosHechos", fields: [blockerId], references: [id], onDelete: Cascade)
+  blocked User @relation("bloqueosRecibidos", fields: [blockedId], references: [id], onDelete: Cascade)
+
+  /// Una persona bloquea a otra UNA vez. Bloquear dos veces es idempotente.
+  @@unique([blockerId, blockedId])
+  /// "¿A quién bloqueé?" — la lista del perfil.
+  @@index([blockerId, createdAt])
+  /// "¿Quiénes bloquearon a esta persona?" — para el chat y para moderación.
+  @@index([blockedId])
+  @@map("user_blocks")
 }
 
 /// Una acción de moderación sobre algo.

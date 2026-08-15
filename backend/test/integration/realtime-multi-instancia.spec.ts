@@ -333,3 +333,128 @@ describe('Un evento emitido en A llega a B', () => {
     expect(recibido).toBe(false);
   }, 20_000);
 });
+
+describe('El bloqueo corta el chat en los dos sentidos', () => {
+  /**
+   * ═══════════════════════════════════════════════════════════════════════
+   * EL BLOQUEO SE DECLARA EN UN SENTIDO Y SILENCIA EN LOS DOS
+   * ═══════════════════════════════════════════════════════════════════════
+   *
+   * De nada le sirve a alguien no leer a quien lo molesta si esa persona puede
+   * seguir escribiéndole en cada vivo. Y al revés: si un vendedor bloqueó a
+   * alguien que lo acosaba, esa persona no puede seguir apareciendo en su chat.
+   *
+   * Es la única parte del bloqueo que es simétrica, y es deliberado.
+   */
+
+  /** El vendedor de un vivo al aire, y su userId. */
+  async function vivoConVendedor() {
+    const liveId = await vivoAlAire();
+    const sesion = await prisma.liveSession.findUniqueOrThrow({
+      where: { id: liveId },
+      select: { seller: { select: { userId: true } } },
+    });
+    return { liveId, vendedorUserId: sesion.seller.userId };
+  }
+
+  it('⛔ quien bloqueó al vendedor no puede escribir en su vivo', async () => {
+    const { liveId, vendedorUserId } = await vivoConVendedor();
+    const espectador = await nuevoUsuario();
+
+    await prisma.userBlock.create({
+      data: {
+        id: `blk_a${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+        blockerId: espectador.userId,
+        blockedId: vendedorUserId,
+      },
+    });
+
+    const socket = await conectar(a.puerto, espectador.token);
+    expect(await socket.emitWithAck('join', { liveSessionId: liveId })).toEqual({ ok: true });
+
+    const r = (await socket.emitWithAck('chat', {
+      liveSessionId: liveId,
+      texto: 'hola',
+    })) as { ok: boolean; error?: string };
+
+    expect(r.ok).toBe(false);
+    /**
+     * El mensaje es vago a propósito: "no podés escribir en este vivo" y no
+     * "bloqueaste a esta persona". Del otro lado, quien es bloqueado tampoco
+     * tiene que enterarse, y usar dos textos distintos según el sentido sería
+     * exactamente la señal que no queremos dar.
+     */
+    expect(r.error).toContain('No podés escribir');
+  }, 20_000);
+
+  it('⛔ y el vendedor que bloqueó tampoco recibe a esa persona', async () => {
+    // El otro sentido. El bloqueo se declaró al revés que en el test anterior.
+    const { liveId, vendedorUserId } = await vivoConVendedor();
+    const espectador = await nuevoUsuario();
+
+    await prisma.userBlock.create({
+      data: {
+        id: `blk_b${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+        blockerId: vendedorUserId,
+        blockedId: espectador.userId,
+      },
+    });
+
+    const socket = await conectar(a.puerto, espectador.token);
+    await socket.emitWithAck('join', { liveSessionId: liveId });
+
+    const r = (await socket.emitWithAck('chat', {
+      liveSessionId: liveId,
+      texto: 'hola de nuevo',
+    })) as { ok: boolean };
+
+    expect(r.ok).toBe(false);
+  }, 20_000);
+
+  it('sin bloqueo, el chat funciona igual que siempre', async () => {
+    /**
+     * La contracara. Sin esto, "arreglar" el bloqueo cortando el chat de todos
+     * pasaría en verde.
+     */
+    const { liveId } = await vivoConVendedor();
+    const espectador = await nuevoUsuario();
+
+    const socket = await conectar(a.puerto, espectador.token);
+    await socket.emitWithAck('join', { liveSessionId: liveId });
+
+    const r = (await socket.emitWithAck('chat', {
+      liveSessionId: liveId,
+      texto: 'mensaje normal',
+    })) as { ok: boolean };
+
+    expect(r.ok).toBe(true);
+  }, 20_000);
+
+  it('⛔ bloquear a un espectador NO afecta al resto de la sala', async () => {
+    /**
+     * El bloqueo es entre dos personas. Si cortara el chat de la sala entera,
+     * bloquear a alguien sería una forma de arruinarle el vivo al vendedor.
+     */
+    const { liveId, vendedorUserId } = await vivoConVendedor();
+    const bloqueado = await nuevoUsuario();
+    const otro = await nuevoUsuario();
+
+    await prisma.userBlock.create({
+      data: {
+        id: `blk_c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+        blockerId: vendedorUserId,
+        blockedId: bloqueado.userId,
+      },
+    });
+
+    const socketOtro = await conectar(b.puerto, otro.token);
+    await socketOtro.emitWithAck('join', { liveSessionId: liveId });
+
+    const r = (await socketOtro.emitWithAck('chat', {
+      liveSessionId: liveId,
+      texto: 'yo no tengo nada que ver',
+    })) as { ok: boolean };
+
+    expect(r.ok).toBe(true);
+  }, 20_000);
+});

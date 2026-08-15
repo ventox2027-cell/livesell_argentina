@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 
+import { ModerationModule } from '@/modules/moderation/moderation.module';
 import { SellerOAuthModule } from '@/modules/payments/seller-oauth.module';
 
 import { AuthModule } from '@/modules/auth/auth.module';
@@ -28,7 +29,9 @@ import { LiveService } from './live.service';
  * nunca necesitó la exportación.
  */
 @Module({
-  imports: [AuthModule, LiveKitModule, SellerOAuthModule],
+  // `ModerationModule` por el bloqueo entre personas: el chat lo consulta en
+  // cada mensaje para no dejar escribir a quien tiene bloqueo con el vendedor.
+  imports: [AuthModule, LiveKitModule, SellerOAuthModule, ModerationModule],
   controllers: [LiveController],
   providers: [LiveService, LiveGateway, LiveStockListener, AuditService],
   exports: [LiveService, LiveGateway],
