@@ -137,6 +137,7 @@ class DetalleDeLive {
     this.destacado,
     this.video,
     this.terminadoEl,
+    this.soyElVendedor = false,
   });
 
   factory DetalleDeLive.fromJson(Map<String, dynamic> j) {
@@ -158,6 +159,7 @@ class DetalleDeLive {
       destacado: destacado == null ? null : ProductoDestacado.fromJson(destacado),
       video: video == null ? null : DatosDeVideo.fromJson(video),
       terminadoEl: DateTime.tryParse(j['terminadoEl'] as String? ?? ''),
+      soyElVendedor: j['soyElVendedor'] as bool? ?? false,
     );
   }
 
@@ -177,6 +179,13 @@ class DetalleDeLive {
   /// después de que se cortó el video.
   final DatosDeVideo? video;
   final DateTime? terminadoEl;
+
+  /// Si este vivo es de quien lo está mirando.
+  ///
+  /// Lo decide el servidor, no la app: así el id de la cuenta del vendedor no
+  /// tiene que salir en una respuesta pública. Habilita las opciones de
+  /// moderación del chat.
+  final bool soyElVendedor;
 
   bool get terminado => estado == 'ENDED' || estado == 'FAILED';
   bool get reconectando => estado == 'RECONNECTING';

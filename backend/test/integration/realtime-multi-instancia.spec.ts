@@ -5,6 +5,7 @@ import { io, type Socket as ClienteSocket } from 'socket.io-client';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { JwtService } from '@/modules/auth/jwt.service';
+import type { ChatModeracionService as TipoModeracion } from '@/modules/live/chat-moderacion.service';
 import type { LiveGateway } from '@/modules/live/live.gateway';
 import type { PrismaService } from '@/shared/prisma/prisma.service';
 
@@ -71,6 +72,7 @@ interface Instancia {
   app: INestApplication;
   puerto: number;
   gateway: LiveGateway;
+  moderacion: TipoModeracion;
 }
 
 let a: Instancia;
@@ -85,6 +87,7 @@ async function levantar(puerto: number): Promise<Instancia> {
   const { AppModule } = await import('@/app.module');
   const { LiveKitService } = await import('@/modules/livekit/livekit.service');
   const { LiveGateway } = await import('@/modules/live/live.gateway');
+  const { ChatModeracionService } = await import('@/modules/live/chat-moderacion.service');
 
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(LiveKitService)
@@ -103,7 +106,12 @@ async function levantar(puerto: number): Promise<Instancia> {
   // clientes de Socket.IO abren un WebSocket, y `inject()` no sirve para eso.
   await app.listen(puerto, '127.0.0.1');
 
-  return { app, puerto, gateway: app.get(LiveGateway) };
+  return {
+    app,
+    puerto,
+    gateway: app.get(LiveGateway),
+    moderacion: app.get(ChatModeracionService),
+  };
 }
 
 /** Un cliente conectado al namespace del vivo, ya autenticado. */
@@ -168,12 +176,23 @@ afterAll(async () => {
   await b?.app.close();
 });
 
+/**
+ * Un sufijo único POR CORRIDA.
+ *
+ * Los ids eran deterministas —un prefijo más un contador— y la base de tests
+ * no se trunca entre corridas: la segunda vez que se corría el archivo, los
+ * `user.create` chocaban contra las filas de la vez anterior.
+ */
+const CORRIDA = Date.now().toString(36).slice(-6);
 let n = 0;
+
+const idDe = (prefijo: string): string =>
+  `${prefijo}_${CORRIDA}${String(n).padStart(20 - prefijo.length, '0')}`;
 
 /** Un usuario con sesión, directo en la base: acá no se prueba el registro. */
 async function nuevoUsuario(): Promise<{ token: string; userId: string }> {
   n += 1;
-  const userId = `usr_rt${String(n).padStart(22, '0')}`;
+  const userId = idDe('usr');
   await prisma.user.create({
     data: {
       id: userId,
@@ -189,7 +208,7 @@ async function nuevoUsuario(): Promise<{ token: string; userId: string }> {
   const { accessToken } = await jwt.issueAccessToken({
     userId,
     role: 'buyer',
-    sessionId: `ses_rt${String(n).padStart(21, '0')}`,
+    sessionId: idDe('ses'),
   });
   return { token: accessToken, userId };
 }
@@ -201,7 +220,7 @@ async function vivoAlAire(): Promise<string> {
 
   const seller = await prisma.seller.create({
     data: {
-      id: `sel_rt${String(n).padStart(21, '0')}`,
+      id: idDe('sel'),
       userId: usuario.userId,
       displayName: `Vendedor rt ${n}`,
       slug: `vendedor-rt-${n}-${Date.now()}`,
@@ -209,7 +228,7 @@ async function vivoAlAire(): Promise<string> {
   });
   const store = await prisma.store.create({
     data: {
-      id: `sto_rt${String(n).padStart(21, '0')}`,
+      id: idDe('sto'),
       sellerId: seller.id,
       name: `Tienda rt ${n}`,
       slug: `tienda-rt-${n}-${Date.now()}`,
@@ -218,12 +237,13 @@ async function vivoAlAire(): Promise<string> {
   });
   const sesion = await prisma.liveSession.create({
     data: {
-      id: `liv_rt${String(n).padStart(21, '0')}`,
+      id: idDe('liv'),
       sellerId: seller.id,
       storeId: store.id,
       title: `Vivo rt ${n}`,
       state: 'LIVE',
-      roomName: `room-rt-${n}`,
+      // Único por corrida, igual que los ids: `room_name` tiene índice único.
+      roomName: `room-rt-${CORRIDA}-${n}`,
     },
   });
   return sesion.id;
@@ -456,5 +476,334 @@ describe('El bloqueo corta el chat en los dos sentidos', () => {
     })) as { ok: boolean };
 
     expect(r.ok).toBe(true);
+  }, 20_000);
+});
+
+describe('Moderación del chat', () => {
+  /**
+   * ═══════════════════════════════════════════════════════════════════════
+   * ANTES DE ESTO NO SE PODÍA MODERAR NADA
+   * ═══════════════════════════════════════════════════════════════════════
+   *
+   * Los mensajes vivían en el socket y se perdían al terminar el vivo. El
+   * backend aceptaba reportes de tipo `CHAT_MESSAGE`, pero como el mensaje no
+   * existía en ningún lado, quien moderaba sólo tenía la versión de quien
+   * reportaba.
+   */
+
+  async function vivoConVendedor() {
+    const liveId = await vivoAlAire();
+    const sesion = await prisma.liveSession.findUniqueOrThrow({
+      where: { id: liveId },
+      select: { seller: { select: { userId: true } } },
+    });
+    return { liveId, vendedorUserId: sesion.seller.userId };
+  }
+
+  /** El token del vendedor de un vivo, para llamar a la API. */
+  async function tokenDe(userId: string) {
+    const { accessToken } = await jwt.issueAccessToken({
+      userId,
+      role: 'seller',
+      sessionId: `ses_mod${Date.now().toString(36)}`,
+    });
+    return accessToken;
+  }
+
+  function http(metodo: string, url: string, opts: { token?: string; body?: unknown } = {}) {
+    const headers: Record<string, string> = {};
+    if (opts.body !== undefined) headers['content-type'] = 'application/json';
+    if (opts.token) headers.authorization = `Bearer ${opts.token}`;
+    return (a.app as NestFastifyApplication)
+      .getHttpAdapter()
+      .getInstance()
+      .inject({ method: metodo as never, url, headers, payload: opts.body as never })
+      .then((r) => ({
+        status: r.statusCode,
+        body: r.body ? (JSON.parse(r.body) as Record<string, unknown>) : null,
+      }));
+  }
+
+  // ─── Se guarda ───────────────────────────────────────────────────────────
+
+  it('un mensaje enviado queda guardado', async () => {
+    const { liveId } = await vivoConVendedor();
+    const espectador = await nuevoUsuario();
+
+    const socket = await conectar(a.puerto, espectador.token);
+    await socket.emitWithAck('join', { liveSessionId: liveId });
+    expect(await socket.emitWithAck('chat', { liveSessionId: liveId, texto: 'hola gente' }))
+      .toEqual({ ok: true });
+
+    // Se guarda sin esperar, así que se le da un instante.
+    await new Promise((r) => setTimeout(r, 500));
+
+    const guardados = await prisma.liveChatMessage.findMany({
+      where: { liveSessionId: liveId },
+    });
+    expect(guardados).toHaveLength(1);
+    expect(guardados[0]!.text).toBe('hola gente');
+    expect(guardados[0]!.blockedByFilter).toBeNull();
+  }, 20_000);
+
+  // ─── El filtro ───────────────────────────────────────────────────────────
+
+  it('⛔ un teléfono no se publica, pero SÍ se guarda', async () => {
+    /**
+     * Guardar lo frenado es lo que permite saber si el filtro se está pasando
+     * de estricto y silenciando gente que no hizo nada.
+     */
+    const { liveId } = await vivoConVendedor();
+    const espectador = await nuevoUsuario();
+
+    const socket = await conectar(a.puerto, espectador.token);
+    await socket.emitWithAck('join', { liveSessionId: liveId });
+
+    const r = (await socket.emitWithAck('chat', {
+      liveSessionId: liveId,
+      texto: 'llamame al 11 2345 6789',
+    })) as { ok: boolean; error?: string };
+
+    expect(r.ok).toBe(false);
+    // Y le dice POR QUÉ, para que pueda reescribirlo.
+    expect(r.error).toContain('datos de contacto');
+
+    await new Promise((res) => setTimeout(res, 500));
+    const guardado = await prisma.liveChatMessage.findFirst({
+      where: { liveSessionId: liveId },
+    });
+    expect(guardado?.blockedByFilter).toBe('CONTACTO');
+  }, 20_000);
+
+  it('⛔ el mensaje frenado NO le llega a la sala', async () => {
+    // Lo importante: guardar no es publicar.
+    const { liveId } = await vivoConVendedor();
+    const escribe = await nuevoUsuario();
+    const mira = await nuevoUsuario();
+
+    const enA = await conectar(a.puerto, escribe.token);
+    const enB = await conectar(b.puerto, mira.token);
+    await enA.emitWithAck('join', { liveSessionId: liveId });
+    await enB.emitWithAck('join', { liveSessionId: liveId });
+
+    let recibido = false;
+    enB.once(EVENTOS.chat, () => {
+      recibido = true;
+    });
+
+    await enA.emitWithAck('chat', {
+      liveSessionId: liveId,
+      texto: 'escribime a juan@gmail.com',
+    });
+    await new Promise((r) => setTimeout(r, 1200));
+
+    expect(recibido).toBe(false);
+  }, 20_000);
+
+  it('un mensaje normal sí se publica', async () => {
+    // La contracara: sin esto, "arreglar" el filtro frenando todo pasa en verde.
+    const { liveId } = await vivoConVendedor();
+    const escribe = await nuevoUsuario();
+    const mira = await nuevoUsuario();
+
+    const enA = await conectar(a.puerto, escribe.token);
+    const enB = await conectar(b.puerto, mira.token);
+    await enA.emitWithAck('join', { liveSessionId: liveId });
+    await enB.emitWithAck('join', { liveSessionId: liveId });
+
+    const llegada = esperarEvento<{ texto: string }>(enB, EVENTOS.chat);
+    await enA.emitWithAck('chat', { liveSessionId: liveId, texto: 'cuanto sale 45000?' });
+
+    expect((await llegada).texto).toBe('cuanto sale 45000?');
+  }, 20_000);
+
+  // ─── Silenciar ───────────────────────────────────────────────────────────
+
+  it('el vendedor puede callar a alguien en su vivo', async () => {
+    const { liveId, vendedorUserId } = await vivoConVendedor();
+    const molesto = await nuevoUsuario();
+    const token = await tokenDe(vendedorUserId);
+
+    const socket = await conectar(a.puerto, molesto.token);
+    await socket.emitWithAck('join', { liveSessionId: liveId });
+    // Antes de callarlo, escribe bien.
+    expect(await socket.emitWithAck('chat', { liveSessionId: liveId, texto: 'hola' }))
+      .toEqual({ ok: true });
+
+    const mute = await http('POST', `/api/v1/live/${liveId}/chat/mutes`, {
+      token,
+      body: { userId: molesto.userId, reason: 'insultaba a otros compradores', minutos: 30 },
+    });
+    expect(mute.status, JSON.stringify(mute.body)).toBe(201);
+
+    const despues = (await socket.emitWithAck('chat', {
+      liveSessionId: liveId,
+      texto: 'y ahora?',
+    })) as { ok: boolean; error?: string };
+
+    expect(despues.ok).toBe(false);
+    /**
+     * El mensaje es vago a propósito: "no podés escribir" y no "te silenció el
+     * vendedor". Decirle contra quién pelear le da algo que hacer; lo que se
+     * busca es que se aburra.
+     */
+    expect(despues.error).toContain('No podés escribir');
+  }, 25_000);
+
+  it('y puede devolverle la voz', async () => {
+    const { liveId, vendedorUserId } = await vivoConVendedor();
+    const molesto = await nuevoUsuario();
+    const token = await tokenDe(vendedorUserId);
+
+    const socket = await conectar(a.puerto, molesto.token);
+    await socket.emitWithAck('join', { liveSessionId: liveId });
+
+    await http('POST', `/api/v1/live/${liveId}/chat/mutes`, {
+      token,
+      body: { userId: molesto.userId, reason: 'un malentendido', minutos: 30 },
+    });
+    await http('DELETE', `/api/v1/live/${liveId}/chat/mutes/${molesto.userId}`, { token });
+
+    expect(await socket.emitWithAck('chat', { liveSessionId: liveId, texto: 'gracias' }))
+      .toEqual({ ok: true });
+  }, 25_000);
+
+  it('⛔ el silencio del vendedor NO puede pasar de 24 horas', async () => {
+    /**
+     * Un silencio permanente es una expulsión de la plataforma, y esa la decide
+     * VendoX. Lo que el vendedor puede hacer es callar a alguien durante su
+     * vivo.
+     */
+    const { liveId, vendedorUserId } = await vivoConVendedor();
+    const molesto = await nuevoUsuario();
+    const token = await tokenDe(vendedorUserId);
+
+    const r = await http('POST', `/api/v1/live/${liveId}/chat/mutes`, {
+      token,
+      body: { userId: molesto.userId, reason: 'para siempre', minutos: 60 * 24 * 365 },
+    });
+
+    // El DTO lo rechaza antes de llegar al servicio.
+    expect(r.status).toBe(400);
+  }, 20_000);
+
+  it('⛔ el motivo es obligatorio', async () => {
+    // Un silencio sin motivo no se puede revisar ni defender.
+    const { liveId, vendedorUserId } = await vivoConVendedor();
+    const molesto = await nuevoUsuario();
+    const token = await tokenDe(vendedorUserId);
+
+    const r = await http('POST', `/api/v1/live/${liveId}/chat/mutes`, {
+      token,
+      body: { userId: molesto.userId, minutos: 15 },
+    });
+    expect(r.status).toBe(400);
+  }, 20_000);
+
+  it('⛔ un vendedor NO puede moderar el vivo de otro', async () => {
+    const propio = await vivoConVendedor();
+    const ajeno = await vivoConVendedor();
+    const molesto = await nuevoUsuario();
+    const token = await tokenDe(propio.vendedorUserId);
+
+    const r = await http('POST', `/api/v1/live/${ajeno.liveId}/chat/mutes`, {
+      token,
+      body: { userId: molesto.userId, reason: 'no es mi vivo', minutos: 15 },
+    });
+
+    // 404 y no 403: confirmar que el vivo existe le diría que acertó un id.
+    expect(r.status).toBe(404);
+  }, 20_000);
+
+  // ─── Borrar ──────────────────────────────────────────────────────────────
+
+  it('el vendedor puede borrar un mensaje, y queda la evidencia', async () => {
+    /**
+     * Borrado lógico. Un mensaje eliminado es la evidencia de por qué se
+     * sancionó a alguien: borrarlo de verdad deja la sanción sin respaldo.
+     */
+    const { liveId, vendedorUserId } = await vivoConVendedor();
+    const espectador = await nuevoUsuario();
+    const token = await tokenDe(vendedorUserId);
+
+    const socket = await conectar(a.puerto, espectador.token);
+    await socket.emitWithAck('join', { liveSessionId: liveId });
+    await socket.emitWithAck('chat', { liveSessionId: liveId, texto: 'algo feo' });
+    await new Promise((r) => setTimeout(r, 500));
+
+    const mensaje = await prisma.liveChatMessage.findFirstOrThrow({
+      where: { liveSessionId: liveId },
+    });
+
+    const r = await http('DELETE', `/api/v1/live/${liveId}/chat/messages/${mensaje.id}`, {
+      token,
+    });
+    expect(r.status).toBe(200);
+
+    const despues = await prisma.liveChatMessage.findUniqueOrThrow({
+      where: { id: mensaje.id },
+    });
+    // Sigue existiendo, con la marca y con quién lo borró.
+    expect(despues.deletedAt).not.toBeNull();
+    expect(despues.deletedByUserId).toBe(vendedorUserId);
+    expect(despues.text).toBe('algo feo');
+  }, 25_000);
+
+  it('⛔ nadie puede borrar un mensaje de un vivo ajeno', async () => {
+    const { liveId } = await vivoConVendedor();
+    const otro = await vivoConVendedor();
+    const espectador = await nuevoUsuario();
+
+    const socket = await conectar(a.puerto, espectador.token);
+    await socket.emitWithAck('join', { liveSessionId: liveId });
+    await socket.emitWithAck('chat', { liveSessionId: liveId, texto: 'un mensaje' });
+    await new Promise((r) => setTimeout(r, 500));
+
+    const mensaje = await prisma.liveChatMessage.findFirstOrThrow({
+      where: { liveSessionId: liveId },
+    });
+
+    const r = await http('DELETE', `/api/v1/live/${liveId}/chat/messages/${mensaje.id}`, {
+      token: await tokenDe(otro.vendedorUserId),
+    });
+
+    expect(r.status).toBe(404);
+    const sigue = await prisma.liveChatMessage.findUniqueOrThrow({ where: { id: mensaje.id } });
+    expect(sigue.deletedAt).toBeNull();
+  }, 25_000);
+
+  // ─── Retención ───────────────────────────────────────────────────────────
+
+  it('los mensajes viejos se borran, los nuevos no', async () => {
+    /**
+     * Treinta días. Es el tiempo en que un reporte se abre, se revisa y se
+     * resuelve; más allá de eso, el chat de un vivo no le sirve a nadie y es
+     * una base de conversaciones privadas creciendo sin límite.
+     */
+    const { liveId } = await vivoConVendedor();
+    const espectador = await nuevoUsuario();
+
+    const viejo = await prisma.liveChatMessage.create({
+      data: {
+        id: `msg_v${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+        liveSessionId: liveId,
+        userId: espectador.userId,
+        text: 'de hace dos meses',
+        createdAt: new Date(Date.now() - 60 * 24 * 60 * 60_000),
+      },
+    });
+    const nuevo = await prisma.liveChatMessage.create({
+      data: {
+        id: `msg_n${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+        liveSessionId: liveId,
+        userId: espectador.userId,
+        text: 'de recien',
+      },
+    });
+
+    await a.moderacion.borrarLosViejos();
+
+    expect(await prisma.liveChatMessage.count({ where: { id: viejo.id } })).toBe(0);
+    expect(await prisma.liveChatMessage.count({ where: { id: nuevo.id } })).toBe(1);
   }, 20_000);
 });

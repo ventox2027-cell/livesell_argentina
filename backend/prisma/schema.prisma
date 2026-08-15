@@ -588,6 +588,8 @@ model User {
   likes          Like[]
   reportesHechos Report[] @relation("reportesHechos")
   bloqueosHechos    UserBlock[] @relation("bloqueosHechos")
+  mensajesDeChat    LiveChatMessage[]
+  silencios         LiveChatMute[]    @relation("silenciado")
   bloqueosRecibidos UserBlock[] @relation("bloqueosRecibidos")
 
   @@index([phoneE164])
@@ -2177,6 +2179,8 @@ model LiveSession {
   seller   Seller               @relation(fields: [sellerId], references: [id], onDelete: Cascade)
   store    Store                @relation(fields: [storeId], references: [id], onDelete: Cascade)
   products LiveSessionProduct[]
+  mensajes LiveChatMessage[]
+  silencios LiveChatMute[]
 
   /// Para el feed: los vivos activos, primero los más recientes.
   @@index([state, startedAt])
@@ -2989,6 +2993,110 @@ model Report {
   /// Cuántos reportes distintos tiene una cosa. Es lo que dispara el umbral.
   @@index([targetType, targetId, status])
   @@map("reports")
+}
+
+/// Un mensaje del chat de un vivo.
+///
+/// ═══════════════════════════════════════════════════════════════════════════
+/// SE GUARDA POCO Y POR POCO TIEMPO
+/// ═══════════════════════════════════════════════════════════════════════════
+///
+/// Antes no se guardaba nada: los mensajes vivían en el socket y se perdían al
+/// terminar el vivo. Eso hacía imposible moderar — el backend aceptaba reportes
+/// de mensajes, pero como el mensaje no existía en ningún lado, quien moderaba
+/// sólo tenía la versión de quien reportaba.
+///
+/// ─── La retención es de 30 días, y ese número tiene motivo ───
+///
+/// Es el tiempo en que un reporte se abre, se revisa y se resuelve. Más allá de
+/// eso, un mensaje de chat de un vivo no le sirve a nadie: no es historial que
+/// alguien quiera consultar —el chat de un vivo es efímero por naturaleza— y sí
+/// es una base de conversaciones privadas creciendo sin límite.
+///
+/// Un barrido lo borra. Ver `chat-retencion` en el reconciliador.
+///
+/// ─── Lo que NO se guarda ───
+///
+/// El nombre para mostrar, el avatar, ni nada del perfil. Sólo el `userId`, que
+/// permite reconstruirlo si hace falta y desaparece si la persona cierra su
+/// cuenta —la relación es `Cascade`—.
+model LiveChatMessage {
+  id String @id // msg_<ulid>
+
+  liveSessionId String @map("live_session_id")
+  userId        String @map("user_id")
+
+  /// El texto, tal cual se envió. Hasta 200 caracteres.
+  text String
+
+  /// Si un filtro automático lo frenó al enviarlo, y cuál.
+  ///
+  /// `null` es el caso normal. Con valor, el mensaje NO se emitió a la sala: se
+  /// guarda igual para que la moderación pueda revisar si el filtro se está
+  /// pasando de estricto.
+  blockedByFilter String? @map("blocked_by_filter")
+
+  /// Cuándo lo borró un moderador o el vendedor. `null` = visible.
+  ///
+  /// Borrado lógico: un mensaje eliminado es la evidencia de por qué se
+  /// sancionó a alguien, y borrarlo de verdad deja la sanción sin respaldo.
+  deletedAt       DateTime? @map("deleted_at")
+  deletedByUserId String?   @map("deleted_by_user_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  session LiveSession @relation(fields: [liveSessionId], references: [id], onDelete: Cascade)
+  user    User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// El chat de un vivo, en orden. Es la consulta de la moderación.
+  @@index([liveSessionId, createdAt])
+  /// El barrido de retención.
+  @@index([createdAt])
+  /// "Todo lo que escribió esta persona", para revisar un reporte.
+  @@index([userId, createdAt])
+  @@map("live_chat_messages")
+}
+
+/// Alguien silenciado en un vivo.
+///
+/// ═══════════════════════════════════════════════════════════════════════════
+/// TEMPORAL POR DEFECTO
+/// ═══════════════════════════════════════════════════════════════════════════
+///
+/// Un silencio permanente es una expulsión, y una expulsión de un espacio
+/// público la decide moderación, no el vendedor. Lo que el vendedor puede hacer
+/// es callar a alguien **durante su vivo**: es su espacio y está pasando ahora.
+///
+/// `expiresAt` nunca es nulo para un silencio del vendedor. Un moderador sí
+/// puede dejarlo abierto, y eso ya es una sanción de plataforma.
+model LiveChatMute {
+  id String @id // mut_<ulid>
+
+  /// El vivo donde está callado. `null` = en TODOS los vivos.
+  ///
+  /// El alcance global lo pone moderación, nunca un vendedor: callar a alguien
+  /// en toda la plataforma es una sanción, no una decisión de sala.
+  liveSessionId String? @map("live_session_id")
+  userId        String  @map("user_id")
+
+  /// Quién lo silenció. El vendedor del vivo, o un moderador.
+  byUserId String @map("by_user_id")
+
+  /// Obligatorio. Un silencio sin motivo no se puede revisar ni defender.
+  reason String
+
+  /// Hasta cuándo. `null` sólo para sanciones de moderación.
+  expiresAt DateTime? @map("expires_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  session LiveSession? @relation(fields: [liveSessionId], references: [id], onDelete: Cascade)
+  user    User         @relation("silenciado", fields: [userId], references: [id], onDelete: Cascade)
+
+  /// La consulta que corre en CADA mensaje. Tiene que ser barata.
+  @@index([userId, expiresAt])
+  @@index([liveSessionId, userId])
+  @@map("live_chat_mutes")
 }
 
 /// Alguien no quiere saber más nada con alguien.

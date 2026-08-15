@@ -16,6 +16,8 @@ import 'widgets/composer.dart';
 import 'widgets/producto_destacado_card.dart';
 import 'widgets/rail_de_acciones.dart';
 import 'layout_del_vivo.dart';
+import '../../auth/domain/session.dart';
+import 'widgets/acciones_de_mensaje.dart';
 import 'widgets/video_live.dart';
 import 'seller_profile_screen.dart';
 import 'shop_sheet.dart';
@@ -201,6 +203,9 @@ class _LiveViewerScreenState extends ConsumerState<LiveViewerScreen> {
       destacado: p,
       video: l.video,
       terminadoEl: l.terminadoEl,
+      // Se arrastra: sin esto, el primer evento de stock le sacaba al vendedor
+      // las opciones de moderación de su propio chat.
+      soyElVendedor: l.soyElVendedor,
     );
   }
 
@@ -221,6 +226,7 @@ class _LiveViewerScreenState extends ConsumerState<LiveViewerScreen> {
       // Un vivo que terminó pierde el video pero conserva TODO lo demás.
       video: estado == 'ENDED' || estado == 'FAILED' ? null : l.video,
       terminadoEl: l.terminadoEl,
+      soyElVendedor: l.soyElVendedor,
     );
   }
 
@@ -278,6 +284,36 @@ class _LiveViewerScreenState extends ConsumerState<LiveViewerScreen> {
   /// compartido sobrevive a la versión de la app que lo generó, y si cada
   /// versión tuviera su propia idea del formato, cambiarlo rompería los que ya
   /// están dando vueltas en los chats.
+  /// Mantener apretado un mensaje del chat.
+  ///
+  /// Reportar lo puede hacer cualquiera; borrar y silenciar, sólo el vendedor
+  /// en su propio vivo. Quién es quién lo decide el backend igual —404 si el
+  /// vivo no es suyo— así que esto es interfaz, no seguridad.
+  Future<void> _accionesDeMensaje(MensajeDeChat mensaje) async {
+    final live = _live;
+    if (live == null) return;
+
+    final sesion = ref.read(sesionProvider);
+    final miUserId = sesion is ConSesion ? sesion.usuario.id : null;
+    if (miUserId == null) return;
+
+    // Los mensajes propios no se reportan ni se moderan a uno mismo.
+    if (mensaje.userId == miUserId) return;
+
+    final borrado = await AccionesDeMensaje.mostrar(
+      context,
+      mensaje: mensaje,
+      liveSessionId: live.id,
+      soyElVendedor: live.soyElVendedor,
+    );
+
+    // Se saca de la lista en el acto: esperar al próximo evento dejaría el
+    // mensaje visible después de que el vendedor lo borró.
+    if (borrado && mounted) {
+      setState(() => _mensajes.removeWhere((m) => m.id == mensaje.id));
+    }
+  }
+
   Future<void> _compartir(String liveId) async {
     try {
       final m = await ref.read(socialApiProvider).compartir('live', liveId, origen: 'live');
@@ -369,7 +405,10 @@ class _LiveViewerScreenState extends ConsumerState<LiveViewerScreen> {
                       right: 84,
                       bottom: medidas.chat,
                       height: medidas.altoDelChat,
-                      child: ChatOverlay(mensajes: _mensajes),
+                      child: ChatOverlay(
+                        mensajes: _mensajes,
+                        onMantenerApretado: _accionesDeMensaje,
+                      ),
                     ),
 
                     // ─── 5. Producto destacado ───

@@ -63,6 +63,8 @@ export const ID_PREFIX = {
   moderationAction: 'mod',
   /** Bloqueo de una persona a otra. Ver `moderation/bloqueos.service.ts`. */
   userBlock: 'blk',
+  /** Silencio en el chat de un vivo. Ver `live/chat-moderacion.service.ts`. */
+  chatMute: 'mut',
   supportTicket: 'sup',
   supportMessage: 'sms',
   oauthState: 'oas',

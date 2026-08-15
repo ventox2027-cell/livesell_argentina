@@ -462,6 +462,40 @@ export const envSchema = z
 
     NOTIFICATIONS_DISPATCHER_ENABLED: envBoolean(true),
 
+    // ─── Chat del vivo ──────────────────────────────────────────────────────
+
+    /**
+     * Cuántos días se guardan los mensajes del chat.
+     *
+     * Treinta, y el número tiene motivo: es el tiempo en que un reporte se
+     * abre, se revisa y se resuelve. Más allá de eso, un mensaje de chat de un
+     * vivo no le sirve a nadie —es efímero por naturaleza, nadie lo consulta
+     * como historial— y sí es una base de conversaciones privadas creciendo sin
+     * límite.
+     */
+    CHAT_RETENCION_DIAS: z.coerce.number().int().min(1).max(365).default(30),
+
+    /**
+     * Palabras que el chat rechaza, separadas por coma.
+     *
+     * Vacío = se usa la lista por defecto de `filtro-de-chat.ts`, que tiene
+     * ataques dirigidos y discriminación. **No palabrotas**: putear no está
+     * prohibido en VendoX, y un "qué caro la puta madre" es alguien mirando un
+     * precio.
+     *
+     * Se configura por entorno y no en el código porque cada agregado es una
+     * decisión de moderación y tiene que poder hacerse sin desplegar.
+     */
+    CHAT_PALABRAS_PROHIBIDAS: z
+      .string()
+      .default('')
+      .transform((v) =>
+        v
+          .split(',')
+          .map((p) => p.trim())
+          .filter(Boolean),
+      ),
+
     // ─── Push, por Firebase Cloud Messaging ─────────────────────────────────
 
     /**

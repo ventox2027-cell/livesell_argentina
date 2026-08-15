@@ -53,9 +53,21 @@ import '../../data/live_realtime.dart';
 /// su posición no se mueve y **no se la arrastra** de vuelta abajo. Cuando
 /// suelta y vuelve al fondo, sigue el hilo otra vez.
 class ChatOverlay extends StatelessWidget {
-  const ChatOverlay({super.key, required this.mensajes});
+  const ChatOverlay({super.key, required this.mensajes, this.onMantenerApretado});
 
   final List<MensajeDeChat> mensajes;
+
+  /// Mantener apretado un mensaje abre reportar / borrar / silenciar.
+  ///
+  /// ─── Por qué toque LARGO y no un botón ───
+  ///
+  /// El chat vive encima del video, en una franja angosta. Un ícono por mensaje
+  /// se come el ancho, tapa la imagen y se toca sin querer mientras se
+  /// desplaza. El toque largo es el gesto que la gente ya conoce de cualquier
+  /// app de mensajería.
+  ///
+  /// `null` cuando no hay sesión: sin cuenta no se reporta ni se modera.
+  final void Function(MensajeDeChat)? onMantenerApretado;
 
   @override
   Widget build(BuildContext context) {
@@ -82,7 +94,11 @@ class ChatOverlay extends StatelessWidget {
         itemBuilder: (_, i) {
           // Invertido: el índice 0 es el último mensaje, y va abajo de todo.
           final mensaje = mensajes[mensajes.length - 1 - i];
-          return _Mensaje(mensaje: mensaje);
+          return _Mensaje(
+            mensaje: mensaje,
+            onMantenerApretado:
+                onMantenerApretado == null ? null : () => onMantenerApretado!(mensaje),
+          );
         },
       ),
     );
@@ -90,65 +106,72 @@ class ChatOverlay extends StatelessWidget {
 }
 
 class _Mensaje extends StatelessWidget {
-  const _Mensaje({required this.mensaje});
+  const _Mensaje({required this.mensaje, this.onMantenerApretado});
   final MensajeDeChat mensaje;
+  final VoidCallback? onMantenerApretado;
 
   @override
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(top: 5),
-      child: Align(
-        // El recuadro se ajusta al texto en vez de ocupar el ancho entero.
-        //
-        // `Align` afloja las restricciones, así que el `Container` mide lo que
-        // mide el párrafo: un "sí" queda en una pastilla chiquita y un mensaje
-        // largo ocupa el ancho disponible y envuelve. Un rectángulo de ancho
-        // fijo por mensaje sería la "caja grande" que no queremos sobre el
-        // video.
-        alignment: Alignment.centerLeft,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
-          decoration: BoxDecoration(
-            // Muy tenue: alcanza para despegar el texto de un fondo claro sin
-            // tapar el video. Sobre fondo oscuro casi no se nota.
-            color: Colors.black.withValues(alpha: 0.32),
-            borderRadius: BorderRadius.circular(7),
-          ),
-          child: RichText(
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            text: TextSpan(
-              style: const TextStyle(
-                fontSize: 13.5,
-                height: 1.25,
-                // La sombra se queda además del fondo: juntos resuelven el caso
-                // peor, que es una pared blanca detrás del vendedor.
-                shadows: [Shadow(color: Colors.black87, blurRadius: 4)],
-              ),
-              children: [
-                TextSpan(
-                  text: '${mensaje.nombre} ',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w700,
-                    // El vendedor se distingue por color Y por la etiqueta de
-                    // al lado: el color solo no le llega a todo el mundo.
-                    color: mensaje.esVendedor ? AppColor.acento : AppColor.textoSuave,
-                  ),
+      child: GestureDetector(
+        onLongPress: onMantenerApretado,
+        // `translucent` y no `opaque`: el gesto se toma sobre el recuadro del
+        // mensaje sin robarle el desplazamiento a la lista.
+        behavior: HitTestBehavior.translucent,
+        child: Align(
+          // El recuadro se ajusta al texto en vez de ocupar el ancho entero.
+          //
+          // `Align` afloja las restricciones, así que el `Container` mide lo que
+          // mide el párrafo: un "sí" queda en una pastilla chiquita y un mensaje
+          // largo ocupa el ancho disponible y envuelve. Un rectángulo de ancho
+          // fijo por mensaje sería la "caja grande" que no queremos sobre el
+          // video.
+          alignment: Alignment.centerLeft,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
+            decoration: BoxDecoration(
+              // Muy tenue: alcanza para despegar el texto de un fondo claro sin
+              // tapar el video. Sobre fondo oscuro casi no se nota.
+              color: Colors.black.withValues(alpha: 0.32),
+              borderRadius: BorderRadius.circular(7),
+            ),
+            child: RichText(
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              text: TextSpan(
+                style: const TextStyle(
+                  fontSize: 13.5,
+                  height: 1.25,
+                  // La sombra se queda además del fondo: juntos resuelven el caso
+                  // peor, que es una pared blanca detrás del vendedor.
+                  shadows: [Shadow(color: Colors.black87, blurRadius: 4)],
                 ),
-                if (mensaje.esVendedor)
-                  const TextSpan(
-                    text: '· vendedor ',
+                children: [
+                  TextSpan(
+                    text: '${mensaje.nombre} ',
                     style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: AppColor.acento,
+                      fontWeight: FontWeight.w700,
+                      // El vendedor se distingue por color Y por la etiqueta de
+                      // al lado: el color solo no le llega a todo el mundo.
+                      color: mensaje.esVendedor ? AppColor.acento : AppColor.textoSuave,
                     ),
                   ),
-                TextSpan(
-                  text: mensaje.texto,
-                  style: const TextStyle(color: AppColor.texto),
-                ),
-              ],
+                  if (mensaje.esVendedor)
+                    const TextSpan(
+                      text: '· vendedor ',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: AppColor.acento,
+                      ),
+                    ),
+                  TextSpan(
+                    text: mensaje.texto,
+                    style: const TextStyle(color: AppColor.texto),
+                  ),
+                ],
+              ),
             ),
           ),
         ),

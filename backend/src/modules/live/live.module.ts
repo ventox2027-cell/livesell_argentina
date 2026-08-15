@@ -7,7 +7,9 @@ import { AuthModule } from '@/modules/auth/auth.module';
 import { LiveKitModule } from '@/modules/livekit/livekit.module';
 import { AuditService } from '@/shared/audit/audit.service';
 
-import { LiveController } from './live.controller';
+import { ChatModeracionService } from './chat-moderacion.service';
+import { ChatRetencionService } from './chat-retencion.service';
+import { ChatModeracionController, LiveController } from './live.controller';
 import { LiveGateway } from './live.gateway';
 import { LiveStockListener } from './live-stock.listener';
 import { LiveService } from './live.service';
@@ -32,8 +34,8 @@ import { LiveService } from './live.service';
   // `ModerationModule` por el bloqueo entre personas: el chat lo consulta en
   // cada mensaje para no dejar escribir a quien tiene bloqueo con el vendedor.
   imports: [AuthModule, LiveKitModule, SellerOAuthModule, ModerationModule],
-  controllers: [LiveController],
-  providers: [LiveService, LiveGateway, LiveStockListener, AuditService],
-  exports: [LiveService, LiveGateway],
+  controllers: [LiveController, ChatModeracionController],
+  providers: [LiveService, LiveGateway, LiveStockListener, ChatModeracionService, ChatRetencionService, AuditService],
+  exports: [LiveService, LiveGateway, ChatModeracionService],
 })
 export class LiveModule {}

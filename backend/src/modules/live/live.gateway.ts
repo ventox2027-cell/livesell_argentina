@@ -18,6 +18,8 @@ import { PrismaService } from '@/shared/prisma/prisma.service';
 import { RedisService } from '@/shared/redis/redis.service';
 import { newId } from '@/shared/utils/id';
 
+import { ChatModeracionService } from './chat-moderacion.service';
+import { explicacionDelFiltro } from './filtro-de-chat';
 import { EVENTOS, salaDe, type EventoChat } from './live-events';
 
 /**
@@ -136,6 +138,7 @@ export class LiveGateway implements OnGatewayConnection, OnGatewayDisconnect, On
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
     private readonly bloqueos: BloqueosService,
+    private readonly moderacion: ChatModeracionService,
   ) {}
 
   /**
@@ -397,6 +400,40 @@ export class LiveGateway implements OnGatewayConnection, OnGatewayDisconnect, On
       return { ok: false, error: 'No podés escribir en este vivo' };
     }
 
+    /**
+     * ¿Está callado?
+     *
+     * El mismo mensaje vago que el bloqueo, y por el mismo motivo del otro
+     * lado: decirle "te silenció el vendedor" a alguien que estaba molestando
+     * le da algo contra lo que pelear. Lo que se busca es que se aburra.
+     */
+    if (await this.moderacion.estaSilenciado(userId, datos.data.liveSessionId)) {
+      return { ok: false, error: 'No podés escribir en este vivo' };
+    }
+
+    /**
+     * El filtro. Frena y registra; NO sanciona.
+     *
+     * Un filtro automático que sanciona convierte cada falso positivo en un
+     * castigo, y los falsos positivos son inevitables. Callar a alguien lo
+     * decide el vendedor o moderación.
+     *
+     * Lo frenado se guarda igual: sin eso no hay forma de saber si el filtro se
+     * está pasando de estricto y silenciando gente que no hizo nada.
+     */
+    const veredicto = this.moderacion.filtrar(datos.data.texto);
+    if (!veredicto.permitido) {
+      const idFrenado = newId('msg');
+      void this.moderacion.registrar({
+        id: idFrenado,
+        liveSessionId: datos.data.liveSessionId,
+        userId,
+        texto: datos.data.texto,
+        frenadoPor: veredicto.motivo,
+      });
+      return { ok: false, error: explicacionDelFiltro(veredicto.motivo!) };
+    }
+
     const evento: EventoChat = {
       id: newId('msg'),
       userId,
@@ -412,6 +449,23 @@ export class LiveGateway implements OnGatewayConnection, OnGatewayDisconnect, On
     };
 
     this.server.to(salaDe(datos.data.liveSessionId)).emit(EVENTOS.chat, evento);
+
+    /**
+     * Se guarda DESPUÉS de emitir, y sin esperar.
+     *
+     * Quien escribe no tiene que esperar a la base para ver su mensaje en
+     * pantalla: el chat de un vivo se siente instantáneo o no se siente.
+     *
+     * Si el INSERT falla, se pierde la capacidad de moderar ESE mensaje. Es un
+     * costo aceptable frente a agregarle latencia a todos.
+     */
+    void this.moderacion.registrar({
+      id: evento.id,
+      liveSessionId: datos.data.liveSessionId,
+      userId,
+      texto: datos.data.texto,
+    });
+
     return { ok: true };
   }
 

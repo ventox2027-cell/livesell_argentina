@@ -1,10 +1,11 @@
-import { Body, Controller, Get, Param, Post, Put, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Put, Query } from '@nestjs/common';
 import { z } from 'zod';
 
 import { CurrentUser, Public, type AuthenticatedUser } from '@/modules/auth/auth.guard';
 import { RateLimit } from '@/shared/http/rate-limit.guard';
 import { ZodValidationPipe } from '@/shared/http/zod-validation.pipe';
 
+import { ChatModeracionService } from './chat-moderacion.service';
 import { LiveService } from './live.service';
 
 const PrepararSchema = z.object({
@@ -147,5 +148,102 @@ export class LiveController {
     @Body(new ZodValidationPipe(DestacarSchema)) dto: DestacarDto,
   ) {
     return this.live.destacar(user.id, id, dto.variantId);
+  }
+}
+
+const SilenciarSchema = z.object({
+  userId: z.string().min(1).max(64),
+  /**
+   * Obligatorio, y con mínimo real.
+   *
+   * Un silencio sin motivo no se puede revisar ni defender. Y `min(3)` en vez
+   * de `min(1)`: un motivo de un carácter es lo mismo que no tenerlo.
+   */
+  reason: z.string().trim().min(3).max(300),
+  /**
+   * Cuánto. El vendedor tiene un tope de 24 horas: más que eso ya no es
+   * "durante mi vivo", y una expulsión de la plataforma la decide moderación.
+   */
+  minutos: z.coerce.number().int().min(1).max(60 * 24).default(15),
+});
+type SilenciarDto = z.infer<typeof SilenciarSchema>;
+
+/**
+ * Moderar el chat de un vivo, desde el lado del vendedor.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * EL VENDEDOR MANDA EN SU SALA, NO EN LA PLATAFORMA
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Puede borrar un mensaje de su vivo y callar a alguien durante un rato. No
+ * puede silenciar para siempre, ni en otros vivos, ni suspender una cuenta:
+ * eso son sanciones de plataforma y las decide VendoX.
+ *
+ * ⛔ Ninguna de estas acciones la toma un filtro automático. El filtro frena el
+ * mensaje y lo registra; sancionar lo decide una persona.
+ */
+@Controller({ path: 'live/:liveId/chat', version: '1' })
+export class ChatModeracionController {
+  constructor(private readonly moderacion: ChatModeracionService) {}
+
+  /**
+   * El chat completo, con lo borrado y lo frenado por el filtro.
+   *
+   * Sólo el dueño del vivo. Es lo que necesita para moderar y para entender por
+   * qué a alguien no le salió un mensaje.
+   */
+  @Get()
+  async historial(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('liveId') liveId: string,
+    @Query('limit') limit?: string,
+  ) {
+    await this.moderacion.exigirSerDuenoDelVivo(liveId, user.id);
+    return this.moderacion.historial(liveId, limit ? Number(limit) : undefined);
+  }
+
+  @Delete('messages/:messageId')
+  borrarMensaje(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('messageId') messageId: string,
+  ) {
+    return this.moderacion.borrarMensaje({ mensajeId: messageId, porUserId: user.id });
+  }
+
+  /**
+   * Callar a alguien durante este vivo.
+   *
+   * El límite es alto —cien por hora— a propósito: un vivo con un grupo
+   * organizado molestando necesita que el vendedor pueda callar a varios
+   * seguidos. Frenarlo ahí sería dejarlo sin herramienta justo cuando la
+   * necesita.
+   */
+  @RateLimit({ limit: 100, windowSec: 3600, bucket: 'chat:mute' })
+  @Post('mutes')
+  silenciar(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('liveId') liveId: string,
+    @Body(new ZodValidationPipe(SilenciarSchema)) dto: SilenciarDto,
+  ) {
+    return this.moderacion.silenciar({
+      liveSessionId: liveId,
+      aUserId: dto.userId,
+      porUserId: user.id,
+      motivo: dto.reason,
+      minutos: dto.minutos,
+    });
+  }
+
+  @Delete('mutes/:userId')
+  devolverLaVoz(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('liveId') liveId: string,
+    @Param('userId') userId: string,
+  ) {
+    return this.moderacion.devolverLaVoz({
+      liveSessionId: liveId,
+      aUserId: userId,
+      porUserId: user.id,
+    });
   }
 }

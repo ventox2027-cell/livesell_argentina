@@ -140,6 +140,15 @@ async function call(
   return { status: res.statusCode, body: res.body ? JSON.parse(res.body) : null };
 }
 
+/**
+ * Un sufijo único POR CORRIDA.
+ *
+ * Los ids eran deterministas y la base de tests no se trunca entre corridas:
+ * las filas de auditoría de la vez anterior quedaban con el mismo `entityId`,
+ * y un test que contaba registros encontraba los de ayer. Falló exactamente
+ * así, y sólo cuando corría la suite entera.
+ */
+const CORRIDA = Date.now().toString(36).slice(-6);
 let n = 0;
 
 /**
@@ -152,7 +161,7 @@ async function nuevoUsuario(
   { conEdad = true }: { conEdad?: boolean } = {},
 ): Promise<{ token: string; userId: string }> {
   n += 1;
-  const userId = `usr_ord${String(n).padStart(21, '0')}`;
+  const userId = `usr_${CORRIDA}${String(n).padStart(20, '0')}`;
 
   await prisma.user.create({
     data: {
@@ -170,7 +179,7 @@ async function nuevoUsuario(
   const { accessToken } = await jwt.issueAccessToken({
     userId,
     role: 'buyer',
-    sessionId: `ses_ord${String(n).padStart(20, '0')}`,
+    sessionId: `ses_${CORRIDA}${String(n).padStart(20, '0')}`,
   });
 
   return { token: accessToken, userId };

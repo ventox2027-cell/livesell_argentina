@@ -166,6 +166,7 @@ class MensajeDeChat {
     required this.nombre,
     required this.texto,
     required this.esVendedor,
+    this.userId = '',
   });
 
   factory MensajeDeChat.fromJson(Map<String, dynamic> j) => MensajeDeChat(
@@ -173,10 +174,17 @@ class MensajeDeChat {
         nombre: j['nombre'] as String? ?? '',
         texto: j['texto'] as String? ?? '',
         esVendedor: j['esVendedor'] as bool? ?? false,
+        userId: j['userId'] as String? ?? '',
       );
 
   final String id;
   final String nombre;
   final String texto;
   final bool esVendedor;
+
+  /// Quién lo escribió.
+  ///
+  /// Hace falta para reportar y para que el vendedor pueda silenciarlo. No se
+  /// muestra en ningún lado: lo que se ve es "Juan P.".
+  final String userId;
 }

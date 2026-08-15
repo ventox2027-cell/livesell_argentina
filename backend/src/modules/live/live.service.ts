@@ -443,7 +443,9 @@ export class LiveService {
     const sesion = await this.prisma.liveSession.findUnique({
       where: { id: liveSessionId },
       include: {
-        seller: { select: { id: true, displayName: true, verificationStatus: true } },
+        seller: {
+          select: { id: true, userId: true, displayName: true, verificationStatus: true },
+        },
         store: { select: { id: true, name: true } },
       },
     });
@@ -465,6 +467,18 @@ export class LiveService {
         identidadVerificada: sesion.seller.verificationStatus === 'VERIFIED',
       },
       tienda: { id: sesion.store.id, nombre: sesion.store.name },
+      /**
+       * ¿Este vivo es de quien lo está mirando?
+       *
+       * Lo decide el servidor y no la app comparando ids: así el `userId` del
+       * vendedor no tiene que salir en una respuesta pública. Es el mismo
+       * criterio que en los bloqueos.
+       *
+       * La app lo usa para mostrar las opciones de moderación del chat. No es
+       * una medida de seguridad —el backend valida cada acción igual— sino de
+       * interfaz.
+       */
+      soyElVendedor: sesion.seller.userId === userId,
       destacado,
       iniciadoEl: sesion.startedAt,
       terminadoEl: sesion.endedAt,
