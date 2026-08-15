@@ -1,5 +1,5 @@
 {
-  "id": "prd_01M03PEFK7YA12CKWAVZCPEKP7",
+  "id": "prd_01M03Q1FHBT8VD5GQ4HBF7W0BC",
   "nombre": "Buzo oversize de algodón",
   "descripcion": "Tejido a mano, algodón peinado.",
   "precioCentavos": 890000,
@@ -7,25 +7,25 @@
   "imagenes": [],
   "ejes": [
     {
-      "id": "opt_01M03PEFKBBPY8JJ522B34JJHQ",
+      "id": "opt_01M03Q1FHFA59Z8CSD0RRACWQ3",
       "nombre": "Talle",
       "valores": [
         {
-          "id": "opv_01M03PEFKE1XRRXB3ZSNTBPVBS",
+          "id": "opv_01M03Q1FHH860E0C42CBH4N95D",
           "valor": "S"
         },
         {
-          "id": "opv_01M03PEFKEQC1SHYT989GPQZ62",
+          "id": "opv_01M03Q1FHHQXN9RJ55E97PZK4F",
           "valor": "M"
         }
       ]
     },
     {
-      "id": "opt_01M03PEFKJYX72RS5R86Y3HHRA",
+      "id": "opt_01M03Q1FHM4K5DXZT9TN85MBJV",
       "nombre": "Color",
       "valores": [
         {
-          "id": "opv_01M03PEFKK6SVP078XY6B4F6DC",
+          "id": "opv_01M03Q1FHNNTYYH0XN1GMS2YS1",
           "valor": "Negro"
         }
       ]
@@ -33,29 +33,29 @@
   ],
   "variantes": [
     {
-      "id": "var_01M03PEFKN880ESSWT8K9FJZ4Y",
+      "id": "var_01M03Q1FHP12XKNSN45SVMS5JJ",
       "titulo": "S / Negro",
       "precioCentavos": 890000,
       "disponible": 4,
       "valoresDeOpcion": [
-        "opv_01M03PEFKE1XRRXB3ZSNTBPVBS",
-        "opv_01M03PEFKK6SVP078XY6B4F6DC"
+        "opv_01M03Q1FHH860E0C42CBH4N95D",
+        "opv_01M03Q1FHNNTYYH0XN1GMS2YS1"
       ]
     },
     {
-      "id": "var_01M03PEFKV0RAVJ1XQWQRM2DXS",
+      "id": "var_01M03Q1FHWCE24PB2Z6B3JH79A",
       "titulo": "M / Negro",
       "precioCentavos": 890000,
       "disponible": 4,
       "valoresDeOpcion": [
-        "opv_01M03PEFKEQC1SHYT989GPQZ62",
-        "opv_01M03PEFKK6SVP078XY6B4F6DC"
+        "opv_01M03Q1FHHQXN9RJ55E97PZK4F",
+        "opv_01M03Q1FHNNTYYH0XN1GMS2YS1"
       ]
     }
   ],
   "tienda": {
-    "id": "sto_01M03PEFHB7J0GWC7TDPFNPQCA",
-    "nombre": "Tejidos Marta msuwt03e"
+    "id": "sto_01M03Q1FFT1NWTAZEHZT3CT8FV",
+    "nombre": "Tejidos Marta msux6cgn"
   },
   "envio": {
     "modo": "FIXED_OR_PICKUP",

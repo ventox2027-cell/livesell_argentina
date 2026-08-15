@@ -16,6 +16,7 @@ import '../../orders/presentation/seller_orders_screen.dart';
 import '../data/seller_repository.dart';
 import '../domain/seller_models.dart';
 import 'interesados_screen.dart';
+import 'pro_screen.dart';
 import 'product_editor_screen.dart';
 import 'store_settings_screen.dart';
 import 'widgets/estado_de_cobros.dart';
@@ -41,6 +42,13 @@ class SellerHomeScreen extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('Mi tienda'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.rocket_launch_outlined),
+            tooltip: 'VendoX Pro',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const ProScreen()),
+            ),
+          ),
           IconButton(
             icon: const Icon(Icons.settings_outlined),
             onPressed: () => Navigator.of(context).push(

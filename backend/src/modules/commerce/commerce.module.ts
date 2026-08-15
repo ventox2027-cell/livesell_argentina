@@ -6,6 +6,8 @@ import { SellersModule } from '@/modules/sellers/sellers.module';
 import { AuditService } from '@/shared/audit/audit.service';
 import { DomainEventBus } from '@/shared/events/domain-events';
 
+import { AnaliticaController } from './analitica.controller';
+import { AnaliticaService } from './analitica.service';
 import { CommerceController } from './commerce.controller';
 import { CuponesDelCompradorController, CuponesDelVendedorController } from './cupones.controller';
 import { CuponesService } from './cupones.service';
@@ -42,6 +44,7 @@ import { SellersService } from './sellers.service';
     CuponesDelVendedorController,
     CuponesDelCompradorController,
     PromocionesController,
+    AnaliticaController,
   ],
   providers: [
     SellersService,
@@ -52,6 +55,7 @@ import { SellersService } from './sellers.service';
     OwnershipService,
     CuponesService,
     PromocionesService,
+    AnaliticaService,
     AuditService,
     DomainEventBus,
   ],

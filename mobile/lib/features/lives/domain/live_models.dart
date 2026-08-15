@@ -246,6 +246,9 @@ class PerfilDeVendedor {
     this.rating,
     this.identidadVerificada = false,
     this.vendedorConfiable = false,
+    this.destacado = false,
+    this.cumplimiento,
+    this.esNuevo = false,
     this.loSigo,
     this.storeId,
     this.tiendaNombre,
@@ -265,6 +268,9 @@ class PerfilDeVendedor {
       avatarUrl: j['avatarUrl'] as String?,
       identidadVerificada: j['identidadVerificada'] as bool? ?? false,
       vendedorConfiable: j['vendedorConfiable'] as bool? ?? false,
+      destacado: j['destacado'] as bool? ?? false,
+      cumplimiento: (j['cumplimiento'] as num?)?.toInt(),
+      esNuevo: j['esNuevo'] as bool? ?? false,
       seguidores: (j['seguidores'] as num?)?.toInt() ?? 0,
 
       /// `null` cuando no hay reseñas. Distinto de 0: "sin reseñas" no es
@@ -292,6 +298,35 @@ class PerfilDeVendedor {
   /// Una reputación: tiene historial. **No es lo mismo que la anterior.**
   final bool vendedorConfiable;
 
+  /// ═══════════════════════════════════════════════════════════════════════
+  /// TRES INSIGNIAS DISTINTAS, Y NINGUNA SE COMPRA
+  /// ═══════════════════════════════════════════════════════════════════════
+  ///
+  ///   · [identidadVerificada] — sabemos quién es. Un hecho comprobable.
+  ///   · [vendedorConfiable]   — tiene historial. Una reputación ganada.
+  ///   · [destacado]           — cumple reglas objetivas y públicas.
+  ///
+  /// VendoX Pro es una cuarta cosa —una membresía paga— y **no puede
+  /// dibujarse como ninguna de éstas**. Un sello comprado que se lee como
+  /// verificación engaña a quien lo mira, que es exactamente lo que estas tres
+  /// existen para evitar.
+  final bool destacado;
+
+  /// Porcentaje de ventas cumplidas, o `null` si no hay operaciones
+  /// suficientes.
+  ///
+  /// `null` y no cero: «sin datos» y «cumple el 0 %» son cosas opuestas, y un
+  /// «0 %» sobre un vendedor nuevo lo hunde por algo que no hizo. El umbral lo
+  /// decide el servidor (ver `reputacion.ts`); la app sólo respeta el `null`.
+  final int? cumplimiento;
+
+  /// Recién empieza: no hay historial para mostrar.
+  ///
+  /// Se dice explícitamente en vez de mostrar ceros. «Vendedor nuevo» es
+  /// información honesta; «0 ventas, 0 reseñas, 0 % de cumplimiento» es la
+  /// misma situación descrita como un fracaso.
+  final bool esNuevo;
+
   final int seguidores;
   final double? rating;
   final int resenas;
@@ -305,7 +340,14 @@ class PerfilDeVendedor {
   final EstadoDeTienda? horario;
   final String? liveEnCursoId;
 
-  bool get sinReputacion => resenas == 0 && ventas == 0;
+  /// Si todavía no hay historial que mostrar.
+  ///
+  /// ⚠️ Manda [esNuevo], que lo decide el servidor con los umbrales de
+  /// `reputacion.ts`. La comparación local queda como respaldo para una
+  /// respuesta vieja que no lo traiga: dos definiciones de «nuevo» que
+  /// discrepan harían que la pantalla muestre «recién empieza» al lado de un
+  /// promedio de estrellas.
+  bool get sinReputacion => esNuevo || (resenas == 0 && ventas == 0);
 
   /// Copia con el estado de seguimiento que **devolvió el servidor**.
   ///

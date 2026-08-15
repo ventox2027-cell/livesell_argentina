@@ -16,7 +16,7 @@ import 'variant_sheet.dart';
 /// El perfil del vendedor.
 ///
 /// ═══════════════════════════════════════════════════════════════════════════
-/// LAS DOS INSIGNIAS NO SON LA MISMA COSA
+/// LAS TRES INSIGNIAS NO SON LA MISMA COSA — Y NINGUNA SE COMPRA
 /// ═══════════════════════════════════════════════════════════════════════════
 ///
 ///   **Identidad verificada** — sabemos quién es. Presentó un documento y lo
@@ -26,10 +26,17 @@ import 'variant_sheet.dart';
 ///   **Vendedor confiable** — tiene historial: ventas concretadas, reseñas,
 ///   tiempo en la plataforma. Es reputación, y se puede perder.
 ///
+///   **Vendedor destacado** — cumple reglas objetivas y públicas sobre muchas
+///   ventas. Las define `reputacion.ts` y se recalculan solas.
+///
 /// Se muestran **separadas y con texto propio**. Fundirlas en un solo tilde
 /// azul sería el error clásico: alguien con el DNI validado que nunca vendió
 /// nada parecería tan confiable como quien lleva doscientas ventas limpias, y
 /// esa confusión es exactamente la que aprovecha el que estafa.
+///
+/// ⚠️ **VendoX Pro no va acá.** Es una cuarta cosa —una membresía paga— y
+/// dibujarla junto a estas tres haría que un sello comprado se lea como uno
+/// ganado. Es la misma regla que sostiene todo lo anterior.
 ///
 /// ─── Un vendedor nuevo no es un vendedor malo ───
 ///
@@ -509,7 +516,73 @@ class _Numeros extends StatelessWidget {
                   icono: Icons.star_rounded,
                 ),
         ),
+
+        /**
+         * El cumplimiento sólo aparece cuando el servidor lo mandó.
+         *
+         * Viene `null` hasta que hay operaciones suficientes: un «100 %» sobre
+         * una sola venta no es información, y un «0 %» sobre un vendedor que
+         * todavía no despachó nada es una acusación.
+         *
+         * Con `null` no se muestra la columna. No se dibuja un «—» tercero:
+         * tres guiones en fila se leen como que el vendedor está roto.
+         */
+        if (perfil.cumplimiento != null) ...[
+          const _Separador(),
+          Expanded(
+            child: _Dato(
+              valor: '${perfil.cumplimiento}%',
+              etiqueta: 'cumplimiento',
+            ),
+          ),
+        ],
       ],
+    );
+  }
+}
+
+/// «Vendedor destacado».
+///
+/// ═══════════════════════════════════════════════════════════════════════════
+/// SE GANA, NO SE COMPRA
+/// ═══════════════════════════════════════════════════════════════════════════
+///
+/// Lo otorga el servidor por reglas objetivas y públicas —ventas cumplidas,
+/// promedio, cantidad de reseñas, porcentaje de cumplimiento— que están en
+/// `reputacion.ts`. Ninguna se puede pagar.
+///
+/// Por eso NO usa el violeta de marca ni la forma del sello de identidad: son
+/// tres insignias distintas, y que se parezcan haría que una se lea como la
+/// otra. Ésta es lima, la de identidad es violeta con tilde.
+///
+/// VendoX Pro será una cuarta cosa y tampoco puede parecerse a ninguna.
+class InsigniaDestacado extends StatelessWidget {
+  const InsigniaDestacado({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: Gap.sm, vertical: 3),
+      decoration: BoxDecoration(
+        color: AppColor.exito.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(Redondeo.pill),
+        border: Border.all(color: AppColor.exito.withValues(alpha: 0.4)),
+      ),
+      child: const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.workspace_premium_rounded, size: 13, color: AppColor.exito),
+          SizedBox(width: 4),
+          Text(
+            'Destacado',
+            style: TextStyle(
+              fontSize: 11.5,
+              fontWeight: FontWeight.w800,
+              color: AppColor.exito,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -562,14 +635,21 @@ class _Separador extends StatelessWidget {
   }
 }
 
-/// Las dos insignias, con su explicación. Ver la nota de la clase.
+/// Las TRES insignias, con su explicación.
+///
+/// Ninguna se compra: identidad se comprueba, confiable se gana con historial,
+/// destacado sale de reglas objetivas y públicas. Ver `reputacion.ts`.
+///
+/// VendoX Pro va a ser una cuarta cosa —una membresía paga— y **no puede
+/// dibujarse acá adentro**: un sello comprado al lado de estos tres se lee
+/// como si también se hubiera ganado.
 class _Insignias extends StatelessWidget {
   const _Insignias({required this.perfil});
   final PerfilDeVendedor perfil;
 
   @override
   Widget build(BuildContext context) {
-    if (!perfil.identidadVerificada && !perfil.vendedorConfiable) {
+    if (!perfil.identidadVerificada && !perfil.vendedorConfiable && !perfil.destacado) {
       return const SizedBox.shrink();
     }
 
@@ -590,6 +670,17 @@ class _Insignias extends StatelessWidget {
             titulo: 'Vendedor confiable',
             detalle: 'Tiene historial de ventas concretadas y buenas reseñas.',
           ),
+        if (perfil.destacado) ...[
+          const SizedBox(height: Gap.sm),
+          const _Insignia(
+            icono: Icons.verified_user_outlined,
+            color: AppColor.info,
+            titulo: 'Vendedor destacado',
+            detalle:
+                'Cumple todas las entregas y mantiene buenas reseñas sobre '
+                'muchas ventas. Es un reconocimiento que se gana, no se compra.',
+          ),
+        ],
       ],
     );
   }

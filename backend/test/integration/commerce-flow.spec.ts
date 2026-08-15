@@ -243,6 +243,25 @@ async function crearProducto(token: string, extra: Record<string, unknown> = {})
   return r.body;
 }
 
+/** Un vendedor con un producto publicado. Los helpers de este archivo no
+ *  devuelven el sellerId, así que se resuelve acá. */
+async function nuevoVendedorConProducto() {
+  const v = await nuevoVendedor();
+  const producto = await crearProducto(v.token, { status: 'ACTIVE' });
+  return {
+    token: v.token,
+    sellerId: v.seller.id as string,
+    productId: producto.id as string,
+  };
+}
+
+/** Un administrador. El rol se pone en la base: no hay endpoint. */
+async function nuevoAdmin() {
+  const u = await nuevoUsuario();
+  await prisma.user.update({ where: { id: u.userId }, data: { role: 'admin' } });
+  return u;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('Convertirse en vendedor', () => {
@@ -3225,24 +3244,6 @@ describe('Promociones pagas', () => {
    * como tal. No recibe puntaje, no sube estrellas, no verifica a nadie.
    */
 
-  /** Un vendedor con un producto publicado. Los helpers de este archivo no
-   *  devuelven el sellerId, así que se resuelve acá. */
-  async function nuevoVendedorConProducto() {
-    const v = await nuevoVendedor();
-    const producto = await crearProducto(v.token, { status: 'ACTIVE' });
-    return {
-      token: v.token,
-      sellerId: v.seller.id as string,
-      productId: producto.id as string,
-    };
-  }
-
-  /** Un administrador. El rol se pone en la base: no hay endpoint. */
-  async function nuevoAdmin() {
-    const u = await nuevoUsuario();
-    await prisma.user.update({ where: { id: u.userId }, data: { role: 'admin' } });
-    return u;
-  }
 
   /** Un vendedor con créditos y un producto publicado. */
   async function vendedorConCreditos(creditos = 10) {
@@ -3528,6 +3529,255 @@ describe('Promociones pagas', () => {
       const items = feed.body.items as Array<{ id: string; promocionado: boolean }>;
       const suyo = items.find((i) => i.id === v.productId);
       expect(suyo?.promocionado ?? false).toBe(false);
+    });
+  });
+});
+
+describe('El embudo del vendedor', () => {
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * TODA CIFRA VIENE DE UNA FILA QUE EXISTE
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * Ninguno de estos números se estima. Y cuando no alcanzan para decir algo,
+   * la respuesta dice `null` en vez de cero: un cero se lee como «te fue mal»
+   * y un `null` se puede mostrar como «todavía no sabemos».
+   */
+
+  async function vendedorPro() {
+    const v = await nuevoVendedorConProducto();
+
+    await prisma.sellerMembership.create({
+      data: {
+        id: `mem_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+        sellerId: v.sellerId,
+        plan: 'PRO',
+        periodo: 'MENSUAL',
+        origen: 'CORTESIA',
+        vigenteHasta: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      },
+    });
+
+    return v;
+  }
+
+  it('⛔ un vendedor Free NO ve el embudo', async () => {
+    // Ver sus ventas siempre fue gratis. Lo que compra Pro es entender POR QUÉ
+    // no vende más.
+    const v = await nuevoVendedorConProducto();
+
+    const r = await call('GET', '/api/v1/seller/analytics/funnel', { token: v.token });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(402);
+    expect(r.body.error.code).toBe('PRO_REQUIRED');
+  });
+
+  it('⛔ un Pro VENCIDO tampoco', async () => {
+    const v = await vendedorPro();
+    await prisma.sellerMembership.update({
+      where: { sellerId: v.sellerId },
+      data: { vigenteHasta: new Date(Date.now() - 60_000) },
+    });
+
+    const r = await call('GET', '/api/v1/seller/analytics/funnel', { token: v.token });
+    expect(r.status).toBe(402);
+  });
+
+  it('cuenta los cuatro escalones de sus tablas', async () => {
+    const v = await vendedorPro();
+
+    // Tres personas distintas lo miran. La restricción única de
+    // `RecentlyViewed` es por (persona, producto): son tres filas.
+    for (let i = 0; i < 3; i += 1) {
+      const curioso = await nuevoUsuario();
+      await prisma.recentlyViewed.create({
+        data: {
+          id: `vst_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+          userId: curioso.userId,
+          targetType: 'PRODUCT',
+          targetId: v.productId,
+        },
+      });
+    }
+
+    const r = await call('GET', '/api/v1/seller/analytics/funnel', { token: v.token });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.body.embudo.interesados).toBe(3);
+    expect(r.body.embudo.vendidos).toBe(0);
+  });
+
+  it('⛔ la misma persona mirando diez veces cuenta UNA', async () => {
+    /**
+     * EL TEST QUE JUSTIFICA EL NOMBRE.
+     *
+     * El escalón se llama «personas que lo miraron» y no «visitas» porque es
+     * exactamente eso. Si lo llamáramos visitas, el vendedor lo compararía con
+     * las visitas de otra plataforma y sacaría conclusiones sobre una cifra
+     * que mide otra cosa.
+     */
+    const v = await vendedorPro();
+    const curioso = await nuevoUsuario();
+
+    for (let i = 0; i < 10; i += 1) {
+      await prisma.recentlyViewed.upsert({
+        where: {
+          userId_targetType_targetId: {
+            userId: curioso.userId,
+            targetType: 'PRODUCT',
+            targetId: v.productId,
+          },
+        },
+        create: {
+          id: `vst_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+          userId: curioso.userId,
+          targetType: 'PRODUCT',
+          targetId: v.productId,
+        },
+        update: { viewedAt: new Date() },
+      });
+    }
+
+    const r = await call('GET', '/api/v1/seller/analytics/funnel', { token: v.token });
+    expect(r.body.embudo.interesados).toBe(1);
+  });
+
+  it('⛔ un carrito abandonado NO cuenta como venta', async () => {
+    /**
+     * EL TEST QUE PROTEGE EL ÚLTIMO ESCALÓN.
+     *
+     * Una orden creada y nunca pagada es exactamente lo contrario de una venta:
+     * es alguien que llegó hasta el final y se fue. Contarla inflaría el número
+     * justo donde el vendedor busca la verdad, y le haría creer que su problema
+     * está antes cuando está ahí.
+     *
+     * La orden se inserta directamente porque el flujo de compra completo vive
+     * en `orders-flow.spec.ts`; acá lo único que importa es su estado.
+     */
+    const v = await vendedorPro();
+    const comprador = await nuevoUsuario();
+    const producto = await prisma.product.findUniqueOrThrow({
+      where: { id: v.productId },
+      select: { storeId: true, variants: { select: { id: true }, take: 1 } },
+    });
+
+    const sufijo = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    await prisma.order.create({
+      data: {
+        id: `ord_${sufijo}`,
+        reference: `REF${sufijo.slice(-8).toUpperCase()}`,
+        buyerId: comprador.userId,
+        storeId: producto.storeId,
+        sellerId: v.sellerId,
+        reservationId: `rsv_${sufijo}`,
+        // Nunca se pagó.
+        status: 'PENDING_PAYMENT',
+        itemsSubtotal: 100_000,
+        grossAmount: 100_000,
+        platformFeeBps: 600,
+        platformFeeAmount: 6_000,
+        sellerNetAmount: 94_000,
+        shippingAddress: {},
+        buyerSnapshot: {},
+        items: {
+          create: [
+            {
+              id: `oit_${sufijo}`,
+              productId: v.productId,
+              productVariantId: producto.variants[0]!.id,
+              productNameSnapshot: 'Producto',
+              variantLabelSnapshot: 'Default',
+              quantity: 1,
+              unitPrice: 100_000,
+              subtotal: 100_000,
+            },
+          ],
+        },
+      },
+    });
+
+    const r = await call('GET', '/api/v1/seller/analytics/funnel', { token: v.token });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.body.embudo.vendidos).toBe(0);
+  });
+
+  it('⛔ con pocos datos NO devuelve un porcentaje', async () => {
+    // «33 % de conversión» con tres personas es una anécdota disfrazada de
+    // métrica: una venta más y salta a 66 %.
+    const v = await vendedorPro();
+
+    const r = await call('GET', '/api/v1/seller/analytics/funnel', { token: v.token });
+
+    expect(r.body.tasas.conversion).toBeNull();
+    expect(r.body.dondeSePierde).toBeNull();
+  });
+
+  it('dice en cuántos días se contaron los interesados', async () => {
+    /**
+     * «120 personas lo miraron» sin decir en cuánto tiempo no significa nada, y
+     * el vendedor lo lee como «desde siempre». Son 30 días porque es lo que
+     * conserva la tabla.
+     */
+    const v = await vendedorPro();
+
+    const r = await call('GET', '/api/v1/seller/analytics/funnel', { token: v.token });
+
+    expect(r.body.ventanaDeInteresadosEnDias).toBe(30);
+  });
+
+  it('un vendedor sin productos NO tiene un embudo en cero', async () => {
+    /**
+     * Es distinto de «te fue mal»: es que todavía no publicó nada. Mostrarle
+     * cuatro ceros sería inventar un diagnóstico sobre algo que no existe.
+     */
+    const u = await nuevoUsuario();
+    const seller = await call('POST', '/api/v1/sellers', {
+      token: u.token,
+      body: { displayName: `Sin productos ${u.userId.slice(-6)}` },
+    });
+    await prisma.sellerMembership.create({
+      data: {
+        id: `mem_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+        sellerId: seller.body.seller.id as string,
+        plan: 'PRO',
+        periodo: 'MENSUAL',
+        origen: 'CORTESIA',
+        vigenteHasta: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      },
+    });
+
+    const r = await call('GET', '/api/v1/seller/analytics/funnel', { token: u.token });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.body.sinProductos).toBe(true);
+    expect(r.body.embudo).toBeNull();
+  });
+
+  describe('Por producto', () => {
+    it('⛔ el producto de OTRO no se encuentra', async () => {
+      // La pertenencia va en el WHERE: 404, no 403. Las métricas de una tienda
+      // son de las cosas más sensibles que tiene un vendedor.
+      const mio = await vendedorPro();
+      const ajeno = await nuevoVendedorConProducto();
+
+      const r = await call('GET', `/api/v1/seller/analytics/funnel/${ajeno.productId}`, {
+        token: mio.token,
+      });
+
+      expect(r.status).toBe(404);
+    });
+
+    it('devuelve el embudo de ese producto', async () => {
+      const v = await vendedorPro();
+
+      const r = await call('GET', `/api/v1/seller/analytics/funnel/${v.productId}`, {
+        token: v.token,
+      });
+
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+      expect(r.body.productId).toBe(v.productId);
+      expect(r.body.embudo).not.toBeNull();
     });
   });
 });
