@@ -114,8 +114,24 @@ export class BloqueosService {
        * ⚠️ El motivo NO se guarda en la auditoría, sólo si lo hubo. Puede
        * contener el relato de algo que le pasó a la persona, y la bitácora se
        * lee entera cuando se investiga cualquier otra cosa.
+       *
+       * ⚠️ Y se ESPERA, no va con `void`.
+       *
+       * Con `void`, la respuesta salía antes de que la fila existiera. En
+       * producción eso es una carrera invisible —la fila llega unos
+       * milisegundos después y nadie la está mirando— pero significa que un
+       * bloqueo puede responder OK y no quedar registrado nunca si el proceso
+       * se cae en ese instante.
+       *
+       * Se descubrió porque el test que cuenta el registro fallaba una de cada
+       * tres corridas: leía antes de que la escritura terminara. El test tenía
+       * razón.
+       *
+       * El costo es un viaje más a la base antes de responder. Bloquear no es
+       * una operación de alta frecuencia y la bitácora es la mitad de la
+       * historia cuando alguien denuncia acoso.
        */
-      void this.audit.log({
+      await this.audit.log({
         action: 'user.blocked',
         entityType: 'user',
         entityId: blockedId,
@@ -167,7 +183,10 @@ export class BloqueosService {
     });
 
     if (borrados.count > 0) {
-      void this.audit.log({
+      // Esperada, igual que la de bloquear: la secuencia sirve para investigar
+      // sólo si está completa. Un bloqueo registrado sin su desbloqueo cuenta
+      // una historia distinta de la que pasó.
+      await this.audit.log({
         action: 'user.unblocked',
         entityType: 'user',
         entityId: blockedId,

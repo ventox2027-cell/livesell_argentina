@@ -1,5 +1,5 @@
 {
-  "id": "prd_01M02B7GT22CDPXAHG5V2SD8XB",
+  "id": "prd_01M02CF2GHNH3DEFPC4DEQWA1R",
   "nombre": "Buzo oversize de algodón",
   "descripcion": "Tejido a mano, algodón peinado.",
   "precioCentavos": 890000,
@@ -7,25 +7,25 @@
   "imagenes": [],
   "ejes": [
     {
-      "id": "opt_01M02B7GT7VR14Z755E4T1MZM2",
+      "id": "opt_01M02CF2GN97K0RH3MQ24PX5BX",
       "nombre": "Talle",
       "valores": [
         {
-          "id": "opv_01M02B7GT9J99BTRFDDENKXSEE",
+          "id": "opv_01M02CF2GR90494DHK3B496SM6",
           "valor": "S"
         },
         {
-          "id": "opv_01M02B7GT9DWXZ1VWRF4CV3XWJ",
+          "id": "opv_01M02CF2GRRDSZ221W4C8YKFDH",
           "valor": "M"
         }
       ]
     },
     {
-      "id": "opt_01M02B7GTBEF1H1Q41BBZK7845",
+      "id": "opt_01M02CF2GT1HJGEZP0JPGMSZH8",
       "nombre": "Color",
       "valores": [
         {
-          "id": "opv_01M02B7GTCY0EJY7RJ0EHVNPPZ",
+          "id": "opv_01M02CF2GV20NDH92CKM77JF9R",
           "valor": "Negro"
         }
       ]
@@ -33,29 +33,29 @@
   ],
   "variantes": [
     {
-      "id": "var_01M02B7GTKFJXFJMYPT4P8GF5A",
-      "titulo": "M / Negro",
-      "precioCentavos": 890000,
-      "disponible": 4,
-      "valoresDeOpcion": [
-        "opv_01M02B7GT9DWXZ1VWRF4CV3XWJ",
-        "opv_01M02B7GTCY0EJY7RJ0EHVNPPZ"
-      ]
-    },
-    {
-      "id": "var_01M02B7GTDCXEVMC6RNF0PBRTN",
+      "id": "var_01M02CF2GW3P6J6GJPBE164BXD",
       "titulo": "S / Negro",
       "precioCentavos": 890000,
       "disponible": 4,
       "valoresDeOpcion": [
-        "opv_01M02B7GT9J99BTRFDDENKXSEE",
-        "opv_01M02B7GTCY0EJY7RJ0EHVNPPZ"
+        "opv_01M02CF2GR90494DHK3B496SM6",
+        "opv_01M02CF2GV20NDH92CKM77JF9R"
+      ]
+    },
+    {
+      "id": "var_01M02CF2H2441CSJVS01H93PGP",
+      "titulo": "M / Negro",
+      "precioCentavos": 890000,
+      "disponible": 4,
+      "valoresDeOpcion": [
+        "opv_01M02CF2GRRDSZ221W4C8YKFDH",
+        "opv_01M02CF2GV20NDH92CKM77JF9R"
       ]
     }
   ],
   "tienda": {
-    "id": "sto_01M02B7GR9QZQMRFT4ZSY2EZYS",
-    "nombre": "Tejidos Marta msu5tpd2"
+    "id": "sto_01M02CF2E5HWWYCQ3JF8394539",
+    "nombre": "Tejidos Marta msu6lhei"
   },
   "envio": {
     "modo": "FIXED_OR_PICKUP",
