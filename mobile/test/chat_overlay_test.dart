@@ -290,4 +290,114 @@ void main() {
       );
     });
   });
+
+  group('El indicador de mensajes nuevos', () {
+    testWidgets('no aparece cuando se está al pie de la lista', (tester) async {
+      // Que es el 95 % del tiempo. Un cartel permanente sobre el video tapa
+      // justo lo que la persona vino a ver.
+      final mensajes = [for (var i = 1; i <= 30; i++) msj('m$i.')];
+      await tester.pumpWidget(enCaja(mensajes));
+      await tester.pump();
+
+      mensajes.add(msj('recién llegado.'));
+      await tester.pumpWidget(enCaja(mensajes));
+      await tester.pump();
+
+      expect(find.textContaining('nuevo'), findsNothing);
+    });
+
+    testWidgets('⛔ aparece cuando alguien subió a leer y siguió la conversación', (tester) async {
+      /**
+       * El caso que el indicador resuelve.
+       *
+       * Con la lista invertida, quien subió a leer se queda donde está y los
+       * mensajes nuevos entran abajo, fuera de su vista. Eso es lo correcto
+       * —no se lo arrastra— pero sin ningún aviso la conversación parece
+       * haberse detenido, y en un vivo eso pasa justo cuando el vendedor está
+       * contestando algo.
+       */
+      final mensajes = [for (var i = 1; i <= 40; i++) msj('m$i.')];
+      await tester.pumpWidget(enCaja(mensajes));
+      await tester.pump();
+
+      // Sube a leer. En una lista invertida, subir es ir a `pixels` positivos.
+      await tester.drag(find.byType(ListView), const Offset(0, 200));
+      await tester.pump();
+
+      for (var i = 41; i <= 43; i++) {
+        mensajes.add(msj('m$i.'));
+      }
+      await tester.pumpWidget(enCaja(mensajes));
+      await tester.pump();
+
+      expect(find.text('3 mensajes nuevos'), findsOneWidget);
+    });
+
+    testWidgets('en singular cuando es uno solo', (tester) async {
+      final mensajes = [for (var i = 1; i <= 40; i++) msj('m$i.')];
+      await tester.pumpWidget(enCaja(mensajes));
+      await tester.pump();
+
+      await tester.drag(find.byType(ListView), const Offset(0, 200));
+      await tester.pump();
+
+      mensajes.add(msj('uno.'));
+      await tester.pumpWidget(enCaja(mensajes));
+      await tester.pump();
+
+      expect(find.text('1 mensaje nuevo'), findsOneWidget);
+    });
+
+    testWidgets('⛔ tocarlo baja al último y lo hace desaparecer', (tester) async {
+      final mensajes = [for (var i = 1; i <= 40; i++) msj('m$i.')];
+      await tester.pumpWidget(enCaja(mensajes));
+      await tester.pump();
+
+      await tester.drag(find.byType(ListView), const Offset(0, 200));
+      await tester.pump();
+
+      mensajes.add(msj('nuevo.'));
+      await tester.pumpWidget(enCaja(mensajes));
+      await tester.pump();
+      expect(find.textContaining('nuevo'), findsWidgets);
+
+      await tester.tap(find.text('1 mensaje nuevo'));
+      await tester.pumpAndSettle();
+
+      // Volvió al pie: `pixels` en 0 en una lista invertida es el último
+      // mensaje.
+      final posicion = tester.state<ScrollableState>(find.byType(Scrollable)).position.pixels;
+      expect(posicion, closeTo(0, 1));
+      expect(find.text('1 mensaje nuevo'), findsNothing);
+    });
+
+    testWidgets('⛔ el contador NO compara longitudes de la lista mutada', (tester) async {
+      /**
+       * Es el bug original del chat, y el indicador es justo el lugar donde
+       * volvería a aparecer.
+       *
+       * La pantalla muta la MISMA lista, así que en `didUpdateWidget` la vieja
+       * y la nueva son el mismo objeto: `viejo.mensajes.length !=
+       * widget.mensajes.length` es siempre falso.
+       *
+       * Este test pasa la misma instancia de lista en las dos
+       * reconstrucciones. Si el contador se apoyara en esa comparación, el
+       * indicador no aparecería nunca.
+       */
+      final mensajes = [for (var i = 1; i <= 40; i++) msj('m$i.')];
+      final widget = enCaja(mensajes);
+
+      await tester.pumpWidget(widget);
+      await tester.pump();
+      await tester.drag(find.byType(ListView), const Offset(0, 200));
+      await tester.pump();
+
+      // La MISMA lista, mutada en el lugar.
+      mensajes.add(msj('mutado.'));
+      await tester.pumpWidget(enCaja(mensajes));
+      await tester.pump();
+
+      expect(find.text('1 mensaje nuevo'), findsOneWidget);
+    });
+  });
 }
