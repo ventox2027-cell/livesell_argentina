@@ -105,6 +105,10 @@ exclusiones que crece y nadie revisa.
 Un escáner que dice «sin hallazgos» no prueba nada hasta que se lo ve encontrar
 algo:
 
+<!-- escaner:ok la clave de abajo es el ejemplo público de AWS, y es el señuelo
+     de este mismo procedimiento. Sin el marcador, el escáner se denuncia a sí
+     mismo en cada corrida — cosa que efectivamente pasó al escribir esto. -->
+
 ```bash
 flutter build apk --release --target-platform android-arm64 \
   --dart-define=API_BASE_URL=https://AKIAIOSFODNN7EXAMPLE.vendox.com.ar
