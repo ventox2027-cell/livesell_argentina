@@ -6,6 +6,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../../auth/data/auth_repository.dart';
 import '../../moderation/presentation/bloqueados_screen.dart';
+import 'confianza_screen.dart';
 import '../../notifications/data/notifications_api.dart';
 import '../../notifications/presentation/notifications_screen.dart';
 import '../../../core/config/entorno.dart';
@@ -101,6 +102,22 @@ class ProfileScreen extends ConsumerWidget {
             icono: Icons.devices_outlined,
             texto: 'Sesiones activas',
             onTap: () => _verSesiones(context, ref),
+          ),
+          _Fila(
+            icono: Icons.shield_outlined,
+            texto: 'Seguridad y confianza',
+            detalle: 'Cómo cuidamos tus compras',
+            /**
+             * Reúne lo que ya estaba repartido entre estas filas.
+             *
+             * Bloqueados, privacidad y descargar mis datos siguen accesibles
+             * desde acá — no se movieron, se agruparon—. Alguien que duda de
+             * una compra no va a reconstruir la respuesta juntando cinco
+             * filas de un menú de ajustes.
+             */
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const ConfianzaScreen()),
+            ),
           ),
           _Fila(
             icono: Icons.block_outlined,
