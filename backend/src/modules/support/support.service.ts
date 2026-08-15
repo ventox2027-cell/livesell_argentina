@@ -97,7 +97,7 @@ export class SupportService {
    */
   async abrir(
     userId: string,
-    dto: { mensaje: string; categoria?: SupportCategory; orderId?: string },
+    dto: { mensaje: string; categoria?: SupportCategory; orderId?: string; asunto?: string },
   ) {
     const categoria = dto.categoria ?? sugerirCategoria(dto.mensaje);
     const ticketId = newId('sup');
@@ -109,7 +109,8 @@ export class SupportService {
           id: ticketId,
           userId,
           category: categoria,
-          subject: this.asunto(dto.mensaje),
+          // El que escribió, o el derivado del mensaje. Ver `asunto()`.
+          subject: dto.asunto?.trim() || this.asunto(dto.mensaje),
           orderId: dto.orderId ?? null,
           lastMessageAt: ahora,
         },

@@ -744,6 +744,39 @@ describe('Los invariantes de VendoX', () => {
         expect(enTexto).not.toContain(dato);
       }
     });
+
+    it('18b · Y también el historial de navegación', async () => {
+      /**
+       * ═══════════════════════════════════════════════════════════════════════
+       * LA CASCADA NO ALCANZA, PORQUE LA FILA DEL USUARIO NO SE BORRA
+       * ═══════════════════════════════════════════════════════════════════════
+       *
+       * `RecentlyViewed` tiene `onDelete: Cascade` sobre el usuario, y eso da la
+       * falsa sensación de que se limpia solo. No: la cuenta se **anonimiza**,
+       * no se elimina —los pedidos tienen que sobrevivir por obligación
+       * contable—, así que la cascada nunca se dispara.
+       *
+       * Es el dato más íntimo que queda después de anonimizar: qué estuvo
+       * mirando esta persona. Se poda solo a los 30 días, pero quien pidió que
+       * lo borren no tiene por qué esperar un mes — y la página de eliminación
+       * de cuenta promete que se borra.
+       */
+      const persona = await nuevoComprador();
+
+      await prisma.recentlyViewed.create({
+        data: {
+          id: `vst_cierre${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+          userId: persona.userId,
+          targetType: 'PRODUCT',
+          targetId: 'prd_lo_que_estuvo_mirando',
+        },
+      });
+
+      expect((await call('DELETE', '/api/v1/auth/me', { token: persona.token })).status).toBe(200);
+
+      const quedan = await prisma.recentlyViewed.count({ where: { userId: persona.userId } });
+      expect(quedan).toBe(0);
+    });
   });
 
   describe('Moderación', () => {

@@ -30,6 +30,16 @@ const AbrirSchema = z.object({
   /** La puede elegir la persona. Si no viene, se sugiere mirando el texto. */
   categoria: z.enum(CATEGORIAS).optional(),
   orderId: z.string().min(1).max(64).optional(),
+
+  /**
+   * El asunto, si lo escribió.
+   *
+   * Opcional a propósito: cuando no viene, se deriva del mensaje como se hizo
+   * siempre. Es lo que permite abrir un ticket desde un botón de «necesito
+   * ayuda con este pedido» sin obligar a titular el problema antes de
+   * contarlo — que es justo el momento en que alguien frustrado abandona.
+   */
+  asunto: z.string().trim().min(3).max(80).optional(),
 });
 type AbrirDto = z.infer<typeof AbrirSchema>;
 

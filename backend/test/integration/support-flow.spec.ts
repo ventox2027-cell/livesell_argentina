@@ -411,3 +411,59 @@ describe('Soporte', () => {
     });
   });
 });
+
+describe('El asunto', () => {
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * OPCIONAL, PORQUE PEDIRLO ANTES DE CONTAR EL PROBLEMA PIERDE GENTE
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * Un formulario que obliga a titular una queja antes de poder hacerla es
+   * donde alguien frustrado abandona. Cuando no viene, el backend lo arma con
+   * la primera línea del mensaje, como hizo siempre.
+   */
+
+  it('cuando lo escriben, se usa el que escribieron', async () => {
+    const u = await nuevoUsuario();
+
+    const r = await call('POST', '/api/v1/support/tickets', {
+      token: u.token,
+      body: {
+        asunto: 'No me llegó el pedido',
+        mensaje: 'Compré el martes y todavía no recibí nada. El vendedor no responde.',
+      },
+    });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(r.body.subject).toBe('No me llegó el pedido');
+  });
+
+  it('sin asunto, se deriva del mensaje', async () => {
+    // La conducta de siempre. Este test existe para que agregar el campo no la
+    // haya roto.
+    const u = await nuevoUsuario();
+
+    const r = await call('POST', '/api/v1/support/tickets', {
+      token: u.token,
+      body: { mensaje: 'Quiero saber cómo cambio mi dirección de envío.' },
+    });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(r.body.subject).toBe('Quiero saber cómo cambio mi dirección de envío.');
+  });
+
+  it('⛔ un asunto en blanco cae al derivado, no deja el ticket sin título', async () => {
+    // `min(3)` lo rechaza en el esquema, pero espacios sueltos pasan el trim
+    // del cliente y llegarían vacíos. Un ticket sin asunto es invisible en la
+    // lista del equipo.
+    const u = await nuevoUsuario();
+
+    const r = await call('POST', '/api/v1/support/tickets', {
+      token: u.token,
+      body: { asunto: '   ', mensaje: 'Tengo un problema con un cobro duplicado.' },
+    });
+
+    // El esquema lo rechaza por corto tras el trim: es el resultado correcto.
+    expect(r.status).toBe(400);
+  });
+});

@@ -627,6 +627,25 @@ export class AuthService {
       await tx.device.updateMany({ where: { userId }, data: { pushToken: null, pushEnabled: false } });
 
       /**
+       * El historial de «vistos recientemente» se BORRA.
+       *
+       * ═══════════════════════════════════════════════════════════════════════
+       * LA CASCADA NO ALCANZA, PORQUE LA FILA DEL USUARIO NO SE BORRA
+       * ═══════════════════════════════════════════════════════════════════════
+       *
+       * `RecentlyViewed` tiene `onDelete: Cascade` sobre el usuario, y eso da
+       * la falsa sensación de que se limpia solo. No: acá la cuenta se
+       * **anonimiza**, no se elimina —los pedidos tienen que seguir existiendo
+       * por obligación contable— así que la cascada nunca se dispara y el
+       * historial de navegación sobrevive al cierre.
+       *
+       * Es el dato más íntimo que queda después de anonimizar: qué estuvo
+       * mirando esta persona. Se poda solo a los 30 días, pero alguien que
+       * pidió que lo borren no tiene por qué esperar un mes.
+       */
+      await tx.recentlyViewed.deleteMany({ where: { userId } });
+
+      /**
        * Las direcciones se vacían, no se marcan como borradas.
        *
        * ═══════════════════════════════════════════════════════════════════════

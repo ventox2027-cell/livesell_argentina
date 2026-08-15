@@ -193,6 +193,23 @@ function error(r: { body: Record<string, unknown> | null }) {
 
 let n = 0;
 
+/**
+ * `puedeVender` con la regla encendida, pase lo que pase en el entorno.
+ *
+ * A nivel de módulo porque lo usan dos bloques: el de PKCE y el de la cuenta
+ * de revisión. Se toca el objeto de configuración y no `process.env` porque
+ * `env` ya está evaluado y congelado para cuando corre el test.
+ */
+async function puedeVenderConReglaEncendida(sellerId: string): Promise<boolean> {
+  const { env } = await import('@/config/env.schema');
+  const antes = env.SELLER_MUST_CONNECT_MP;
+  (env as { SELLER_MUST_CONNECT_MP: boolean }).SELLER_MUST_CONNECT_MP = true;
+  try {
+    return await oauth.puedeVender(sellerId);
+  } finally {
+    (env as { SELLER_MUST_CONNECT_MP: boolean }).SELLER_MUST_CONNECT_MP = antes;
+  }
+}
 async function nuevoVendedor() {
   n += 1;
   const u = await call('POST', '/api/v1/auth/dev', {
@@ -230,7 +247,9 @@ async function nuevoVendedor() {
 
   return {
     token,
-    userId: u.body!.user as string,
+    // Era `u.body.user` a secas: el objeto entero casteado a string. Nadie lo
+    // usaba, así que el bug esperó acá hasta que un test lo tocó.
+    userId: (u.body!.user as { id: string }).id,
     sellerId: (s.body!.seller as { id: string }).id,
   };
 }
@@ -671,16 +690,6 @@ describe('PKCE cuando falla', () => {
    * Se toca el objeto de configuración y no `process.env` porque `env` ya está
    * evaluado y congelado para cuando corre el test.
    */
-  async function puedeVenderConReglaEncendida(sellerId: string): Promise<boolean> {
-    const { env } = await import('@/config/env.schema');
-    const antes = env.SELLER_MUST_CONNECT_MP;
-    (env as { SELLER_MUST_CONNECT_MP: boolean }).SELLER_MUST_CONNECT_MP = true;
-    try {
-      return await oauth.puedeVender(sellerId);
-    } finally {
-      (env as { SELLER_MUST_CONNECT_MP: boolean }).SELLER_MUST_CONNECT_MP = antes;
-    }
-  }
 
   /** Deja un `state` vivo y devuelve lo necesario para el callback. */
   async function autorizacionEnCurso() {
@@ -1190,5 +1199,64 @@ describe('Sin Mercado Pago no se vende', () => {
      */
     guardarContrato('cobros-sin-conectar', sin.body);
     guardarContrato('cobros-conectada', con.body);
+  });
+});
+
+describe('La cuenta de revisión de Google Play', () => {
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * PUBLICA Y TRANSMITE SIN CONECTAR MERCADO PAGO
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * Sin esta excepción, revisar la app es imposible: quien la revisa tendría
+   * que crear una cuenta real de Mercado Pago, con datos fiscales de una
+   * persona real, para poder ver un vivo.
+   *
+   * Estos tests son los que vigilan que la puerta tenga el tamaño exacto. La
+   * aritmética está probada aparte en `puede-vender.spec.ts`; lo que se prueba
+   * acá es el CABLEADO — que la marca se lea de la base y llegue a la regla.
+   */
+
+  it('⛔ un vendedor normal desconectado NO puede vender', async () => {
+    // La línea de base. Sin esto, el test de abajo no prueba nada.
+    const v = await nuevoVendedor();
+    expect(await puedeVenderConReglaEncendida(v.sellerId)).toBe(false);
+  });
+
+  it('la cuenta de demostración SÍ puede, en el mismo estado', async () => {
+    const v = await nuevoVendedor();
+
+    /**
+     * La marca se pone en la base, que es el único lugar desde donde se pone.
+     * No hay ningún endpoint que la escriba: sólo
+     * `scripts/cuenta-de-revision.mjs`.
+     */
+    await prisma.user.update({
+      where: { id: v.userId },
+      data: { isDemoAccount: true },
+    });
+
+    expect(await puedeVenderConReglaEncendida(v.sellerId)).toBe(true);
+  });
+
+  it('⛔ sacarle la marca la deja afuera de nuevo', async () => {
+    /**
+     * La exención no se pega a la cuenta: se lee en cada consulta. Si alguien
+     * desmarca la cuenta de revisión, deja de poder publicar en la petición
+     * siguiente — no cuando expire un token ni cuando se reinicie el servidor.
+     */
+    const v = await nuevoVendedor();
+
+    await prisma.user.update({ where: { id: v.userId }, data: { isDemoAccount: true } });
+    expect(await puedeVenderConReglaEncendida(v.sellerId)).toBe(true);
+
+    await prisma.user.update({ where: { id: v.userId }, data: { isDemoAccount: false } });
+    expect(await puedeVenderConReglaEncendida(v.sellerId)).toBe(false);
+  });
+
+  it('⛔ un vendedor que no existe no puede vender', async () => {
+    // El `findUnique` devuelve null y la marca queda en `undefined`. Si eso se
+    // leyera como verdadero, un id inventado abriría la excepción.
+    expect(await puedeVenderConReglaEncendida('sel_no_existe')).toBe(false);
   });
 });

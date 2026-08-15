@@ -77,18 +77,21 @@ function id(prefijo) {
 const PRODUCTOS = [
   {
     nombre: 'Vela aromática de lavanda',
+    slug: 'demo-vela-aromatica-de-lavanda',
     descripcion: 'Cera de soja, mecha de algodón. Dura unas 40 horas. Hecha a mano.',
     precio: 850_000,
     stock: 25,
   },
   {
     nombre: 'Buzo oversize de algodón',
+    slug: 'demo-buzo-oversize-de-algodon',
     descripcion: 'Algodón peinado 100%. Tejido a mano en Buenos Aires.',
     precio: 3_200_000,
     stock: 12,
   },
   {
     nombre: 'Muñeca de tela artesanal',
+    slug: 'demo-muneca-de-tela-artesanal',
     descripcion: 'Relleno hipoalergénico, bordada a mano. Apta desde los 3 años.',
     precio: 1_450_000,
     stock: 8,
@@ -188,9 +191,25 @@ async function main() {
       where: { storeId: store.id, name: p.nombre },
       include: { variants: true },
     });
-    if (existente) {
+    /**
+     * ⚠️ Se comprueba que tenga VARIANTE, no sólo que el producto exista.
+     *
+     * Si una corrida anterior se cortó en el medio —pasó: el esquema sumó
+     * campos obligatorios y el script quedó viejo— quedó un producto sin
+     * variante y sin inventario. Con un `if (existente)` a secas, ese producto
+     * se saltea para siempre y la tienda de demostración queda con algo que no
+     * se puede comprar. Justo lo que el revisor va a tocar primero.
+     */
+    if (existente && existente.variants.length > 0) {
       console.log('producto ya estaba:', p.nombre);
       continue;
+    }
+
+    if (existente) {
+      // A medio crear. Se borra y se rehace entero: es más simple que
+      // adivinar qué le falta, y no hay datos que preservar.
+      await prisma.product.delete({ where: { id: existente.id } });
+      console.log('producto a medias, se rehace:', p.nombre);
     }
 
     const producto = await prisma.product.create({
@@ -198,8 +217,23 @@ async function main() {
         id: id('prd'),
         storeId: store.id,
         name: p.nombre,
+        /**
+         * El slug se arma acá y no se deja al servicio.
+         *
+         * Este script escribe directo en la base —no pasa por la API— porque
+         * la API exige un vendedor autenticado y esto corre sin sesión. El
+         * costo de eso es que hay que replicar los campos obligatorios, y este
+         * es uno: `Product.slug` se volvió requerido y el script quedó viejo.
+         */
+        slug: p.slug,
         description: p.descripcion,
         basePriceCents: p.precio,
+        /**
+         * Publicar exige rubro desde el bloque de categorías. `cat_otros`
+         * existe en la semilla y es el que usa el resto del sistema cuando no
+         * se eligió otro.
+         */
+        categoryId: 'cat_otros',
         status: 'ACTIVE',
       },
     });
@@ -208,8 +242,16 @@ async function main() {
       data: {
         id: id('var'),
         productId: producto.id,
+        storeId: store.id,
         title: 'Único',
         position: 0,
+        isDefault: true,
+        /**
+         * La clave de la variante interna, la misma que usa `variants.ts`
+         * cuando el producto no tiene opciones. Es lo que hace que el índice
+         * único por (producto, combinación) funcione.
+         */
+        optionsKey: '__default__',
       },
     });
 
@@ -246,8 +288,13 @@ async function main() {
   console.log('\n─────────────────────────────────────────────');
   console.log('Listo. Para que el login funcione hace falta:');
   console.log('  DEMO_LOGIN_ENABLED=true   en el .env del servidor');
-  console.log('\nY para que pueda publicar y transmitir, conectar Mercado Pago');
-  console.log('desde la app con credenciales de PRUEBA. Ver docs/CUENTA-DE-REVISION.md');
+  console.log('');
+  console.log('Publicar y transmitir YA funcionan: la cuenta queda marcada como');
+  console.log('de demostración y por eso está exenta de conectar Mercado Pago.');
+  console.log('La regla sigue vigente para todos los demás vendedores.');
+  console.log('');
+  console.log('⚠️  Esta cuenta NO puede cobrar. Es a propósito: no hay cuenta');
+  console.log('    destino, así que no puede mover un peso real.');
   console.log('─────────────────────────────────────────────\n');
 }
 

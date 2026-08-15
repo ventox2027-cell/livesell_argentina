@@ -97,9 +97,48 @@ export function puedeVender(params: {
   oauthDisponible: boolean;
   /** Si este vendedor ya conectó su cuenta. */
   cuentaConectada: boolean;
+  /**
+   * Si es la cuenta de revisión de Google Play. Ver abajo.
+   *
+   * Opcional para no tocar los llamadores que no la conocen: sin el campo, la
+   * respuesta es la de siempre.
+   */
+  esCuentaDeDemostracion?: boolean;
 }): boolean {
   if (!params.reglaActiva) return true;
   if (!params.oauthDisponible) return true;
+
+  /**
+   * ⚠️ LA CUENTA DE REVISIÓN PUBLICA Y TRANSMITE SIN CONECTAR MERCADO PAGO
+   * ═══════════════════════════════════════════════════════════════════════
+   *
+   * Sin esto, revisar la app es imposible: quien la revisa tendría que crear
+   * una cuenta real de Mercado Pago, con datos fiscales de una persona real,
+   * para poder ver un vivo. Google no lo va a hacer, y con razón.
+   *
+   * ─── Por qué acá y no apagando la regla en el servidor ───
+   *
+   * `SELLER_MUST_CONNECT_MP=false` la apagaría para TODOS, y entonces
+   * cualquier vendedor podría publicar sin tener dónde cobrar. La excepción va
+   * acotada a una cuenta que ya está marcada explícitamente en la base y que
+   * sólo existe para esto.
+   *
+   * ─── Por qué no se le fabrica una cuenta conectada falsa ───
+   *
+   * Sería inventar credenciales: una fila `CONNECTED` sin token real detrás.
+   * El día que alguien la mire, va a parecer una conexión legítima y nadie va a
+   * poder distinguirla de una que se rompió. Una bandera que dice lo que es se
+   * puede auditar; una credencial inventada, no.
+   *
+   * ─── Y esto NO alcanza para cobrar ───
+   *
+   * Sólo cubre `publicar` y `transmitir`. El cobro pasa por otro camino —el
+   * proveedor de pago necesita una cuenta destino de verdad— y una compra
+   * contra esta tienda falla ahí, que es exactamente lo que queremos: la cuenta
+   * de revisión no puede mover un peso.
+   */
+  if (params.esCuentaDeDemostracion === true) return true;
+
   return params.cuentaConectada;
 }
 

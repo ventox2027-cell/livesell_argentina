@@ -153,3 +153,59 @@ describe('PKCE', () => {
     }
   });
 });
+
+describe('La cuenta de revisión de Google Play', () => {
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * LA EXCEPCIÓN MÁS PELIGROSA DEL SISTEMA
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * Deja publicar y transmitir sin tener dónde cobrar. Sin ella, revisar la app
+   * es imposible: quien la revisa tendría que crear una cuenta real de Mercado
+   * Pago, con datos fiscales de una persona real, para poder ver un vivo.
+   *
+   * Con ella, lo único que hace falta es que alguien ponga `isDemoAccount` en
+   * una fila. Estos tests son los que vigilan que esa puerta siga siendo del
+   * tamaño exacto que tiene que ser.
+   */
+
+  const BASE = { reglaActiva: true, oauthDisponible: true, cuentaConectada: false };
+
+  it('la cuenta de demostración puede vender sin conectar nada', () => {
+    expect(puedeVender({ ...BASE, esCuentaDeDemostracion: true })).toBe(true);
+  });
+
+  it('⛔ una cuenta normal en el mismo estado NO puede', () => {
+    // Es la regla de siempre y sigue valiendo para todo el mundo.
+    expect(puedeVender({ ...BASE, esCuentaDeDemostracion: false })).toBe(false);
+  });
+
+  it('⛔ sin el campo, la respuesta es la de siempre', () => {
+    /**
+     * El parámetro es opcional para no tocar llamadores viejos. Si `undefined`
+     * se leyera como verdadero, cualquier código que se olvide de pasarlo
+     * dejaría vender a todo el mundo sin cuenta.
+     */
+    expect(puedeVender(BASE)).toBe(false);
+  });
+
+  it('⛔ sólo el booleano exacto abre la puerta', () => {
+    /**
+     * La comparación es `=== true`, no un valor verdadero cualquiera. Un
+     * `'false'` que llegara como texto —de una variable de entorno mal leída,
+     * de un JSON— es verdadero en JavaScript, y ahí la excepción se abriría
+     * para cualquiera.
+     */
+    const conTexto = { ...BASE, esCuentaDeDemostracion: 'false' as unknown as boolean };
+    expect(puedeVender(conTexto)).toBe(false);
+
+    const conUno = { ...BASE, esCuentaDeDemostracion: 1 as unknown as boolean };
+    expect(puedeVender(conUno)).toBe(false);
+  });
+
+  it('con la cuenta conectada de verdad, la marca no cambia nada', () => {
+    // No es un atajo que se acumula: quien conectó, vende porque conectó.
+    expect(puedeVender({ ...BASE, cuentaConectada: true, esCuentaDeDemostracion: false }))
+      .toBe(true);
+  });
+});

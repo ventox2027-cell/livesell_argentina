@@ -425,14 +425,28 @@ export class SellerOAuthService {
    * "Mi tienda" necesita la respuesta, no una excepción.
    */
   async puedeVender(sellerId: string): Promise<boolean> {
-    const conectada = await this.prisma.sellerPaymentAccount.count({
-      where: { sellerId, provider: 'MERCADO_PAGO', status: 'CONNECTED' },
-    });
+    const [conectada, vendedor] = await Promise.all([
+      this.prisma.sellerPaymentAccount.count({
+        where: { sellerId, provider: 'MERCADO_PAGO', status: 'CONNECTED' },
+      }),
+      /**
+       * La marca de cuenta de revisión sale de `User`, no de un parámetro.
+       *
+       * Sólo la escribe `scripts/cuenta-de-revision.mjs`: no hay ningún
+       * endpoint que la toque, así que no se puede convertir una cuenta
+       * cualquiera en exenta desde afuera.
+       */
+      this.prisma.seller.findUnique({
+        where: { id: sellerId },
+        select: { user: { select: { isDemoAccount: true } } },
+      }),
+    ]);
 
     return puedeVender({
       reglaActiva: env.SELLER_MUST_CONNECT_MP,
       oauthDisponible: this.disponible,
       cuentaConectada: conectada > 0,
+      esCuentaDeDemostracion: vendedor?.user.isDemoAccount === true,
     });
   }
 

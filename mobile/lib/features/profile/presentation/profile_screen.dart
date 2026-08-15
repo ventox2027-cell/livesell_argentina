@@ -6,6 +6,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../../auth/data/auth_repository.dart';
 import '../../moderation/presentation/bloqueados_screen.dart';
+import '../../support/presentation/soporte_screen.dart';
 import 'confianza_screen.dart';
 import '../../notifications/data/notifications_api.dart';
 import '../../notifications/presentation/notifications_screen.dart';
@@ -102,6 +103,19 @@ class ProfileScreen extends ConsumerWidget {
             icono: Icons.devices_outlined,
             texto: 'Sesiones activas',
             onTap: () => _verSesiones(context, ref),
+          ),
+          _Fila(
+            icono: Icons.support_agent_rounded,
+            texto: 'Ayuda',
+            detalle: 'Escribinos si algo salió mal',
+            /**
+             * El backend de tickets existía desde hace rato —clasifica,
+             * contesta y escala a una persona— y no había ninguna pantalla
+             * desde donde abrirlos. Alguien con un problema no tenía a dónde ir.
+             */
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const SoporteScreen()),
+            ),
           ),
           _Fila(
             icono: Icons.shield_outlined,

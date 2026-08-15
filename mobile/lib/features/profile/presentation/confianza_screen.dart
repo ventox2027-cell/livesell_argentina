@@ -6,6 +6,7 @@ import '../../../core/config/paginas_publicas.dart';
 import '../../../core/design/tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../moderation/presentation/bloqueados_screen.dart';
+import '../../support/presentation/soporte_screen.dart';
 
 /// Centro de confianza.
 ///
@@ -135,6 +136,13 @@ class ConfianzaScreen extends StatelessWidget {
           ),
           const SizedBox(height: Gap.sm),
           _Accion(
+            icono: Icons.support_agent_rounded,
+            texto: 'Escribirnos',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const SoporteScreen()),
+            ),
+          ),
+          _Accion(
             icono: Icons.block_outlined,
             texto: 'Personas bloqueadas',
             onTap: () => Navigator.of(context).push(
@@ -145,6 +153,19 @@ class ConfianzaScreen extends StatelessWidget {
             icono: Icons.privacy_tip_outlined,
             texto: 'Política de privacidad',
             onTap: () => unawaited(_abrir(context, PaginasPublicas.privacidad)),
+          ),
+          _Accion(
+            icono: Icons.person_remove_outlined,
+            texto: 'Cómo eliminar tu cuenta',
+            /**
+             * La página pública, no el botón de la app.
+             *
+             * Google exige que esa URL exista y sea alcanzable sin la app —para
+             * quien ya la desinstaló—. Enlazarla desde acá además la mantiene
+             * viva: una constante que nadie usa es una que nadie nota cuando el
+             * dominio cambia.
+             */
+            onTap: () => unawaited(_abrir(context, PaginasPublicas.eliminarCuenta)),
           ),
         ],
       ),
