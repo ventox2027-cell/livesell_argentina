@@ -1,0 +1,446 @@
+<!doctype html>
+<html lang="es-AR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Política de privacidad · VendoX</title>
+<meta name="description" content="Qué datos guarda VendoX, para qué, con quién los comparte y cómo borrarlos.">
+<link rel="canonical" href="https://vendox.com.ar/privacidad">
+<style>
+  :root {
+    --fondo: #ffffff;
+    --texto: #16151a;
+    --suave: #5c5966;
+    --borde: #e4e2e8;
+    --superficie: #f7f6f9;
+    --acento: #6b4bff;
+    --aviso-fondo: #fff8e6;
+    --aviso-borde: #f0d089;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --fondo: #0e0d12;
+      --texto: #ecebf0;
+      --suave: #9b98a6;
+      --borde: #26242e;
+      --superficie: #17161c;
+      --acento: #a58fff;
+      --aviso-fondo: #241f10;
+      --aviso-borde: #4a3d18;
+    }
+  }
+  :root[data-theme="dark"] {
+    --fondo: #0e0d12;
+    --texto: #ecebf0;
+    --suave: #9b98a6;
+    --borde: #26242e;
+    --superficie: #17161c;
+    --acento: #a58fff;
+    --aviso-fondo: #241f10;
+    --aviso-borde: #4a3d18;
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--fondo);
+    color: var(--texto);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .hoja { max-width: 47rem; margin: 0 auto; padding: 3rem 1.25rem 6rem; }
+
+  header { border-bottom: 1px solid var(--borde); padding-bottom: 1.75rem; margin-bottom: 2.5rem; }
+  .marca { font-weight: 700; letter-spacing: -0.02em; font-size: 1.05rem; }
+  .marca span { color: var(--acento); }
+  h1 { font-size: clamp(1.7rem, 5vw, 2.3rem); line-height: 1.15; letter-spacing: -0.02em; margin: 1.25rem 0 0.5rem; text-wrap: balance; }
+  .fechas { color: var(--suave); font-size: 0.9rem; margin: 0; }
+
+  h2 {
+    font-size: 1.22rem; letter-spacing: -0.01em; margin: 3rem 0 0.85rem;
+    padding-top: 1.6rem; border-top: 1px solid var(--borde); text-wrap: balance;
+  }
+  h3 { font-size: 1rem; margin: 1.9rem 0 0.5rem; }
+  p, li { color: var(--texto); }
+  p { margin: 0 0 1rem; }
+  ul { margin: 0 0 1rem; padding-left: 1.2rem; }
+  li { margin-bottom: 0.4rem; }
+  a { color: var(--acento); }
+  strong { font-weight: 650; }
+  .sutil { color: var(--suave); }
+
+  .tabla-envoltorio { overflow-x: auto; margin: 0 0 1.25rem; border: 1px solid var(--borde); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.925rem; }
+  th, td { text-align: left; padding: 0.7rem 0.85rem; border-bottom: 1px solid var(--borde); vertical-align: top; }
+  th { background: var(--superficie); font-weight: 600; white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+
+  .destacado {
+    background: var(--superficie); border: 1px solid var(--borde);
+    border-left: 3px solid var(--acento);
+    border-radius: 8px; padding: 1rem 1.15rem; margin: 0 0 1.5rem;
+  }
+  .destacado p:last-child { margin-bottom: 0; }
+
+  .aviso {
+    background: var(--aviso-fondo); border: 1px solid var(--aviso-borde);
+    border-radius: 8px; padding: 1rem 1.15rem; margin: 0 0 1.5rem; font-size: 0.95rem;
+  }
+  .aviso p:last-child { margin-bottom: 0; }
+
+  footer { margin-top: 4rem; padding-top: 1.5rem; border-top: 1px solid var(--borde); color: var(--suave); font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<main class="hoja">
+
+<header>
+  <div class="marca">Vendo<span>X</span></div>
+  <h1>Política de privacidad</h1>
+  <p class="fechas">Vigente desde el 15 de agosto de 2026 · Última actualización: 15 de agosto de 2026</p>
+</header>
+
+<div class="destacado">
+  <p><strong>El resumen, en cinco líneas.</strong></p>
+  <ul>
+    <li>Guardamos lo que hace falta para que una compra llegue: quién sos, a dónde va el paquete y qué pediste.</li>
+    <li>No vendemos tus datos ni los usamos para publicidad. No hay rastreadores de terceros dentro de la app.</li>
+    <li><strong>Los vivos no se graban.</strong> El video y el audio pasan y no quedan.</li>
+    <li>Nunca vemos tu tarjeta: el pago lo procesa Mercado Pago.</li>
+    <li>Podés descargar todos tus datos y borrar tu cuenta desde la app, sin escribirle a nadie.</li>
+  </ul>
+</div>
+
+<p>
+  VendoX es una aplicación de venta en vivo. Quien vende transmite, quien compra
+  mira, pregunta por el chat y compra ahí mismo. Esta política explica qué datos
+  necesita ese circuito, quién los ve y qué podés hacer con ellos.
+</p>
+<p>
+  Está escrita sobre lo que el sistema hace hoy. Cuando algo todavía no está
+  implementado, lo dice.
+</p>
+
+<h2>1 · Quién es responsable de tus datos</h2>
+<p>
+  VendoX, con domicilio en la República Argentina, es el responsable del
+  tratamiento de los datos que se describen acá, en los términos de la
+  <strong>Ley 25.326 de Protección de los Datos Personales</strong>.
+</p>
+<p>
+  Consultas sobre privacidad, acceso, rectificación o supresión:
+  <a href="mailto:privacidad@vendox.com.ar">privacidad@vendox.com.ar</a>.
+</p>
+
+<h2>2 · VendoX es para mayores de 18 años</h2>
+<p>
+  No se puede usar VendoX si sos menor de 18, ni para comprar ni para vender. La
+  app pide tu fecha de nacimiento antes de la primera compra y antes de poder
+  vender, y la guarda para no volver a preguntártela.
+</p>
+<p>
+  No dirigimos el servicio a menores de edad ni recolectamos datos de menores a
+  sabiendas. Si detectamos una cuenta de una persona menor de 18, la cerramos.
+</p>
+
+<h2>3 · Qué datos recopilamos</h2>
+
+<h3>Cuando creás tu cuenta</h3>
+<p>
+  Entrás con tu cuenta de <strong>Google</strong>. Nosotros no vemos ni
+  guardamos tu contraseña: recibimos de Google un comprobante firmado con tu
+  nombre, tu correo y un identificador.
+</p>
+<p class="sutil">
+  En iPhone la app va a permitir además <em>Iniciar sesión con Apple</em>.
+  Todavía no está habilitado.
+</p>
+<div class="tabla-envoltorio">
+<table>
+  <thead><tr><th>Dato</th><th>Cuándo</th><th>Para qué</th></tr></thead>
+  <tbody>
+    <tr><td>Nombre y apellido</td><td>Al entrar</td><td>Identificarte ante quien te vende o te compra</td></tr>
+    <tr><td>Correo electrónico</td><td>Al entrar</td><td>Identificar la cuenta y avisarte de tus pedidos</td></tr>
+    <tr><td>Foto de perfil</td><td>Al entrar, si tu cuenta de Google o Apple tiene una</td><td>Mostrarte en tu perfil y en el chat</td></tr>
+    <tr><td>Fecha de nacimiento</td><td>Antes de comprar o vender</td><td>Verificar que sos mayor de 18</td></tr>
+    <tr><td>Teléfono</td><td>Antes de comprar</td><td>Que quien entrega el pedido pueda ubicarte</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>Cuando comprás</h3>
+<div class="tabla-envoltorio">
+<table>
+  <thead><tr><th>Dato</th><th>Para qué</th></tr></thead>
+  <tbody>
+    <tr><td>Dirección de entrega: calle, número, piso, departamento, ciudad, provincia, código postal y referencias</td><td>Entregar el paquete</td></tr>
+    <tr><td>Nombre de quien recibe y su documento (DNI)</td><td>Los envíos en Argentina lo exigen para acreditar la entrega</td></tr>
+    <tr><td>Teléfono de contacto de la entrega</td><td>Coordinar la entrega</td></tr>
+    <tr><td>Qué compraste, cuánto pagaste y en qué estado está el pedido</td><td>Cumplir la compra y respaldar cualquier reclamo</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="sutil">
+  Estos datos los ve <strong>quien te vende</strong>. No hay forma de que te
+  mande un paquete sin saber a dónde. No los ve ningún otro vendedor.
+</p>
+
+<h3>Cuando pagás</h3>
+<div class="destacado">
+  <p>
+    <strong>Nunca vemos ni guardamos el número de tu tarjeta, ni su código de
+    seguridad, ni su fecha de vencimiento.</strong> El pago lo procesa Mercado
+    Pago y los datos de la tarjeta viajan directo a ellos.
+  </p>
+  <p>
+    De cada pago guardamos el identificador que nos devuelve Mercado Pago, el
+    monto, la moneda, el estado, el medio de pago y —cuando corresponde— la
+    marca de la tarjeta y sus <strong>últimos cuatro dígitos</strong>, que es lo
+    que te permite reconocer cuál usaste.
+  </p>
+</div>
+
+<h3>Cuando vendés</h3>
+<p>
+  Vender exige más datos que comprar, porque hay dinero que va a parar a una
+  cuenta y una responsabilidad legal detrás de cada venta.
+</p>
+<ul>
+  <li>Los datos de tu tienda: nombre, descripción, imagen, horarios, zona y políticas de envío y devolución.</li>
+  <li>Tus datos de verificación: nombre legal, tipo y número de documento, CUIT/CUIL, provincia y ciudad.</li>
+  <li>La conexión con tu cuenta de Mercado Pago, para que los cobros vayan a vos.</li>
+</ul>
+<div class="aviso">
+  <p>
+    <strong>Del documento y del CUIT no guardamos el número completo.</strong>
+    Guardamos un <em>hash</em> —una huella irreversible que sirve para detectar
+    duplicados pero no permite reconstruir el número— y los últimos cuatro
+    dígitos, para poder identificar el trámite ante un reclamo.
+  </p>
+</div>
+<p>
+  <strong>Tus credenciales de Mercado Pago se guardan cifradas</strong> y no
+  salen del servidor. La app nunca las recibe.
+</p>
+
+<h3>Cuando mirás o hacés un vivo</h3>
+<div class="destacado">
+  <p>
+    <strong>Los vivos no se graban.</strong> Ni el video ni el audio se guardan
+    en ningún lado: pasan del teléfono de quien vende al de quien mira y ahí
+    terminan. Tampoco guardamos capturas ni miniaturas del vivo.
+  </p>
+</div>
+<p>
+  De cada transmisión guardamos datos de la sesión que no incluyen imagen ni
+  sonido: cuándo empezó, cuándo terminó, cuánta gente hubo y qué productos se
+  mostraron.
+</p>
+<p>
+  La app pide permiso de <strong>cámara</strong> y <strong>micrófono</strong>
+  únicamente para transmitir. Si sólo mirás vivos, nunca se activan.
+</p>
+
+<h3>El chat de los vivos</h3>
+<p>
+  Los mensajes del chat se guardan <strong>30 días</strong> y después se borran.
+  Ese plazo es lo que tarda un reporte en abrirse, revisarse y resolverse: sin
+  el mensaje guardado no hay nada que revisar, y pasado ese tiempo no hay motivo
+  para conservarlo.
+</p>
+<p>
+  También guardamos los mensajes que el filtro automático frenó, con la marca de
+  por qué. Sin eso no hay forma de saber si el filtro se está pasando de
+  estricto y silenciando a gente que no hizo nada.
+</p>
+
+<h3>Lo que hacés dentro de la app</h3>
+<ul>
+  <li>Los vendedores que seguís y los productos o vivos que marcaste con un me gusta.</li>
+  <li>Las reseñas que escribís sobre una compra, con tu nombre visible.</li>
+  <li>Los reportes que hacés y las personas que bloqueaste.</li>
+</ul>
+<p class="sutil">
+  <strong>Las búsquedas no se guardan.</strong> Se resuelven y se descartan: no
+  hay historial de búsqueda ni en el servidor ni en tu teléfono.
+</p>
+
+<h3>Datos técnicos</h3>
+<div class="tabla-envoltorio">
+<table>
+  <thead><tr><th>Dato</th><th>Para qué</th></tr></thead>
+  <tbody>
+    <tr><td>Dirección IP y navegador o app desde la que entrás</td><td>Detectar accesos indebidos y frenar abuso. Queda asociada a los inicios de sesión.</td></tr>
+    <tr><td>Modelo del teléfono, versión del sistema y versión de la app</td><td>Entender sobre qué equipos falla algo</td></tr>
+    <tr><td>Identificador de instalación</td><td>Distinguir tus dispositivos entre sí para poder cerrar la sesión de uno solo</td></tr>
+    <tr><td>Zona horaria e idioma</td><td>Mostrar fechas y montos como corresponde</td></tr>
+    <tr><td>Sesiones abiertas y cuándo se usó cada una</td><td>Que puedas ver y cerrar tus sesiones activas</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>Notificaciones</h3>
+<p>
+  Si activás las notificaciones, Google le asigna a esa instalación de la app un
+  identificador y lo guardamos para poder avisarte de tus pedidos. No lleva
+  datos sensibles adentro: te dice que algo pasó, no qué compraste.
+</p>
+<p class="sutil">
+  Hoy la app todavía no registra ese identificador, así que en la práctica no
+  estamos enviando notificaciones push.
+</p>
+
+<h2>4 · Qué NO hacemos</h2>
+<ul>
+  <li><strong>No vendemos ni alquilamos tus datos.</strong> A nadie, por ningún motivo.</li>
+  <li><strong>No hacemos publicidad</strong> ni dejamos que nadie te perfile para publicidad dentro de la app.</li>
+  <li><strong>No hay rastreadores de terceros</strong>: ni analítica de comportamiento, ni píxeles, ni SDK publicitarios.</li>
+  <li><strong>No grabamos los vivos.</strong></li>
+  <li><strong>No leemos tus contactos, tus fotos ni tu ubicación.</strong> La app no pide esos permisos. Cuando subís una imagen, elegís cuál.</li>
+  <li><strong>No guardamos tu historial de búsqueda.</strong></li>
+  <li><strong>No tomamos decisiones automáticas que te sancionen.</strong> El filtro del chat frena un mensaje; suspender una cuenta lo decide una persona.</li>
+</ul>
+
+<h2>5 · Con quién compartimos datos</h2>
+<p>Sólo con quienes hacen falta para que el servicio funcione, y sólo lo que cada uno necesita.</p>
+<div class="tabla-envoltorio">
+<table>
+  <thead><tr><th>Quién</th><th>Para qué</th><th>Qué recibe</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>Mercado Pago</strong><br><span class="sutil">Argentina</span></td>
+      <td>Procesar los pagos y los reembolsos</td>
+      <td>Los datos de la tarjeta (que a nosotros no nos llegan), el monto y el correo del comprador</td>
+    </tr>
+    <tr>
+      <td><strong>Google</strong><br><span class="sutil">Inicio de sesión</span></td>
+      <td>Verificar tu identidad al entrar</td>
+      <td>Nada nuestro. Google nos da tu nombre, correo e identificador.</td>
+    </tr>
+    <tr>
+      <td><strong>Apple</strong><br><span class="sutil">Inicio de sesión</span></td>
+      <td>Verificar tu identidad al entrar</td>
+      <td>Nada nuestro. Apple nos da un identificador y, si lo permitís, tu correo.</td>
+    </tr>
+    <tr>
+      <td><strong>LiveKit</strong><br><span class="sutil">Transporte del vivo</span></td>
+      <td>Llevar el video y el audio del vivo entre teléfonos</td>
+      <td>El video y el audio mientras el vivo está en el aire. No se graban.</td>
+    </tr>
+    <tr>
+      <td><strong>Cloudflare</strong><br><span class="sutil">Almacenamiento de imágenes</span></td>
+      <td>Guardar y servir las fotos de productos y tiendas</td>
+      <td>Las imágenes que subís</td>
+    </tr>
+    <tr>
+      <td><strong>Firebase Cloud Messaging</strong> (Google)<br><span class="sutil">Notificaciones</span></td>
+      <td>Entregar las notificaciones al teléfono</td>
+      <td>El identificador de la instalación y el texto del aviso</td>
+    </tr>
+    <tr>
+      <td><strong>Quien te vende</strong></td>
+      <td>Prepararte y entregarte el pedido</td>
+      <td>Tu nombre, tu teléfono, tu dirección y el documento de quien recibe</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+<p>
+  También podemos entregar datos cuando nos lo exija una autoridad competente
+  por una vía legal válida.
+</p>
+<div class="aviso">
+  <p>
+    Algunos de estos proveedores procesan datos <strong>fuera de la
+    Argentina</strong>. Cuando eso pasa, es porque es imprescindible para
+    prestarte el servicio que pediste.
+  </p>
+</div>
+
+<h2>6 · Qué ve quien te vende y qué no</h2>
+<p>Ve lo que necesita para entregarte el pedido:</p>
+<ul>
+  <li>Tu nombre, tu teléfono y tu dirección de entrega.</li>
+  <li>El nombre y el documento de quien va a recibir.</li>
+  <li>Qué compraste y cuánto pagaste.</li>
+</ul>
+<p><strong>No ve:</strong> tu fecha de nacimiento, tus datos de pago, tus otras compras, a quién más seguís, ni nada de tu actividad fuera de esa venta.</p>
+<p>
+  Al revés funciona igual: si vendés, el comprador ve tu tienda, no tus datos
+  personales ni los de tu verificación.
+</p>
+
+<h2>7 · Cuánto tiempo guardamos cada cosa</h2>
+<div class="tabla-envoltorio">
+<table>
+  <thead><tr><th>Dato</th><th>Cuánto</th><th>Por qué</th></tr></thead>
+  <tbody>
+    <tr><td>Mensajes del chat</td><td><strong>30 días</strong>, y se borran solos</td><td>Es lo que dura un ciclo de reporte</td></tr>
+    <tr><td>Tu cuenta y tu perfil</td><td>Mientras la tengas abierta</td><td>Es el servicio</td></tr>
+    <tr><td>Sesiones y tokens</td><td>Hasta que vencen o cerrás sesión</td><td>Sostienen tu acceso</td></tr>
+    <tr><td>Pedidos, pagos y reembolsos</td><td>El plazo que exige la ley comercial e impositiva argentina</td><td>Obligaciones contables y respaldo ante un reclamo. Se conservan aunque cierres la cuenta.</td></tr>
+    <tr><td>Registros de acceso</td><td>Mientras sirvan para investigar un acceso indebido</td><td>Seguridad de las cuentas</td></tr>
+    <tr><td>Reportes y decisiones de moderación</td><td>Mientras la cuenta exista</td><td>Es lo que se mira cuando alguien reclama una decisión</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>8 · Tus derechos</h2>
+<p>La Ley 25.326 te da derecho a acceder a tus datos, corregirlos, actualizarlos y pedir que los borremos. En VendoX no hace falta que escribas para ejercerlos.</p>
+
+<h3>Ver y descargar todo lo que guardamos</h3>
+<p>
+  <strong>Perfil → Descargar mis datos.</strong> Te devuelve, en el momento, un
+  archivo con tu cuenta, tus direcciones, tus pedidos, tus reseñas, tus
+  seguimientos, tus reportes y tus dispositivos.
+</p>
+
+<h3>Corregir lo que esté mal</h3>
+<p>Tu nombre, tu teléfono y tus direcciones se editan desde el perfil. Para lo demás, escribinos.</p>
+
+<h3>Borrar tu cuenta</h3>
+<p>
+  <strong>Perfil → Eliminar mi cuenta.</strong> Se explica en detalle en
+  <a href="/eliminar-cuenta">vendox.com.ar/eliminar-cuenta</a>.
+</p>
+
+<h3>Reclamar</h3>
+<p>
+  Si considerás que no respetamos tus derechos, podés reclamar ante la
+  <strong>Agencia de Acceso a la Información Pública</strong>, órgano de control
+  de la Ley 25.326.
+</p>
+
+<h2>9 · Cómo protegemos tus datos</h2>
+<ul>
+  <li>Todo viaja cifrado con HTTPS entre tu teléfono y nuestros servidores.</li>
+  <li>Las credenciales de cobro de los vendedores están cifradas en la base de datos.</li>
+  <li>Los números de documento de los vendedores se guardan como huella irreversible, no en claro.</li>
+  <li>El código de entrega de seis dígitos se guarda cifrado: sin eso, cualquiera con acceso a la base podría marcar un pedido como entregado.</li>
+  <li>Nuestros registros técnicos borran automáticamente contraseñas, tokens, teléfonos, documentos y datos de tarjeta antes de escribirse, y hay una prueba automática que lo verifica en cada cambio.</li>
+  <li>Cada persona ve solamente lo suyo: el permiso se aplica en la propia consulta a la base, no en un chequeo posterior que alguien pueda olvidarse de escribir.</li>
+</ul>
+<p class="sutil">
+  Ningún sistema es infalible. Si alguna vez ocurriera un incidente que afecte
+  tus datos, te lo vamos a avisar.
+</p>
+
+<h2>10 · Cambios en esta política</h2>
+<p>
+  Si cambia, actualizamos la fecha de arriba. Cuando el cambio sea importante,
+  te avisamos dentro de la app antes de que entre en vigencia.
+</p>
+
+<h2>11 · Contacto</h2>
+<p>
+  <a href="mailto:privacidad@vendox.com.ar">privacidad@vendox.com.ar</a><br>
+  <span class="sutil">Respondemos dentro de los 10 días corridos, como exige la Ley 25.326.</span>
+</p>
+
+<footer>
+  VendoX · <a href="/eliminar-cuenta">Eliminar mi cuenta</a>
+</footer>
+
+</main>
+</body>
+</html>

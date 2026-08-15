@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="es-AR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Eliminar mi cuenta · VendoX</title>
+<meta name="description" content="Cómo borrar tu cuenta de VendoX, qué se borra, qué se conserva y por cuánto tiempo.">
+<link rel="canonical" href="https://vendox.com.ar/eliminar-cuenta">
+<style>
+  :root {
+    --fondo: #ffffff;
+    --texto: #16151a;
+    --suave: #5c5966;
+    --borde: #e4e2e8;
+    --superficie: #f7f6f9;
+    --acento: #6b4bff;
+    --aviso-fondo: #fff8e6;
+    --aviso-borde: #f0d089;
+    --ok: #1f7a4d;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --fondo: #0e0d12;
+      --texto: #ecebf0;
+      --suave: #9b98a6;
+      --borde: #26242e;
+      --superficie: #17161c;
+      --acento: #a58fff;
+      --aviso-fondo: #241f10;
+      --aviso-borde: #4a3d18;
+      --ok: #5fd39b;
+    }
+  }
+  :root[data-theme="dark"] {
+    --fondo: #0e0d12;
+    --texto: #ecebf0;
+    --suave: #9b98a6;
+    --borde: #26242e;
+    --superficie: #17161c;
+    --acento: #a58fff;
+    --aviso-fondo: #241f10;
+    --aviso-borde: #4a3d18;
+    --ok: #5fd39b;
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--fondo);
+    color: var(--texto);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .hoja { max-width: 44rem; margin: 0 auto; padding: 3rem 1.25rem 6rem; }
+
+  header { border-bottom: 1px solid var(--borde); padding-bottom: 1.75rem; margin-bottom: 2.5rem; }
+  .marca { font-weight: 700; letter-spacing: -0.02em; font-size: 1.05rem; }
+  .marca span { color: var(--acento); }
+  h1 { font-size: clamp(1.7rem, 5vw, 2.3rem); line-height: 1.15; letter-spacing: -0.02em; margin: 1.25rem 0 0.5rem; text-wrap: balance; }
+  .fechas { color: var(--suave); font-size: 0.9rem; margin: 0; }
+
+  h2 {
+    font-size: 1.22rem; letter-spacing: -0.01em; margin: 3rem 0 0.85rem;
+    padding-top: 1.6rem; border-top: 1px solid var(--borde); text-wrap: balance;
+  }
+  p { margin: 0 0 1rem; }
+  ul { margin: 0 0 1rem; padding-left: 1.2rem; }
+  li { margin-bottom: 0.4rem; }
+  a { color: var(--acento); }
+  strong { font-weight: 650; }
+  .sutil { color: var(--suave); }
+
+  ol.pasos { list-style: none; counter-reset: paso; padding: 0; margin: 0 0 1.5rem; }
+  ol.pasos li {
+    counter-increment: paso; position: relative;
+    padding: 0.15rem 0 1.1rem 3rem; margin: 0;
+  }
+  ol.pasos li::before {
+    content: counter(paso);
+    position: absolute; left: 0; top: 0;
+    width: 2rem; height: 2rem; border-radius: 50%;
+    display: grid; place-items: center;
+    background: var(--superficie); border: 1px solid var(--borde);
+    font-size: 0.9rem; font-weight: 650; font-variant-numeric: tabular-nums;
+  }
+
+  .tabla-envoltorio { overflow-x: auto; margin: 0 0 1.25rem; border: 1px solid var(--borde); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.925rem; }
+  th, td { text-align: left; padding: 0.7rem 0.85rem; border-bottom: 1px solid var(--borde); vertical-align: top; }
+  th { background: var(--superficie); font-weight: 600; }
+  tr:last-child td { border-bottom: 0; }
+
+  .destacado {
+    background: var(--superficie); border: 1px solid var(--borde);
+    border-left: 3px solid var(--acento);
+    border-radius: 8px; padding: 1rem 1.15rem; margin: 0 0 1.5rem;
+  }
+  .destacado p:last-child { margin-bottom: 0; }
+
+  .aviso {
+    background: var(--aviso-fondo); border: 1px solid var(--aviso-borde);
+    border-radius: 8px; padding: 1rem 1.15rem; margin: 0 0 1.5rem; font-size: 0.95rem;
+  }
+  .aviso p:last-child { margin-bottom: 0; }
+
+  footer { margin-top: 4rem; padding-top: 1.5rem; border-top: 1px solid var(--borde); color: var(--suave); font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<main class="hoja">
+
+<header>
+  <div class="marca">Vendo<span>X</span></div>
+  <h1>Eliminar mi cuenta</h1>
+  <p class="fechas">Última actualización: 15 de agosto de 2026</p>
+</header>
+
+<div class="destacado">
+  <p>
+    <strong>Se borra desde la app, en el momento, sin escribirle a nadie y sin
+    esperar aprobación.</strong>
+  </p>
+  <p class="sutil" style="margin-top:.6rem">
+    Perfil → <em>Eliminar mi cuenta</em>. Si no tenés la app instalada,
+    más abajo está la alternativa por correo.
+  </p>
+</div>
+
+<h2>Desde la app</h2>
+<ol class="pasos">
+  <li>Abrí VendoX y entrá a tu cuenta.</li>
+  <li>Tocá <strong>Perfil</strong>, la última pestaña.</li>
+  <li>Bajá del todo y tocá <strong>Eliminar mi cuenta</strong>.</li>
+  <li>Confirmá. La cuenta se cierra ahí mismo y se cierran todas tus sesiones.</li>
+</ol>
+
+<h2>Si no tenés la app</h2>
+<p>
+  Escribinos a
+  <a href="mailto:privacidad@vendox.com.ar?subject=Eliminar%20mi%20cuenta">privacidad@vendox.com.ar</a>
+  desde <strong>el mismo correo con el que entrás a VendoX</strong>, con el
+  asunto «Eliminar mi cuenta».
+</p>
+<p>
+  Ese requisito es la verificación: si aceptáramos el pedido desde cualquier
+  dirección, cualquiera podría hacer borrar la cuenta de otra persona. No
+  pedimos ningún otro dato.
+</p>
+<p class="sutil">Respondemos dentro de los 10 días corridos.</p>
+
+<h2>Antes de borrar: los pedidos en curso</h2>
+<div class="aviso">
+  <p>
+    <strong>No se puede cerrar la cuenta con una operación abierta.</strong> Si
+    tenés un pedido pago que todavía no te llegó, o vendiste algo que todavía no
+    entregaste, la app te lo va a decir y no va a dejarte seguir.
+  </p>
+  <p style="margin-top:.6rem">
+    Es temporal, no una retención: cuando esa operación se cierra —te llega el
+    paquete, entregás lo que vendiste, o se cancela— podés borrar la cuenta sin
+    ningún impedimento.
+  </p>
+</div>
+<p>
+  El motivo es concreto. Sin ese bloqueo, alguien podría cobrar diez pedidos,
+  tocar «eliminar cuenta» y desaparecer, dejando a diez personas con la plata
+  puesta y sin nadie del otro lado.
+</p>
+
+<h2>Qué se borra</h2>
+<div class="tabla-envoltorio">
+<table>
+  <thead><tr><th>Dato</th><th>Qué pasa</th></tr></thead>
+  <tbody>
+    <tr><td>Tu nombre y apellido</td><td>Se reemplazan</td></tr>
+    <tr><td>Tu correo electrónico</td><td>Se reemplaza por uno inválido: nadie puede volver a entrar con él</td></tr>
+    <tr><td>Tu teléfono</td><td>Se borra</td></tr>
+    <tr><td>Tu foto de perfil</td><td>Se borra</td></tr>
+    <tr><td>Tu fecha de nacimiento</td><td>Se borra</td></tr>
+    <tr><td>Tus direcciones: calle, número, piso, departamento, código postal, referencias, teléfono y documento de quien recibe</td><td>Se vacían por completo</td></tr>
+    <tr><td>El vínculo con tu cuenta de Google o Apple</td><td>Se borra, así entrar de nuevo no reactiva nada</td></tr>
+    <tr><td>Tus dispositivos y notificaciones</td><td>Se desactivan: dejás de recibir avisos</td></tr>
+    <tr><td>Todas tus sesiones abiertas</td><td>Se cierran</td></tr>
+    <tr><td>Tus mensajes del chat</td><td>Se borran solos a los 30 días, como los de todo el mundo</td></tr>
+  </tbody>
+</table>
+</div>
+<p>
+  <strong>La cuenta no se puede recuperar.</strong> No hay período de gracia ni
+  reactivación: si volvés a VendoX, empezás una cuenta nueva desde cero.
+</p>
+
+<h2>Qué se conserva, y por qué</h2>
+<p>Tres cosas sobreviven al cierre. Ninguna te identifica por tu nombre.</p>
+
+<div class="tabla-envoltorio">
+<table>
+  <thead><tr><th>Qué</th><th>Por qué</th><th>Cuánto</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>Tus pedidos y pagos</strong>, con el domicilio al que se entregó cada uno</td>
+      <td>Son comprobantes de operaciones reales. La otra parte también tiene derecho a su registro, y la ley comercial e impositiva argentina obliga a conservarlos.</td>
+      <td>El plazo legal</td>
+    </tr>
+    <tr>
+      <td><strong>Tus reseñas</strong></td>
+      <td>Firmadas como «Cuenta eliminada». Borrarlas dejaría a los vendedores con una reputación construida a medias.</td>
+      <td>Mientras exista la tienda</td>
+    </tr>
+    <tr>
+      <td><strong>Registros de seguridad y moderación</strong></td>
+      <td>Quedan asociados a un identificador, no a tu nombre. Sirven para investigar fraudes y para sostener una decisión si alguien la reclama.</td>
+      <td>Mientras sirvan a ese fin</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<div class="aviso">
+  <p>
+    <strong>Sobre las direcciones de los pedidos ya entregados.</strong> Tu
+    libreta de direcciones se vacía. Lo que queda es la copia que cada pedido
+    guardó de a dónde se mandó ese paquete concreto: es el comprobante de una
+    entrega que efectivamente ocurrió, y borrarlo dejaría al vendedor sin poder
+    probar que cumplió.
+  </p>
+</div>
+
+<h2>Descargá tus datos antes</h2>
+<p>
+  Una vez cerrada la cuenta no vas a poder acceder a nada. Si querés quedarte
+  con tu información, hacelo primero: <strong>Perfil → Descargar mis
+  datos</strong>. Te la devuelve en el momento, en un archivo.
+</p>
+
+<h2>Preguntas</h2>
+<p><strong>¿Cuánto tarda?</strong> Desde la app, es inmediato. Por correo, hasta 10 días corridos.</p>
+<p><strong>¿Me puedo arrepentir?</strong> No. Por eso conviene descargar los datos antes.</p>
+<p><strong>Tengo una tienda. ¿Qué pasa con ella?</strong> Deja de estar disponible y tus productos dejan de verse. Antes tenés que haber entregado todo lo que vendiste.</p>
+<p><strong>¿Y mi dinero en Mercado Pago?</strong> Tu cuenta de Mercado Pago es tuya y no la tocamos. Cerrar VendoX sólo desconecta el vínculo entre las dos.</p>
+
+<h2>Contacto</h2>
+<p><a href="mailto:privacidad@vendox.com.ar">privacidad@vendox.com.ar</a></p>
+
+<footer>
+  VendoX · <a href="/privacidad">Política de privacidad</a>
+</footer>
+
+</main>
+</body>
+</html>

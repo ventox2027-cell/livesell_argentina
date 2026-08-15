@@ -8,6 +8,7 @@ import '../../auth/data/auth_repository.dart';
 import '../../moderation/presentation/bloqueados_screen.dart';
 import '../../notifications/data/notifications_api.dart';
 import '../../notifications/presentation/notifications_screen.dart';
+import '../../../core/config/paginas_publicas.dart';
 import '../../../core/config/runtime_config.dart';
 import '../../../core/design/tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
@@ -114,6 +115,26 @@ class ProfileScreen extends ConsumerWidget {
             texto: 'Descargar mis datos',
             detalle: 'Todo lo que guardamos sobre vos',
             onTap: () => _descargarMisDatos(context, ref),
+          ),
+          _Fila(
+            icono: Icons.privacy_tip_outlined,
+            texto: 'Política de privacidad',
+            detalle: 'Qué guardamos y con quién lo compartimos',
+            /**
+             * Google Play exige un acceso visible a la política desde adentro
+             * de la app, y hasta acá la única mención era una línea de texto
+             * sin enlace en la pantalla de bienvenida — que además sólo ve
+             * quien todavía no entró.
+             *
+             * Va en el navegador del teléfono y no en un WebView: una política
+             * de privacidad tiene que poder leerse con su URL a la vista.
+             */
+            onTap: () async {
+              final abrio = await abrirPaginaPublica(PaginasPublicas.privacidad);
+              if (!abrio && context.mounted) {
+                AppSnack.error(context, 'No se pudo abrir el navegador.');
+              }
+            },
           ),
 
           const SizedBox(height: Gap.xl),
@@ -225,7 +246,9 @@ class ProfileScreen extends ConsumerWidget {
         ),
       );
     } catch (_) {
-      if (context.mounted) AppSnack.error(context, 'No pudimos eliminar la cuenta. Probá de nuevo.');
+      if (context.mounted) {
+        AppSnack.error(context, 'No pudimos eliminar la cuenta. Probá de nuevo.');
+      }
     }
   }
 

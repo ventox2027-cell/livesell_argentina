@@ -625,6 +625,43 @@ export class AuthService {
       await tx.userIdentity.deleteMany({ where: { userId } });
       // Y los tokens de push, para que no siga recibiendo notificaciones.
       await tx.device.updateMany({ where: { userId }, data: { pushToken: null, pushEnabled: false } });
+
+      /**
+       * Las direcciones se vacían, no se marcan como borradas.
+       *
+       * ═══════════════════════════════════════════════════════════════════════
+       * ERA EL DATO MÁS SENSIBLE Y ERA EL QUE SOBREVIVÍA ENTERO
+       * ═══════════════════════════════════════════════════════════════════════
+       *
+       * Cerrar la cuenta anonimizaba el `User` —nombre, correo, teléfono, fecha
+       * de nacimiento— y dejaba `user_addresses` intacta: DNI completo, teléfono,
+       * calle, número, piso y departamento de la casa de una persona que pidió
+       * irse. Anonimizar la fila que apunta y no la que tiene los datos no
+       * anonimiza nada.
+       *
+       * Un `deletedAt` no alcanzaba: la fila sigue ahí con todo adentro y lo
+       * único que cambia es qué consultas la traen.
+       *
+       * Se puede vaciar sin romper nada porque llegar hasta acá exige cero
+       * operaciones abiertas, y las órdenes viejas no apuntan a esta tabla:
+       * llevan su propia copia en `shipping_address`, que es el comprobante de
+       * a dónde se mandó algo que ya se mandó.
+       */
+      await tx.userAddress.updateMany({
+        where: { userId },
+        data: {
+          recipientFullName: 'Cuenta eliminada',
+          documentNumber: '',
+          phoneE164: '',
+          street: '',
+          number: '',
+          floor: null,
+          apartment: null,
+          references: null,
+          postalCode: '',
+          deletedAt: new Date(),
+        },
+      });
     });
 
     this.logger.log({ msg: 'cuenta cerrada', userId });

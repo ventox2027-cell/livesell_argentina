@@ -2866,6 +2866,47 @@ describe('Derechos sobre los propios datos', () => {
       expect(fila.birthDateDeclaredAt).not.toBeNull();
     });
 
+    it('⛔ y la dirección se vacía: DNI, teléfono y calle', async () => {
+      /**
+       * ═════════════════════════════════════════════════════════════════════
+       * ERA EL DATO MÁS SENSIBLE Y ERA EL QUE SOBREVIVÍA ENTERO
+       * ═════════════════════════════════════════════════════════════════════
+       *
+       * El cierre anonimizaba el `User` y dejaba `user_addresses` intacta: DNI
+       * completo, teléfono, calle, número, piso y departamento de la casa de
+       * alguien que pidió irse. Anonimizar la fila que apunta y no la que tiene
+       * los datos no anonimiza nada.
+       *
+       * Este test lee la tabla directo, sin pasar por la API: por la API la
+       * dirección no se ve igual —la cuenta está cerrada— y el bug se veía
+       * exactamente ahí, en lo que quedaba escrito en el disco.
+       */
+      const comprador = await nuevoComprador();
+
+      expect((await call('DELETE', '/api/v1/auth/me', { token: comprador.token })).status).toBe(200);
+
+      const direcciones = await prisma.userAddress.findMany({
+        where: { userId: comprador.userId },
+      });
+      expect(direcciones).toHaveLength(1);
+
+      const d = direcciones[0]!;
+      expect(d.documentNumber).toBe('');
+      expect(d.phoneE164).toBe('');
+      expect(d.street).toBe('');
+      expect(d.number).toBe('');
+      expect(d.floor).toBeNull();
+      expect(d.apartment).toBeNull();
+      expect(d.references).toBeNull();
+      expect(d.deletedAt).not.toBeNull();
+
+      // Y nada del contenido original quedó en ningún campo.
+      const enTexto = JSON.stringify(d);
+      for (const dato of ['30123456', '+5491122334455', 'Av. Corrientes', 'Ana Pérez', 'Portón negro']) {
+        expect(enTexto).not.toContain(dato);
+      }
+    });
+
     it('una vez entregado el pedido, el vendedor sí puede irse', async () => {
       /**
        * El bloqueo es temporal, no una retención. Convertir "tenés un pedido en

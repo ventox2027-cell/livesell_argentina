@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/auth/google_signin_service.dart';
+import '../../../core/config/paginas_publicas.dart';
 import '../../../core/config/runtime_config.dart';
 import '../../../core/design/tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
@@ -107,10 +108,18 @@ class _WelcomeScreenState extends ConsumerState<WelcomeScreen> {
                   ),
 
                   const SizedBox(height: Gap.xl),
-                  const Text(
-                    'Al continuar aceptás los Términos y la Política de privacidad.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: AppColor.textoDebil, fontSize: 12, height: 1.4),
+                  // Era texto plano. Decir "aceptás la Política de privacidad"
+                  // sin dar forma de leerla es pedir un consentimiento a ciegas,
+                  // y Google Play lo pide enlazado.
+                  DefaultTextStyle.merge(
+                    style: const TextStyle(
+                      color: AppColor.textoDebil,
+                      fontSize: 12,
+                      height: 1.4,
+                    ),
+                    child: const EnlacesLegales(
+                      prefijo: 'Al continuar aceptás los Términos y la ',
+                    ),
                   ),
 
                   // Acceso de desarrollo. Se muestra sólo si el backend lo
@@ -144,6 +153,7 @@ class _WelcomeScreenState extends ConsumerState<WelcomeScreen> {
                         ),
                         const Text('·', style: TextStyle(color: AppColor.textoDebil)),
                       ],
+
                       /// Configurar el backend TIENE que estar disponible antes
                       /// de entrar. Escondido detrás del login, una instalación
                       /// nueva apuntando a una URL vieja no tiene salida: no se
