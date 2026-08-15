@@ -170,6 +170,16 @@ const RUTAS: Array<[string, string, unknown?]> = [
   ['POST', '/api/v1/admin/sellers/sel_x/suspend', { reason: 'motivo suficientemente largo' }],
   ['POST', '/api/v1/admin/sellers/sel_x/reactivate', { reason: 'motivo suficientemente largo' }],
   ['POST', '/api/v1/admin/sellers/sel_x/block', { reason: 'motivo suficientemente largo' }],
+  [
+    'POST',
+    '/api/v1/admin/sellers/sel_x/membership',
+    { periodo: 'MENSUAL', origen: 'CORTESIA', reason: 'motivo suficientemente largo' },
+  ],
+  [
+    'DELETE',
+    '/api/v1/admin/sellers/sel_x/membership',
+    { reason: 'motivo suficientemente largo' },
+  ],
   ['GET', '/api/v1/admin/products/prd_x'],
   ['POST', '/api/v1/admin/products/prd_x/pause', { reason: 'motivo suficientemente largo' }],
   ['POST', '/api/v1/admin/products/prd_x/reactivate', { reason: 'motivo suficientemente largo' }],
@@ -538,5 +548,258 @@ describe('Admin — entidades inexistentes', () => {
     const r = await call('GET', '/api/v1/admin/orders/ord_noexiste/timeline', { token });
     expect(r.status).toBe(200);
     expect(r.body.eventos).toEqual([]);
+  });
+});
+
+describe('VendoX Pro', () => {
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * PRO NO ES VERIFICADO
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * Son dos cosas distintas y estos tests las mantienen separadas:
+   *
+   *   · **Verificado** dice que VendoX comprobó quién es esa persona.
+   *   · **Pro** dice que contrató herramientas.
+   *
+   * Si otorgar Pro tocara la verificación, el sello de identidad pasaría a
+   * estar en venta.
+   */
+
+  /** Un vendedor cualquiera, sin plan. */
+  async function nuevoVendedor() {
+    const u = await nuevoUsuario();
+    const r = await call('POST', '/api/v1/sellers', {
+      token: u.token,
+      body: { displayName: `Tienda ${u.userId.slice(-6)}` },
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    const vendedor = await prisma.seller.findFirstOrThrow({ where: { userId: u.userId } });
+    return { ...u, sellerId: vendedor.id };
+  }
+
+  it('sin nada otorgado, es Free y no tiene beneficios', async () => {
+    // El estado de la enorme mayoría: no hay fila hasta que se otorga algo.
+    const v = await nuevoVendedor();
+
+    const r = await call('GET', '/api/v1/seller/membership', { token: v.token });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.body.plan).toBe('FREE');
+    expect(r.body.beneficios).toEqual([]);
+    expect(r.body.vigenteHasta).toBeNull();
+    expect(r.body.diasRestantes).toBeNull();
+  });
+
+  it('otorgado desde el panel, pasa a Pro con fecha', async () => {
+    const v = await nuevoVendedor();
+    const admin = await nuevoAdmin();
+
+    const otorgado = await call('POST', `/api/v1/admin/sellers/${v.sellerId}/membership`, {
+      token: admin.token,
+      body: {
+        periodo: 'MENSUAL',
+        origen: 'CORTESIA',
+        reason: 'vendedor inicial del beta cerrado',
+      },
+    });
+    expect(otorgado.status, JSON.stringify(otorgado.body)).toBe(201);
+
+    const mia = await call('GET', '/api/v1/seller/membership', { token: v.token });
+    expect(mia.body.plan).toBe('PRO');
+    expect(mia.body.beneficios).toContain('CUPONES');
+    expect(mia.body.diasRestantes).toBe(30);
+    // El vendedor tiene derecho a saber que se lo regalaron: si cree que lo
+    // paga, no entiende por qué le vence.
+    expect(mia.body.origen).toBe('CORTESIA');
+  });
+
+  it('⛔ otorgar Pro NO verifica la identidad', async () => {
+    /**
+     * EL TEST QUE IMPORTA.
+     *
+     * Es lo que impide que el sello de identidad se vuelva comprable. Un
+     * `update` de más en `otorgar` —o un futuro «los Pro salen verificados»—
+     * rompe acá.
+     */
+    const v = await nuevoVendedor();
+    const admin = await nuevoAdmin();
+
+    await call('POST', `/api/v1/admin/sellers/${v.sellerId}/membership`, {
+      token: admin.token,
+      body: { periodo: 'ANUAL', origen: 'PAGO', reason: 'pagó por transferencia en agosto' },
+    });
+
+    const enBase = await prisma.seller.findUniqueOrThrow({ where: { id: v.sellerId } });
+    expect(enBase.verificationStatus).toBe('UNVERIFIED');
+  });
+
+  it('⛔ ni toca la reputación', async () => {
+    // Pagar no puede subir estrellas. Es la regla de veracidad aplicada al
+    // lugar donde más tentador sería romperla.
+    const v = await nuevoVendedor();
+    const admin = await nuevoAdmin();
+    const antes = await prisma.seller.findUniqueOrThrow({ where: { id: v.sellerId } });
+
+    await call('POST', `/api/v1/admin/sellers/${v.sellerId}/membership`, {
+      token: admin.token,
+      body: { periodo: 'MENSUAL', origen: 'CORTESIA', reason: 'compensación por caída del vivo' },
+    });
+
+    const despues = await prisma.seller.findUniqueOrThrow({ where: { id: v.sellerId } });
+    expect(despues.ratingSum).toBe(antes.ratingSum);
+    expect(despues.ratingCount).toBe(antes.ratingCount);
+    expect(despues.salesCount).toBe(antes.salesCount);
+    expect(despues.riskLevel).toBe(antes.riskLevel);
+  });
+
+  it('⛔ un Pro vencido responde Free, aunque la fila diga PRO', async () => {
+    /**
+     * La fila sigue diciendo `PRO` hasta que algo la actualice, y no hay nada
+     * que la actualice: decidimos no tener tarea. La verdad la da la fecha.
+     */
+    const v = await nuevoVendedor();
+    const admin = await nuevoAdmin();
+
+    await call('POST', `/api/v1/admin/sellers/${v.sellerId}/membership`, {
+      token: admin.token,
+      body: { periodo: 'MENSUAL', origen: 'PRUEBA', reason: 'prueba de treinta días' },
+    });
+
+    // Se vence a mano, que es lo que hace el paso del tiempo.
+    await prisma.sellerMembership.update({
+      where: { sellerId: v.sellerId },
+      data: { vigenteHasta: new Date(Date.now() - 60_000) },
+    });
+
+    const mia = await call('GET', '/api/v1/seller/membership', { token: v.token });
+    expect(mia.body.plan).toBe('FREE');
+    expect(mia.body.beneficios).toEqual([]);
+
+    // Y en la base sigue diciendo PRO: es justamente lo que no hay que leer.
+    const fila = await prisma.sellerMembership.findUniqueOrThrow({
+      where: { sellerId: v.sellerId },
+    });
+    expect(fila.plan).toBe('PRO');
+  });
+
+  it('renovar temprano suma en vez de reemplazar', async () => {
+    // Alguien con veinte días por delante que renueva termina con cincuenta.
+    // Reemplazar la fecha le cobraría un mes y le sacaría veinte días.
+    const v = await nuevoVendedor();
+    const admin = await nuevoAdmin();
+    const cuerpo = { periodo: 'MENSUAL', origen: 'PAGO', reason: 'renovación mensual de agosto' };
+
+    await call('POST', `/api/v1/admin/sellers/${v.sellerId}/membership`, {
+      token: admin.token,
+      body: cuerpo,
+    });
+    await call('POST', `/api/v1/admin/sellers/${v.sellerId}/membership`, {
+      token: admin.token,
+      body: cuerpo,
+    });
+
+    const mia = await call('GET', '/api/v1/seller/membership', { token: v.token });
+    // 60 días, no 30.
+    expect(mia.body.diasRestantes).toBe(60);
+  });
+
+  it('revocar lo deja en Free pero no borra el historial', async () => {
+    const v = await nuevoVendedor();
+    const admin = await nuevoAdmin();
+
+    await call('POST', `/api/v1/admin/sellers/${v.sellerId}/membership`, {
+      token: admin.token,
+      body: { periodo: 'ANUAL', origen: 'CORTESIA', reason: 'acuerdo con la tienda' },
+    });
+
+    const r = await call('DELETE', `/api/v1/admin/sellers/${v.sellerId}/membership`, {
+      token: admin.token,
+      body: { reason: 'se otorgó al vendedor equivocado' },
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+
+    const mia = await call('GET', '/api/v1/seller/membership', { token: v.token });
+    expect(mia.body.plan).toBe('FREE');
+
+    // La fila sigue: es lo que permite responder un reclamo.
+    const fila = await prisma.sellerMembership.findUnique({ where: { sellerId: v.sellerId } });
+    expect(fila).not.toBeNull();
+  });
+
+  it('⛔ queda en la bitácora, con el motivo y con quién lo dio', async () => {
+    /**
+     * `otorgar` es, literalmente, la función que regala dinero. Sin registro,
+     * un Pro de cortesía en la base es indistinguible de uno que alguien puso
+     * por error.
+     */
+    const v = await nuevoVendedor();
+    const admin = await nuevoAdmin();
+
+    await call('POST', `/api/v1/admin/sellers/${v.sellerId}/membership`, {
+      token: admin.token,
+      body: {
+        periodo: 'ANUAL',
+        origen: 'CORTESIA',
+        reason: 'acuerdo con la marca por el lanzamiento',
+      },
+    });
+
+    const registro = await prisma.auditLog.findFirst({
+      where: { action: 'membership.granted', entityId: v.sellerId },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    expect(registro).not.toBeNull();
+    expect(registro?.actorId).toBe(admin.userId);
+    expect(JSON.stringify(registro?.after)).toContain('lanzamiento');
+  });
+
+  it('⛔ no se puede otorgar a un vendedor que no existe', async () => {
+    // Dejaría una fila huérfana que nadie va a mirar nunca.
+    const admin = await nuevoAdmin();
+
+    const r = await call('POST', '/api/v1/admin/sellers/sel_inventado/membership', {
+      token: admin.token,
+      body: { periodo: 'MENSUAL', origen: 'CORTESIA', reason: 'motivo suficientemente largo' },
+    });
+
+    expect(r.status).toBe(404);
+  });
+
+  it('⛔ el motivo es obligatorio', async () => {
+    const v = await nuevoVendedor();
+    const admin = await nuevoAdmin();
+
+    const r = await call('POST', `/api/v1/admin/sellers/${v.sellerId}/membership`, {
+      token: admin.token,
+      body: { periodo: 'MENSUAL', origen: 'CORTESIA' },
+    });
+
+    expect(r.status).toBe(400);
+  });
+
+  it('⛔ la base rechaza un PRO sin vencimiento', async () => {
+    /**
+     * La última línea de defensa.
+     *
+     * `planVigente()` ya trata un Pro sin fecha como vencido, pero eso es
+     * código y el código se puede saltear: un `UPDATE` a mano desde una
+     * consola, una migración futura mal escrita. El CHECK no se saltea.
+     */
+    const v = await nuevoVendedor();
+    const admin = await nuevoAdmin();
+
+    await call('POST', `/api/v1/admin/sellers/${v.sellerId}/membership`, {
+      token: admin.token,
+      body: { periodo: 'MENSUAL', origen: 'CORTESIA', reason: 'motivo suficientemente largo' },
+    });
+
+    await expect(
+      prisma.sellerMembership.update({
+        where: { sellerId: v.sellerId },
+        data: { vigenteHasta: null },
+      }),
+    ).rejects.toThrow();
   });
 });

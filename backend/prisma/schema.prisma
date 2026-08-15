@@ -956,10 +956,94 @@ model Seller {
   liveSessions LiveSession[]
   followers    Follow[]
   reviews      Review[]
+  /// VendoX Pro. Separada de `verificationStatus` a propósito: ver el
+  /// comentario de `SellerMembership`.
+  membership   SellerMembership?
 
   @@index([status, createdAt])
   @@index([riskLevel, status])
   @@map("sellers")
+}
+
+/// VendoX Pro.
+///
+/// ═══════════════════════════════════════════════════════════════════════════
+/// UNA TABLA QUE NO SABE COBRAR
+/// ═══════════════════════════════════════════════════════════════════════════
+///
+/// No hay ningún campo acá que nombre un proveedor de pago. No hay
+/// `googlePlayToken`, ni `mercadoPagoPreapprovalId`, ni `originalTransactionId`.
+///
+/// Es deliberado. Cada tienda de aplicaciones tiene sus reglas sobre bienes
+/// digitales y elegir mal significa reescribir o que rechacen la app. Mientras
+/// esa decisión no esté tomada, la membresía existe igual: se otorga a mano,
+/// vence sola, y el día que haya cobro sólo hace falta algo que llame a
+/// `otorgar`. Si mañana esta tabla tiene una columna con el nombre de un
+/// proveedor, la separación se perdió.
+///
+/// ⚠️ **Pro no es verificado.** `verificationStatus` vive en `Seller` y dice
+/// que VendoX comprobó quién es esa persona; esto dice que contrató
+/// herramientas. Mezclarlas pondría el sello de identidad a la venta. Ver
+/// `sellers/membresias.ts`.
+model SellerMembership {
+  id       String @id // mem_<ulid>
+  sellerId String @unique @map("seller_id")
+
+  plan MembershipPlan @default(FREE)
+
+  /// `null` en Free: no vence.
+  ///
+  /// ⚠️ Nadie debería leer `plan` sin mirar esta fecha. Un Pro que venció ayer
+  /// sigue diciendo `PRO` acá hasta que algo lo actualice, y ese algo puede
+  /// tardar. La verdad la da `planVigente()`.
+  vigenteHasta DateTime? @map("vigente_hasta")
+
+  /// Cada cuánto se renueva. `null` en Free.
+  periodo MembershipPeriod?
+
+  /// De dónde salió. Ninguno de los valores nombra un proveedor de pago.
+  origen MembershipOrigin @default(GRATIS)
+
+  /// Por qué se otorgó. Obligatorio en la práctica para CORTESIA: dentro de un
+  /// año nadie va a acordarse de por qué este vendedor tiene Pro gratis.
+  nota String?
+
+  /// Quién lo otorgó. `null` cuando no lo otorgó una persona.
+  otorgadoPor String?   @map("otorgado_por")
+  /// Cuándo se avisó por última vez que estaba por vencer, para no repetirlo.
+  avisadoEl   DateTime? @map("avisado_el")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  seller Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  /// Para el barrido que avisa los que vencen pronto.
+  @@index([plan, vigenteHasta])
+  @@map("seller_memberships")
+}
+
+enum MembershipPlan {
+  FREE
+  PRO
+}
+
+enum MembershipPeriod {
+  MENSUAL
+  ANUAL
+}
+
+/// ⚠️ Ningún valor nombra un proveedor de pago. `PAGO` significa «alguien pagó
+/// por esto»; quién lo procesó es problema del módulo que lo haya cobrado.
+enum MembershipOrigin {
+  /// El plan de todos. No se otorga: es lo que hay cuando no hay fila.
+  GRATIS
+  /// VendoX se lo dio. Vendedores iniciales, acuerdos, compensaciones.
+  CORTESIA
+  /// Período de prueba. Vence y vuelve a Free sin que nadie haga nada.
+  PRUEBA
+  /// Se pagó. Reservado para cuando exista cobro.
+  PAGO
 }
 
 /// Tienda.

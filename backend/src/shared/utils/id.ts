@@ -47,6 +47,8 @@ export const ID_PREFIX = {
   address: 'adr',
   sellerPaymentAccount: 'spa',
   sellerVerification: 'ver',
+  /** VendoX Pro. Nada que ver con `ver`: ser Pro no es estar verificado. */
+  sellerMembership: 'mem',
   // Vivos
   liveSession: 'liv',
   liveSessionProduct: 'lsp',

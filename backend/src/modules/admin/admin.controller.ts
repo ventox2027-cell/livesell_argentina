@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Query, Req } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
 
 import { CurrentUser, Roles, type AuthenticatedUser } from '@/modules/auth/auth.guard';
@@ -8,6 +8,7 @@ import { ZodValidationPipe } from '@/shared/http/zod-validation.pipe';
 
 import { AdminSearchService } from './admin-search.service';
 import { AdminTimelineService } from './admin-timeline.service';
+import { MembresiasService } from '@/modules/sellers/membresias.service';
 import { RiskService } from '@/modules/sellers/risk.service';
  import { VerificationService } from '@/modules/sellers/verification.service';
 
@@ -22,6 +23,7 @@ import {
   ListaUsuariosSchema,
   ListaVendedoresSchema,
   ListaWebhooksSchema,
+  OtorgarProSchema,
   PaginaSchema,
   type AccionAdminDto,
   type BusquedaDto,
@@ -32,6 +34,7 @@ import {
   type ListaUsuariosDto,
   type ListaVendedoresDto,
   type ListaWebhooksDto,
+  type OtorgarProDto,
   type PaginaDto,
 } from './dto/admin.dto';
 
@@ -71,6 +74,7 @@ export class AdminController {
     private readonly timeline: AdminTimelineService,
     private readonly verificacion: VerificationService,
     private readonly riesgo: RiskService,
+    private readonly membresias: MembresiasService,
   ) {}
 
   // ─── Inicio y búsqueda ─────────────────────────────────────────────────────
@@ -213,6 +217,39 @@ export class AdminController {
   @Post('sellers/:id/risk/recompute')
   recalcularRiesgo(@Param('id') id: string) {
     return this.riesgo.recalcular(id);
+  }
+
+  /**
+   * Otorga o renueva VendoX Pro.
+   *
+   * ⚠️ Esto NO toca la verificación de identidad. Son dos cosas distintas: el
+   * sello dice que comprobamos quién es esa persona, Pro dice que contrató
+   * herramientas. Venderlo convertiría el sello en algo comprable.
+   *
+   * Renovar temprano suma al final en vez de reemplazar.
+   */
+  @Post('sellers/:id/membership')
+  otorgarPro(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(OtorgarProSchema)) dto: OtorgarProDto,
+  ) {
+    return this.membresias.otorgar(id, {
+      periodo: dto.periodo,
+      origen: dto.origen,
+      nota: dto.reason,
+      otorgadoPor: actor.id,
+    });
+  }
+
+  /** Le saca Pro ya, sin esperar al vencimiento. No borra el historial. */
+  @Delete('sellers/:id/membership')
+  revocarPro(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(AccionAdminSchema)) dto: AccionAdminDto,
+  ) {
+    return this.membresias.revocar(id, dto.reason, actor.id);
   }
 
   // ─── Productos ─────────────────────────────────────────────────────────────

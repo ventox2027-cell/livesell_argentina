@@ -8,6 +8,8 @@ import {
   ManualTaxProvider,
   TaxVerificationProvider,
 } from './identity.provider';
+import { MembresiasController } from './membresias.controller';
+import { MembresiasService } from './membresias.service';
 import { RiskService } from './risk.service';
 import { VerificationController } from './verification.controller';
 import { VerificationService } from './verification.service';
@@ -26,14 +28,20 @@ import { VerificationService } from './verification.service';
  * tener vendedores "verificados por RENAPER" que nunca pasaron por ahí.
  */
 @Module({
-  controllers: [VerificationController],
+  controllers: [VerificationController, MembresiasController],
   providers: [
     VerificationService,
     RiskService,
+    MembresiasService,
     AuditService,
     { provide: IdentityVerificationProvider, useClass: ManualIdentityProvider },
     { provide: TaxVerificationProvider, useClass: ManualTaxProvider },
   ],
-  exports: [VerificationService, RiskService],
+  /**
+   * `MembresiasService` se exporta porque lo van a preguntar otros módulos:
+   * cupones, métricas, y cualquier cosa que sea Pro. Que la respuesta salga de
+   * un solo lugar es lo que evita que dos módulos definan "ser Pro" distinto.
+   */
+  exports: [VerificationService, RiskService, MembresiasService],
 })
 export class SellersModule {}

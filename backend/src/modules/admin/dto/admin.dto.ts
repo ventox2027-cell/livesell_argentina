@@ -49,6 +49,27 @@ export const AccionAdminSchema = z.object({
 export type AccionAdminDto = z.infer<typeof AccionAdminSchema>;
 
 /**
+ * Otorgar VendoX Pro.
+ *
+ * ⚠️ No hay campo de precio ni de proveedor de pago, y no es un olvido: la
+ * membresía está separada del cobro a propósito. Ver `sellers/membresias.ts`.
+ *
+ * El motivo es obligatorio como en el resto del panel. Acá pesa más que en
+ * otras acciones: esto regala dinero, y dentro de un año nadie va a acordarse
+ * de por qué este vendedor tiene Pro gratis.
+ */
+export const OtorgarProSchema = z.object({
+  periodo: z.enum(['MENSUAL', 'ANUAL']),
+  /**
+   * `PAGO` está permitido para poder registrar un cobro hecho por fuera —una
+   * transferencia, una factura— sin que el backend tenga que saber procesarlo.
+   */
+  origen: z.enum(['CORTESIA', 'PRUEBA', 'PAGO']),
+  reason: MotivoSchema,
+});
+export type OtorgarProDto = z.infer<typeof OtorgarProSchema>;
+
+/**
  * Paginación por cursor.
  *
  * No hay `?page=847`. Con OFFSET, la base tiene que recorrer y descartar las
