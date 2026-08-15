@@ -56,6 +56,7 @@ export const ID_PREFIX = {
   scheduleSlot: 'sls',
   follow: 'flw',
   review: 'rev',
+  reviewImage: 'rvi',
   purchaseIntent: 'pin',
   notification: 'ntf',
   like: 'lik',

@@ -791,16 +791,32 @@ export class OrdersService {
       });
     }
 
-    const entregada = await this.prisma.order.update({
-      where: { id: orden.id },
-      data: {
-        status: 'DELIVERED',
-        deliveredAt: new Date(),
-        deliveryCodeAttempts: 0,
-        deliveryCodeLockedUntil: null,
-      },
-      select: ORDER_SELECT,
-    });
+    /**
+     * La entrega y el contador de ventas del vendedor, en la MISMA transacción.
+     *
+     * `sellers.sales_count` es el «327 ventas» del perfil público. Si se
+     * escribiera aparte y esa segunda escritura fallara, el número quedaría
+     * atrasado para siempre: nada lo recalcula solo, y nadie se entera de que
+     * está mal porque no hay con qué compararlo.
+     *
+     * Cuenta ENTREGAS, no pedidos pagos. Ver `stores/reputacion.ts`.
+     */
+    const [entregada] = await this.prisma.$transaction([
+      this.prisma.order.update({
+        where: { id: orden.id },
+        data: {
+          status: 'DELIVERED',
+          deliveredAt: new Date(),
+          deliveryCodeAttempts: 0,
+          deliveryCodeLockedUntil: null,
+        },
+        select: ORDER_SELECT,
+      }),
+      this.prisma.seller.update({
+        where: { id: sellerId },
+        data: { salesCount: { increment: 1 } },
+      }),
+    ]);
 
     this.events.publish(DomainEvent.orderFulfillmentChanged, {
       entityId: orden.id,

@@ -1,9 +1,22 @@
-import { Body, Controller, Delete, Get, Param, Post, Put, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Put,
+  Query,
+  Req,
+} from '@nestjs/common';
+import type { FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
 import { CurrentUser, Public, type AuthenticatedUser } from '@/modules/auth/auth.guard';
 import { RateLimit } from '@/shared/http/rate-limit.guard';
 import { ZodValidationPipe } from '@/shared/http/zod-validation.pipe';
+import { leerArchivoSubido } from '@/shared/storage/multipart';
 
 import { StoresService } from './stores.service';
 
@@ -37,6 +50,29 @@ const ResenaSchema = z.object({
   comment: z.string().trim().max(1000).optional(),
 });
 type ResenaDto = z.infer<typeof ResenaSchema>;
+
+/** Editar la propia reseña. Al menos un campo, o no hay nada que hacer. */
+const EditarResenaSchema = z
+  .object({
+    rating: z.coerce.number().int().min(1).max(5).optional(),
+    comment: z.string().trim().max(1000).optional(),
+  })
+  .refine((v) => v.rating !== undefined || v.comment !== undefined, {
+    message: 'No hay nada que actualizar',
+  });
+type EditarResenaDto = z.infer<typeof EditarResenaSchema>;
+
+/**
+ * La respuesta del vendedor.
+ *
+ * Tope de 600 y no 1000 como la reseña: la respuesta acompaña, no compite. Un
+ * descargo tres veces más largo que la queja se lee como que el vendedor tiene
+ * algo que justificar.
+ */
+const RespuestaSchema = z.object({
+  texto: z.string().trim().min(2).max(600),
+});
+type RespuestaDto = z.infer<typeof RespuestaSchema>;
 
 const PaginaSchema = z.object({
   cursor: z.string().max(64).optional(),
@@ -144,6 +180,56 @@ export class StoresController {
     @Body(new ZodValidationPipe(ResenaSchema)) dto: ResenaDto,
   ) {
     return this.stores.resenar(user.id, id, dto);
+  }
+
+  /**
+   * El vendedor responde. Una sola vez por reseña.
+   *
+   * Límite bajo a propósito: responder es escribir en frío sobre algo que
+   * queda público. Veinte respuestas por hora no es un vendedor atendiendo, es
+   * un vendedor discutiendo.
+   */
+  @RateLimit({ limit: 30, windowSec: 3600, bucket: 'review:reply' })
+  @Post('reviews/:id/reply')
+  responderResena(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(RespuestaSchema)) dto: RespuestaDto,
+  ) {
+    return this.stores.responderResena(user.id, id, dto.texto);
+  }
+
+  /** Editar la propia reseña, dentro de las primeras 48 horas. */
+  @Patch('reviews/:id')
+  editarResena(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(EditarResenaSchema)) dto: EditarResenaDto,
+  ) {
+    return this.stores.editarResena(user.id, id, dto);
+  }
+
+  /** Borrar la propia reseña, dentro de la misma ventana. */
+  @Delete('reviews/:id')
+  borrarResena(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.stores.borrarResena(user.id, id);
+  }
+
+  /**
+   * Una foto para la propia reseña.
+   *
+   * Reutiliza el mismo lector de multipart, el mismo almacenamiento y la misma
+   * validación por contenido que las imágenes de producto: no hay una segunda
+   * arquitectura de imágenes en el sistema.
+   */
+  @RateLimit({ limit: 20, windowSec: 3600, bucket: 'review:image' })
+  @Post('reviews/:id/images')
+  async subirFotoDeResena(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Req() req: FastifyRequest,
+  ) {
+    return this.stores.subirFotoDeResena(user.id, id, await leerArchivoSubido(req));
   }
 
   // ─── Horarios del vendedor ─────────────────────────────────────────────────

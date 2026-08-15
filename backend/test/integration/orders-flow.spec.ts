@@ -3401,3 +3401,351 @@ describe('Interruptor de emergencia del checkout', () => {
     expect(ahora.status, JSON.stringify(ahora.body)).toBe(201);
   });
 });
+
+describe('Reseñas y reputación', () => {
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * LA REGLA CENTRAL: SÓLO SE RESEÑA LO QUE SE RECIBIÓ
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * La versión anterior aceptaba desde `CONFIRMED` —apenas se acreditaba el
+   * pago— y eso rompía en las dos direcciones:
+   *
+   *   · el comprador podía poner una estrella a los diez minutos de comprar,
+   *     antes de que el vendedor llegara a empaquetar nada;
+   *   · y el vendedor podía cobrar, pedir que lo calificaran bien, y no
+   *     entregar nunca. La reseña quedaba.
+   *
+   * Nadie tenía un test que lo cubriera: endurecer la regla no hizo fallar
+   * nada. Estos son esos tests.
+   */
+
+  /**
+   * Los tres escalones de una compra, cada uno construido sobre el anterior.
+   *
+   * Están duplicados respecto de los del bloque de entrega porque aquéllos
+   * viven adentro de su `describe` y no devuelven `sellerId`, que es lo que
+   * estos tests necesitan para mirar la reputación.
+   */
+
+  /** Pagada. Todavía no entregada. */
+  async function ordenPaga() {
+    const { variantId, sellerToken, sellerId } = await nuevaVarianteConStock(5);
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, variantId));
+    proveedor.proximo = { status: 'approved' };
+    await pagar(comprador.token, orden.body.id);
+    return {
+      orderId: orden.body.id as string,
+      compradorToken: comprador.token,
+      sellerToken,
+      sellerId,
+    };
+  }
+
+  /** Despachada. Es la palabra del vendedor, todavía no la del comprador. */
+  async function despachada() {
+    const datos = await ordenPaga();
+    for (const estado of ['PREPARING', 'READY_TO_SHIP', 'SHIPPED']) {
+      const r = await call('PATCH', `/api/v1/seller/orders/${datos.orderId}/fulfillment`, {
+        token: datos.sellerToken,
+        body: { status: estado },
+      });
+      expect(r.status, `${estado}: ${JSON.stringify(r.body)}`).toBe(200);
+    }
+    return datos;
+  }
+
+  /** Entregada de verdad: confirmada con el código que tenía el comprador. */
+  async function ordenEntregada() {
+    const datos = await despachada();
+    const vista = await call('GET', `/api/v1/orders/${datos.orderId}`, {
+      token: datos.compradorToken,
+    });
+    const r = await call('POST', `/api/v1/seller/orders/${datos.orderId}/delivery-confirmation`, {
+      token: datos.sellerToken,
+      body: { code: vista.body.deliveryCode as string },
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    return datos;
+  }
+
+  it('⛔ un pedido PAGO pero no entregado todavía no se puede reseñar', async () => {
+    const { orderId, compradorToken } = await ordenPaga();
+
+    const r = await call('POST', `/api/v1/orders/${orderId}/review`, {
+      token: compradorToken,
+      body: { rating: 1, comment: 'todavía no llegó nada' },
+    });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(422);
+    expect(r.body.error.code).toBe('REVIEW_NOT_ALLOWED_YET');
+  });
+
+  it('⛔ ni siquiera DESPACHADO alcanza', async () => {
+    // Despachado es la palabra del vendedor. Entregado es el código que tenía
+    // el comprador.
+    const { orderId, compradorToken } = await despachada();
+
+    const r = await call('POST', `/api/v1/orders/${orderId}/review`, {
+      token: compradorToken,
+      body: { rating: 5 },
+    });
+
+    expect(r.status).toBe(422);
+  });
+
+  it('entregado, sí se puede reseñar', async () => {
+    const { orderId, compradorToken, sellerId } = await ordenEntregada();
+
+    const r = await call('POST', `/api/v1/orders/${orderId}/review`, {
+      token: compradorToken,
+      body: { rating: 5, comment: 'llegó impecable' },
+    });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+
+    const s = await prisma.seller.findUniqueOrThrow({ where: { id: sellerId } });
+    expect(s.ratingCount).toBe(1);
+    expect(s.ratingSum).toBe(5);
+    // Y la entrega movió el contador de ventas.
+    expect(s.salesCount).toBe(1);
+  });
+
+  it('⛔ una sola reseña por compra', async () => {
+    const { orderId, compradorToken, sellerId } = await ordenEntregada();
+    const cuerpo = { token: compradorToken, body: { rating: 5 } };
+
+    expect((await call('POST', `/api/v1/orders/${orderId}/review`, cuerpo)).status).toBe(201);
+    expect((await call('POST', `/api/v1/orders/${orderId}/review`, cuerpo)).status).toBe(400);
+
+    const s = await prisma.seller.findUniqueOrThrow({ where: { id: sellerId } });
+    expect(s.ratingCount).toBe(1);
+  });
+
+  describe('La respuesta del vendedor', () => {
+    it('el vendedor puede responder, una vez', async () => {
+      const { orderId, compradorToken, sellerToken } = await ordenEntregada();
+      const resena = await call('POST', `/api/v1/orders/${orderId}/review`, {
+        token: compradorToken,
+        body: { rating: 2, comment: 'tardó mucho' },
+      });
+      const reviewId = resena.body.id as string;
+
+      const r = await call('POST', `/api/v1/reviews/${reviewId}/reply`, {
+        token: sellerToken,
+        body: { texto: 'La dirección estaba incompleta y el correo lo devolvió.' },
+      });
+      expect(r.status, JSON.stringify(r.body)).toBe(201);
+
+      // Una sola vez: en una discusión pública el vendedor siempre tiene la
+      // última palabra, porque el comprador ya se fue.
+      const segunda = await call('POST', `/api/v1/reviews/${reviewId}/reply`, {
+        token: sellerToken,
+        body: { texto: 'y además...' },
+      });
+      expect(segunda.status).toBe(409);
+      expect(segunda.body.error.code).toBe('REVIEW_ALREADY_ANSWERED');
+    });
+
+    it('⛔ otro vendedor no puede responder una reseña ajena', async () => {
+      const { orderId, compradorToken } = await ordenEntregada();
+      const resena = await call('POST', `/api/v1/orders/${orderId}/review`, {
+        token: compradorToken,
+        body: { rating: 1 },
+      });
+
+      const intruso = await nuevaVarianteConStock(1);
+      const r = await call('POST', `/api/v1/reviews/${resena.body.id}/reply`, {
+        token: intruso.sellerToken,
+        body: { texto: 'no es mi venta pero contesto igual' },
+      });
+
+      // 404, no 403: un 403 confirmaría que la reseña existe.
+      expect(r.status).toBe(404);
+    });
+
+    it('la respuesta sale en el listado público', async () => {
+      const { orderId, compradorToken, sellerToken, sellerId } = await ordenEntregada();
+      const resena = await call('POST', `/api/v1/orders/${orderId}/review`, {
+        token: compradorToken,
+        body: { rating: 3, comment: 'ni fu ni fa' },
+      });
+      await call('POST', `/api/v1/reviews/${resena.body.id}/reply`, {
+        token: sellerToken,
+        body: { texto: 'Gracias por avisar, lo mejoramos.' },
+      });
+
+      const lista = await call('GET', `/api/v1/sellers/${sellerId}/reviews`);
+      expect(lista.status).toBe(200);
+      expect(lista.body.items[0].respuesta.texto).toContain('lo mejoramos');
+    });
+  });
+
+  describe('Editar y borrar', () => {
+    it('⛔ editar ajusta el promedio del vendedor', async () => {
+      /**
+       * `ratingSum` está denormalizado. Si alguien cambia de 5 a 1 estrella y
+       * la suma no se mueve, el promedio queda con cuatro estrellas de una
+       * calificación que ya no existe — y nada lo recalcula solo.
+       */
+      const { orderId, compradorToken, sellerId } = await ordenEntregada();
+      const resena = await call('POST', `/api/v1/orders/${orderId}/review`, {
+        token: compradorToken,
+        body: { rating: 5 },
+      });
+
+      const r = await call('PATCH', `/api/v1/reviews/${resena.body.id}`, {
+        token: compradorToken,
+        body: { rating: 1 },
+      });
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+
+      const s = await prisma.seller.findUniqueOrThrow({ where: { id: sellerId } });
+      expect(s.ratingSum).toBe(1);
+      expect(s.ratingCount).toBe(1);
+    });
+
+    it('⛔ borrar descuenta del promedio y la fila queda', async () => {
+      // Sin la fila, un vendedor que consigue que le borren tres reseñas malas
+      // no deja rastro de que existieron.
+      const { orderId, compradorToken, sellerId } = await ordenEntregada();
+      const resena = await call('POST', `/api/v1/orders/${orderId}/review`, {
+        token: compradorToken,
+        body: { rating: 4 },
+      });
+
+      expect(
+        (await call('DELETE', `/api/v1/reviews/${resena.body.id}`, { token: compradorToken }))
+          .status,
+      ).toBe(200);
+
+      const s = await prisma.seller.findUniqueOrThrow({ where: { id: sellerId } });
+      expect(s.ratingSum).toBe(0);
+      expect(s.ratingCount).toBe(0);
+
+      // La fila sigue, con su fecha de borrado.
+      const enBase = await prisma.review.findUniqueOrThrow({
+        where: { id: resena.body.id as string },
+      });
+      expect(enBase.deletedAt).not.toBeNull();
+
+      // Y ya no se lista.
+      const lista = await call('GET', `/api/v1/sellers/${sellerId}/reviews`);
+      expect(lista.body.items).toHaveLength(0);
+    });
+
+    it('⛔ nadie edita la reseña de otro', async () => {
+      const { orderId, compradorToken } = await ordenEntregada();
+      const resena = await call('POST', `/api/v1/orders/${orderId}/review`, {
+        token: compradorToken,
+        body: { rating: 5 },
+      });
+
+      const otro = await nuevoUsuario();
+      const r = await call('PATCH', `/api/v1/reviews/${resena.body.id}`, {
+        token: otro.token,
+        body: { rating: 1 },
+      });
+      expect(r.status).toBe(404);
+    });
+
+    it('⛔ pasada la ventana ya no se edita', async () => {
+      // Una reseña que se puede reescribir para siempre es una que un vendedor
+      // puede negociar seis meses después.
+      const { orderId, compradorToken } = await ordenEntregada();
+      const resena = await call('POST', `/api/v1/orders/${orderId}/review`, {
+        token: compradorToken,
+        body: { rating: 1 },
+      });
+
+      await prisma.review.update({
+        where: { id: resena.body.id as string },
+        data: { createdAt: new Date(Date.now() - 72 * 3_600_000) },
+      });
+
+      const r = await call('PATCH', `/api/v1/reviews/${resena.body.id}`, {
+        token: compradorToken,
+        body: { rating: 5 },
+      });
+      expect(r.status).toBe(409);
+      expect(r.body.error.code).toBe('REVIEW_EDIT_WINDOW_CLOSED');
+    });
+
+    it('editada, el listado lo dice', async () => {
+      // Una reseña editada después de que el vendedor respondió puede
+      // cambiarle el sentido a la respuesta.
+      const { orderId, compradorToken, sellerId } = await ordenEntregada();
+      const resena = await call('POST', `/api/v1/orders/${orderId}/review`, {
+        token: compradorToken,
+        body: { rating: 3, comment: 'original' },
+      });
+      await call('PATCH', `/api/v1/reviews/${resena.body.id}`, {
+        token: compradorToken,
+        body: { comment: 'cambiado' },
+      });
+
+      const lista = await call('GET', `/api/v1/sellers/${sellerId}/reviews`);
+      expect(lista.body.items[0].editada).toBe(true);
+      expect(lista.body.items[0].comentario).toBe('cambiado');
+    });
+  });
+
+  describe('Reputación', () => {
+    it('⛔ un vendedor nuevo no muestra 0,0 estrellas', async () => {
+      /**
+       * «Sin reseñas» y «promedio cero» son cosas distintas. Si las dos viajan
+       * como 0, la app termina mostrando «0,0 ★» a alguien que recién empieza,
+       * y eso se lee como pésimo.
+       */
+      const { sellerId } = await nuevaVarianteConStock(1);
+
+      const r = await call('GET', `/api/v1/sellers/${sellerId}/profile`);
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+      expect(r.body.rating).toBeNull();
+      expect(r.body.cumplimiento).toBeNull();
+      expect(r.body.ventas).toBe(0);
+      expect(r.body.esNuevo).toBe(true);
+    });
+
+    it('⛔ con una sola venta no muestra «100 % de cumplimiento»', async () => {
+      // Una división con denominador uno disfrazada de trayectoria. Un vendedor
+      // nuevo con 100 % se ve más confiable que uno con 380 ventas y 97 %.
+      const { sellerId } = await ordenEntregada();
+
+      const r = await call('GET', `/api/v1/sellers/${sellerId}/profile`);
+      expect(r.body.ventas).toBe(1);
+      expect(r.body.cumplimiento).toBeNull();
+    });
+
+    it('las ventas cuentan ENTREGAS, no pedidos pagos', async () => {
+      /**
+       * El COUNT anterior incluía desde CONFIRMED: un vendedor con veinte
+       * pedidos cobrados y ninguno entregado mostraba «20 ventas».
+       */
+      const { sellerId } = await ordenPaga(); // paga, no entregada
+
+      const r = await call('GET', `/api/v1/sellers/${sellerId}/profile`);
+      expect(r.body.ventas).toBe(0);
+    });
+
+    it('⛔ el destacado no se puede comprar: sale de las tres reglas', async () => {
+      // Un destacado que se compra es publicidad disfrazada de mérito.
+      const { sellerId } = await ordenEntregada();
+
+      const r = await call('GET', `/api/v1/sellers/${sellerId}/profile`);
+      expect(r.body.destacado).toBe(false);
+
+      // Y con los números puestos a mano, sí.
+      await prisma.seller.update({
+        where: { id: sellerId },
+        data: { salesCount: 40, cancelledCount: 1, ratingCount: 12, ratingSum: 56 },
+      });
+
+      const conHistoria = await call('GET', `/api/v1/sellers/${sellerId}/profile`);
+      expect(conHistoria.body.destacado).toBe(true);
+      expect(conHistoria.body.rating).toBeCloseTo(4.7, 1);
+      expect(conHistoria.body.cumplimiento).toBe(98);
+    });
+  });
+});

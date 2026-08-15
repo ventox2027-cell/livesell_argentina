@@ -13,10 +13,9 @@ import {
 import type { FastifyRequest } from 'fastify';
 
 import { CurrentUser, Public, type AuthenticatedUser } from '@/modules/auth/auth.guard';
-import { DomainError } from '@/shared/errors/domain.error';
 import { RateLimit } from '@/shared/http/rate-limit.guard';
 import { ZodValidationPipe } from '@/shared/http/zod-validation.pipe';
-import { MAX_BYTES, type ArchivoSubido } from '@/shared/storage/storage.provider';
+import { leerArchivoSubido } from '@/shared/storage/multipart';
 
 import {
   ChangeStoreSlugSchema,
@@ -313,7 +312,7 @@ export class CommerceController {
     @Param('productId') productId: string,
     @Req() req: FastifyRequest,
   ) {
-    const archivo = await this.leerArchivo(req);
+    const archivo = await leerArchivoSubido(req);
     return this.images.upload(user.id, productId, archivo);
   }
 
@@ -335,34 +334,4 @@ export class CommerceController {
     return this.images.reorder(user.id, productId, dto);
   }
 
-  /**
-   * Extrae el archivo de una petición multipart.
-   *
-   * `@fastify/multipart` expone `req.file()`. El `filename` que llega es del
-   * cliente y **no se usa como ruta** — sólo se pasa para registro. El nombre
-   * real lo genera `StorageProvider`.
-   */
-  private async leerArchivo(req: FastifyRequest): Promise<ArchivoSubido> {
-    const conMultipart = req as FastifyRequest & {
-      file?: () => Promise<{
-        filename: string;
-        mimetype: string;
-        toBuffer: () => Promise<Buffer>;
-      } | undefined>;
-    };
-
-    if (typeof conMultipart.file !== 'function') {
-      throw new DomainError('INVALID_FILE', 'La petición no es multipart/form-data');
-    }
-
-    const parte = await conMultipart.file();
-    if (!parte) throw new DomainError('INVALID_FILE', 'No se recibió ningún archivo');
-
-    const buffer = await parte.toBuffer();
-    if (buffer.length > MAX_BYTES) {
-      throw new DomainError('FILE_TOO_LARGE', 'La imagen supera los 10 MB');
-    }
-
-    return { buffer, filename: parte.filename, mimetype: parte.mimetype };
-  }
 }

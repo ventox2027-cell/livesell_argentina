@@ -157,6 +157,14 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<string, number>> = {
   FEATURE_PAUSED: 503,
 
   CATEGORY_NOT_FOUND: 404,
+
+  // Reseñas. Ver `stores/reputacion.ts`.
+  REVIEW_NOT_FOUND: 404,
+  /** 422: el pedido existe y es tuyo, pero todavía no lo recibiste. */
+  REVIEW_NOT_ALLOWED_YET: 422,
+  /** 409: la reseña existe, la ventana de edición se cerró. */
+  REVIEW_EDIT_WINDOW_CLOSED: 409,
+  REVIEW_ALREADY_ANSWERED: 409,
   /**
    * 422 y no 400: el pedido está bien formado, lo que falla es una regla del
    * negocio. La app lo distingue para llevar al selector de categoría en lugar

@@ -12,11 +12,28 @@ import {
   permiteRetiro,
 } from '@/modules/orders/shipping';
 import { AuditService } from '@/shared/audit/audit.service';
+import { exigirHabilitada } from '@/shared/config/banderas';
+import {
+  StorageProvider,
+  validarImagen,
+  type ArchivoSubido,
+} from '@/shared/storage/storage.provider';
 import { DomainError } from '@/shared/errors/domain.error';
 import { PrismaService } from '@/shared/prisma/prisma.service';
 import { newId } from '@/shared/utils/id';
 
 import { comoHora, estaAbierta, type EstadoDeTienda, type Franja } from './horario';
+import {
+  calcularReputacion,
+  deltaAlBorrar,
+  deltaAlEditar,
+  esDestacado,
+  exigirEntregaConfirmada,
+  NoEsTuResenaError,
+  sePuedeEditar,
+  YaNoSePuedeEditarError,
+  YaRespondisteError,
+} from './reputacion';
 
 /**
  * Tiendas: horarios, seguidores, reseñas y el perfil público del vendedor.
@@ -34,6 +51,15 @@ export class NoEncontradoError extends DomainError {
   }
 }
 
+/**
+ * Cuántas fotos entran en una reseña.
+ *
+ * Tres. Alcanzan para mostrar el problema desde dos ángulos y el detalle, y no
+ * convierten el perfil de una tienda en una galería donde las reseñas con
+ * texto quedan enterradas.
+ */
+export const MAX_FOTOS_POR_RESENA = 3;
+
 export class AccionInvalidaError extends DomainError {
   constructor(mensaje: string) {
     super('VALIDATION_FAILED', mensaje);
@@ -48,6 +74,7 @@ export class StoresService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly notifications: NotificationsService,
+    private readonly storage: StorageProvider,
   ) {}
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -324,19 +351,22 @@ export class StoresService {
     datos: { rating: number; comment?: string },
   ) {
     const orden = await this.prisma.order.findFirst({
-      where: {
-        id: orderId,
-        buyerId: userId,
-        // Sólo compras concretadas. Una orden vencida sin pagar no da derecho
-        // a opinar sobre el vendedor.
-        status: { in: ['CONFIRMED', 'PREPARING', 'READY_TO_SHIP', 'SHIPPED', 'DELIVERED'] },
+      where: { id: orderId, buyerId: userId },
+      select: {
+        id: true,
+        sellerId: true,
+        deliveredAt: true,
+        seller: { select: { userId: true } },
       },
-      select: { id: true, sellerId: true, seller: { select: { userId: true } } },
     });
 
     if (!orden) {
       throw new NoEncontradoError('una compra tuya que se pueda reseñar');
     }
+
+    // Sólo se reseña lo que se recibió, y se mira `deliveredAt` y no el
+    // estado. Ver la explicación larga en `reputacion.ts`.
+    exigirEntregaConfirmada(orden);
 
     // Nadie se reseña a sí mismo, ni comprándose a sí mismo.
     if (orden.seller.userId === userId) {
@@ -378,14 +408,231 @@ export class StoresService {
     }
   }
 
+
+  /**
+   * El vendedor responde públicamente.
+   *
+   * ═══════════════════════════════════════════════════════════════════════════
+   * UNA SOLA VEZ, Y NO SE PUEDE BORRAR
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * Sin ese límite, la respuesta se convierte en una conversación pública
+   * debajo de cada reseña — y en una discusión pública el vendedor siempre
+   * tiene la última palabra, porque el comprador ya se fue.
+   *
+   * Una respuesta, escrita en frío, y queda.
+   */
+  async responderResena(userId: string, reviewId: string, texto: string) {
+    // La pertenencia va en el WHERE: una reseña de otro vendedor simplemente
+    // no se encuentra.
+    const resena = await this.prisma.review.findFirst({
+      where: { id: reviewId, deletedAt: null, seller: { userId } },
+      select: { id: true, sellerId: true, sellerReply: true, authorId: true },
+    });
+
+    if (!resena) throw new NoEsTuResenaError();
+    if (resena.sellerReply !== null) throw new YaRespondisteError();
+
+    const limpio = texto.trim();
+    if (limpio.length < 2) {
+      throw new AccionInvalidaError('Escribí una respuesta');
+    }
+
+    const actualizada = await this.prisma.review.update({
+      where: { id: resena.id },
+      data: { sellerReply: limpio, sellerRepliedAt: new Date() },
+      select: { id: true, sellerReply: true, sellerRepliedAt: true },
+    });
+
+    await this.audit.log({
+      action: 'review.answered',
+      entityType: 'review',
+      entityId: resena.id,
+      actorId: userId,
+    });
+
+    // Quien escribió la reseña se entera. Es su reseña: si alguien le contesta
+    // en público, tiene que poder leerlo sin volver a entrar a buscarlo.
+    await this.notifications.crear({
+      userId: resena.authorId,
+      type: 'REVIEW_ANSWERED',
+      title: 'Respondieron tu opinión',
+      body: 'El vendedor contestó lo que escribiste.',
+      data: { reviewId: resena.id, sellerId: resena.sellerId },
+    });
+
+    return actualizada;
+  }
+
+  /**
+   * Editar la propia reseña, dentro de la ventana.
+   *
+   * ⚠️ El promedio del vendedor se ajusta en la MISMA transacción.
+   *
+   * `ratingSum` está denormalizado: si alguien cambia de 5 a 1 estrella y la
+   * suma no se mueve, el promedio queda con cuatro estrellas de una calificación
+   * que ya no existe. Y como nada lo recalcula solo, ese error es permanente.
+   */
+  async editarResena(
+    userId: string,
+    reviewId: string,
+    datos: { rating?: number; comment?: string },
+  ) {
+    const resena = await this.prisma.review.findFirst({
+      where: { id: reviewId, authorId: userId, deletedAt: null },
+      select: { id: true, sellerId: true, rating: true, createdAt: true },
+    });
+
+    if (!resena) throw new NoEsTuResenaError();
+    if (!sePuedeEditar(resena.createdAt)) throw new YaNoSePuedeEditarError();
+
+    const nuevoRating = datos.rating ?? resena.rating;
+    const delta = deltaAlEditar(resena.rating, nuevoRating);
+
+    const [actualizada] = await this.prisma.$transaction([
+      this.prisma.review.update({
+        where: { id: resena.id },
+        data: {
+          rating: nuevoRating,
+          ...(datos.comment !== undefined ? { comment: datos.comment.trim() || null } : {}),
+          // Visible para quien lee: una reseña editada después de que el
+          // vendedor respondió puede cambiarle el sentido a la respuesta.
+          editedAt: new Date(),
+        },
+        select: { id: true, rating: true, comment: true, editedAt: true },
+      }),
+      this.prisma.seller.update({
+        where: { id: resena.sellerId },
+        data: { ratingSum: { increment: delta.ratingSum } },
+      }),
+    ]);
+
+    return actualizada;
+  }
+
+  /**
+   * Borrar la propia reseña.
+   *
+   * Borrado lógico: se descuenta del promedio y la fila queda. Sin eso, un
+   * vendedor que consigue que le borren tres reseñas malas no deja rastro de
+   * que existieron.
+   */
+  async borrarResena(userId: string, reviewId: string) {
+    const resena = await this.prisma.review.findFirst({
+      where: { id: reviewId, authorId: userId, deletedAt: null },
+      select: { id: true, sellerId: true, rating: true, createdAt: true },
+    });
+
+    if (!resena) throw new NoEsTuResenaError();
+    if (!sePuedeEditar(resena.createdAt)) throw new YaNoSePuedeEditarError();
+
+    const delta = deltaAlBorrar(resena.rating);
+
+    await this.prisma.$transaction([
+      this.prisma.review.update({
+        where: { id: resena.id },
+        data: { deletedAt: new Date() },
+      }),
+      this.prisma.seller.update({
+        where: { id: resena.sellerId },
+        data: {
+          ratingSum: { increment: delta.ratingSum },
+          ratingCount: { increment: delta.ratingCount },
+        },
+      }),
+    ]);
+
+    return { ok: true as const };
+  }
+
+
+  /**
+   * Subir una foto a la propia reseña.
+   *
+   * ═══════════════════════════════════════════════════════════════════════════
+   * «LLEGÓ ROTO» CON FOTO ES OTRA COSA
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * Es el dato que más sirve en las dos puntas: a quien está por comprar y a
+   * quien tiene que resolver un reclamo. Un texto que dice que el producto no
+   * era el de la foto es la palabra de una persona; la foto del producto que
+   * llegó es evidencia.
+   *
+   * ─── Reutiliza todo lo del producto ───
+   *
+   * El mismo `StorageProvider`, la misma `validarImagen` que mira los bytes y
+   * no lo que declaró el cliente, y el mismo tope. No hay una segunda
+   * arquitectura de imágenes en el sistema, que es exactamente lo que pasaría
+   * si esto se hubiera escrito aparte «porque las reseñas son distintas».
+   *
+   * ⚠️ **No** lleva la bandera `PRODUCT_UPLOAD_ENABLED`. Esa existe para cerrar
+   * la carga de catálogo cuando alguien encuentra cómo subir un ejecutable
+   * disfrazado de imagen — y en ese caso hay que cerrar TODAS las subidas.
+   * Compartir la bandera confundiría dos cosas distintas: una es comercial
+   * («no queremos productos nuevos ahora») y la otra es de seguridad.
+   */
+  async subirFotoDeResena(userId: string, reviewId: string, archivo: ArchivoSubido) {
+    // Interruptor de emergencia de las subidas. Ver la nota de arriba: es la
+    // misma bandera porque el riesgo es el mismo — bytes de alguien de afuera.
+    exigirHabilitada('PRODUCT_UPLOAD_ENABLED');
+
+    // La pertenencia va en el WHERE. Una reseña ajena no se encuentra.
+    const resena = await this.prisma.review.findFirst({
+      where: { id: reviewId, authorId: userId, deletedAt: null },
+      select: { id: true, createdAt: true, _count: { select: { images: true } } },
+    });
+
+    if (!resena) throw new NoEsTuResenaError();
+
+    /**
+     * Sólo dentro de la ventana de edición.
+     *
+     * Sin esto, alguien podría agregarle una foto a una reseña de hace un año
+     * — y con la respuesta del vendedor ya escrita debajo, contestando a un
+     * texto que ahora dice otra cosa.
+     */
+    if (!sePuedeEditar(resena.createdAt)) throw new YaNoSePuedeEditarError();
+
+    if (resena._count.images >= MAX_FOTOS_POR_RESENA) {
+      throw new AccionInvalidaError(
+        `Podés subir hasta ${MAX_FOTOS_POR_RESENA} fotos por opinión`,
+      );
+    }
+
+    const mimeReal = validarImagen(archivo);
+
+    const guardado = await this.storage.guardar({
+      buffer: archivo.buffer,
+      mimeType: mimeReal,
+      prefijo: `reviews/${resena.id}`,
+    });
+
+    const imagen = await this.prisma.reviewImage.create({
+      data: {
+        id: newId('rvi'),
+        reviewId: resena.id,
+        url: guardado.url,
+        position: resena._count.images,
+      },
+      select: { id: true, url: true, position: true },
+    });
+
+    return imagen;
+  }
+
   /** Las reseñas de un vendedor. */
   async resenasDe(sellerId: string, dto: { cursor?: string; limit: number }) {
     const filas = await this.prisma.review.findMany({
-      where: { sellerId },
+      // Las borradas no se listan. Siguen en la tabla —para que no se pueda
+      // hacer desaparecer una mala sin dejar rastro— pero no se muestran.
+      where: { sellerId, deletedAt: null },
       orderBy: { createdAt: 'desc' },
       take: dto.limit + 1,
       ...(dto.cursor ? { cursor: { id: dto.cursor }, skip: 1 } : {}),
-      include: { author: { select: { firstName: true, lastName: true } } },
+      include: {
+        author: { select: { firstName: true, lastName: true } },
+        images: { orderBy: { position: 'asc' }, select: { id: true, url: true } },
+      },
     });
 
     const hayMas = filas.length > dto.limit;
@@ -400,6 +647,19 @@ export class StoresService {
         // qué quedar público en el perfil de una tienda.
         autor: `${r.author.firstName} ${r.author.lastName.charAt(0)}.`.trim(),
         fecha: r.createdAt,
+
+        /**
+         * Que fue editada se dice.
+         *
+         * Una reseña editada después de que el vendedor respondió puede
+         * cambiarle el sentido a la respuesta. Quien la lee tiene derecho a
+         * saber que el texto no es el original.
+         */
+        editada: r.editedAt !== null,
+
+        fotos: r.images.map((i) => ({ id: i.id, url: i.url })),
+
+        respuesta: r.sellerReply ? { texto: r.sellerReply, fecha: r.sellerRepliedAt } : null,
       })),
       siguienteCursor: hayMas ? (pagina[pagina.length - 1]?.id ?? null) : null,
     };
@@ -443,13 +703,18 @@ export class StoresService {
 
     const tienda = vendedor.stores[0];
 
-    const [ventas, siguiendo, estadoTienda, liveActivo] = await Promise.all([
-      this.prisma.order.count({
-        where: {
-          sellerId,
-          status: { in: ['CONFIRMED', 'PREPARING', 'READY_TO_SHIP', 'SHIPPED', 'DELIVERED'] },
-        },
-      }),
+    /**
+     * Las ventas salen del contador denormalizado, no de un COUNT.
+     *
+     * Y cuentan **entregas**, no pedidos pagos. El COUNT anterior incluía desde
+     * CONFIRMED: un vendedor con veinte pedidos cobrados y ninguno entregado
+     * mostraba «20 ventas». La diferencia entre «vendió 20 veces» y «20
+     * personas recibieron lo que compraron» es exactamente lo que alguien
+     * quiere saber antes de comprarle a un desconocido.
+     *
+     * Ver `reputacion.ts`.
+     */
+    const [siguiendo, estadoTienda, liveActivo] = await Promise.all([
       userId
         ? this.prisma.follow.findUnique({
             where: { userId_sellerId: { userId, sellerId } },
@@ -471,8 +736,12 @@ export class StoresService {
      * verificar su DNI el primer día, y alguien puede tener riesgo bajo sin
      * haber vendido nunca.
      */
+    const reputacion = calcularReputacion(vendedor);
+
     const confiable =
-      vendedor.verificationStatus === 'VERIFIED' && vendedor.riskLevel === 'LOW' && ventas >= 10;
+      vendedor.verificationStatus === 'VERIFIED' &&
+      vendedor.riskLevel === 'LOW' &&
+      reputacion.ventas >= 10;
 
     return {
       id: vendedor.id,
@@ -483,18 +752,40 @@ export class StoresService {
       coverUrl: vendedor.coverUrl,
       desdeEl: vendedor.createdAt,
 
-      // Las dos insignias, separadas.
+      /**
+       * ⚠️ TRES insignias distintas, y ninguna es la otra.
+       *
+       *   · **identidadVerificada** — sabemos quién es. Un hecho comprobable.
+       *   · **vendedorConfiable**   — tiene historial. Una reputación ganada.
+       *   · **destacado**           — cumple reglas objetivas y públicas.
+       *
+       * Ninguna de las tres se compra. Cuando exista VendoX Pro va a ser una
+       * cuarta cosa —una membresía paga— y **no puede parecerse a ninguna de
+       * éstas**: un sello comprado que se lee como verificación engaña a quien
+       * lo mira.
+       */
       identidadVerificada: vendedor.verificationStatus === 'VERIFIED',
       vendedorConfiable: confiable,
+      destacado: esDestacado(vendedor),
 
       seguidores: vendedor.followersCount,
-      // `null` y no 0: "sin reseñas" es distinto de "promedio cero".
-      rating:
-        vendedor.ratingCount > 0
-          ? Math.round((vendedor.ratingSum / vendedor.ratingCount) * 10) / 10
-          : null,
-      resenas: vendedor.ratingCount,
-      ventas,
+
+      /**
+       * `null` y no 0 cuando no hay datos suficientes.
+       *
+       * «Sin reseñas» y «promedio cero» son cosas distintas, y si las dos
+       * viajan como `0` la app no las puede distinguir: terminaría mostrando
+       * «0,0 ★» a un vendedor nuevo, que se lee como pésimo.
+       *
+       * Los umbrales están en `reputacion.ts`: tres reseñas para mostrar
+       * promedio, cinco operaciones para mostrar cumplimiento. Un «100 % de
+       * cumplimiento» sobre una sola venta no es información.
+       */
+      rating: reputacion.promedio,
+      resenas: reputacion.resenas,
+      ventas: reputacion.ventas,
+      cumplimiento: reputacion.cumplimiento,
+      esNuevo: reputacion.esNuevo,
 
       /** `undefined` si no hay sesión: la app no muestra el botón. */
       loSigo: userId ? siguiendo !== null : undefined,

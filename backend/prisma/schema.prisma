@@ -929,6 +929,19 @@ model Seller {
   ratingSum       Int                    @default(0) @map("rating_sum")
   ratingCount     Int                    @default(0) @map("rating_count")
 
+  /// Órdenes que llegaron a DELIVERED. No «ventas»: **entregas**.
+  ///
+  /// Una venta cobrada y después cancelada no es una venta cumplida y no
+  /// cuenta. Es la diferencia entre «vendió 300 veces» y «300 personas
+  /// recibieron lo que compraron».
+  salesCount     Int @default(0) @map("sales_count")
+
+  /// Las que el VENDEDOR canceló después de cobrar.
+  ///
+  /// No incluye las que canceló el comprador ni las que vencieron sin pagar:
+  /// eso no dice nada del vendedor. Con `salesCount` sale el cumplimiento.
+  cancelledCount Int @default(0) @map("cancelled_count")
+
   liveSessions LiveSession[]
   followers    Follow[]
   reviews      Review[]
@@ -2404,15 +2417,58 @@ model Review {
 
   comment String?
 
+  /// La respuesta pública del vendedor. Una sola, y del vendedor de esa orden.
+  ///
+  /// Una reseña sin derecho a réplica es un juicio en ausencia: «llegó tarde»
+  /// sin poder contar que la dirección estaba mal.
+  sellerReply      String?   @map("seller_reply")
+  sellerRepliedAt  DateTime? @map("seller_replied_at")
+
+  /// Cuándo se editó. **Visible para quien lee.**
+  ///
+  /// Una reseña editada después de que el vendedor respondió puede cambiarle el
+  /// sentido a la respuesta, y quien la lee tiene derecho a saberlo.
+  editedAt DateTime? @map("edited_at")
+
+  /// Borrado lógico. Se descuenta del promedio y la fila queda.
+  ///
+  /// Sin esto, un vendedor que consigue que le borren tres reseñas malas no
+  /// deja rastro de que existieron.
+  deletedAt DateTime? @map("deleted_at")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
   order  Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
   seller Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
   author User   @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  images ReviewImage[]
 
   @@index([sellerId, createdAt])
+  @@index([sellerId, deletedAt, createdAt(sort: Desc)])
   @@map("reviews")
+}
+
+/// Una foto de una reseña.
+///
+/// «Llegó roto» con una foto es una cosa y sin foto es otra. Es el dato que más
+/// sirve tanto a quien decide comprar como a quien resuelve un reclamo.
+///
+/// Misma forma que `ProductImage` y mismo almacenamiento: no hay una segunda
+/// arquitectura de imágenes en el sistema.
+model ReviewImage {
+  id       String @id // rvi_<ulid>
+  reviewId String @map("review_id")
+
+  url      String
+  position Int    @default(0) @db.SmallInt
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  review Review @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+
+  @@index([reviewId, position])
+  @@map("review_images")
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2494,6 +2550,14 @@ enum NotificationType {
   PAYMENT_REJECTED
   /// Hay novedades en un ticket de soporte.
   SUPPORT_REPLY
+  /// El vendedor respondió una reseña que escribiste.
+  REVIEW_ANSWERED
+  /// Al vendedor: alguien opinó sobre una compra.
+  REVIEW_RECEIVED
+  /// Un producto guardado volvió a tener stock.
+  SAVED_BACK_IN_STOCK
+  /// Un vivo programado está por empezar.
+  LIVE_SOON
   /// Aviso de la plataforma: verificación, suspensión, cambios de cuenta.
   ACCOUNT
 }
