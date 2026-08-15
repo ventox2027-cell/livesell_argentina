@@ -7,6 +7,8 @@ import { RateLimit } from '@/shared/http/rate-limit.guard';
 import { ZodValidationPipe } from '@/shared/http/zod-validation.pipe';
 
 import { CurrentUser, Public, type AuthenticatedUser } from './auth.guard';
+import { ExportacionService } from '@/modules/users/exportacion.service';
+
 import { AuthService } from './auth.service';
 import {
   AppleLoginSchema,
@@ -36,6 +38,7 @@ export class AuthController {
   constructor(
     private readonly auth: AuthService,
     private readonly sessions: SessionsService,
+    private readonly exportacion: ExportacionService,
   ) {}
 
   /**
@@ -182,16 +185,46 @@ export class AuthController {
   }
 
   /**
+   * "Dame todo lo que tenés sobre mí."
+   *
+   * Es un derecho, no una función de conveniencia: la Ley 25.326 lo exige. Sin
+   * un endpoint, cada pedido lo resuelve alguien del equipo con una consulta
+   * SQL, que es exactamente la forma de que salga lo que no corresponde.
+   *
+   * ─── Por qué el límite es tan bajo ───
+   *
+   * Tres por hora. Cada llamada arma en memoria el paquete más completo de
+   * datos personales que este sistema produce y toca ocho tablas; y nadie
+   * necesita el suyo más seguido que eso.
+   */
+  @RateLimit({ limit: 3, windowSec: 3600, bucket: 'user:export' })
+  @Get('me/export')
+  exportarDatos(@CurrentUser() user: AuthenticatedUser) {
+    return this.exportacion.exportar(user.id);
+  }
+
+  /**
    * Cierre de cuenta.
    *
    * Borrado LÓGICO. Una cuenta con órdenes no se puede borrar de verdad sin
    * romper el historial de compras del vendedor y la contabilidad. Se marca,
    * se cortan todas las sesiones, y el borrado real —si corresponde— se hace
    * después con un proceso que sabe qué se puede eliminar y qué no.
+   *
+   * ⚠️ El ORDEN de estas dos líneas importa y estaba al revés.
+   *
+   * Se cerraban todas las sesiones y DESPUÉS se intentaba cerrar la cuenta.
+   * Desde que el cierre puede fallar —hay pedidos en curso, ver
+   * `users/cierre-de-cuenta.ts`— eso dejaba a la persona expulsada de todos sus
+   * dispositivos con la cuenta todavía viva: perdía el acceso sin conseguir lo
+   * que pidió.
+   *
+   * Primero se cierra la cuenta. Si eso falla, no pasó nada.
    */
   @Delete('me')
   async deleteAccount(@CurrentUser() user: AuthenticatedUser, @Req() req: FastifyRequest) {
+    const resultado = await this.auth.closeAccount(user.id);
     await this.sessions.logoutAll(user.id, this.ctx(req));
-    return this.auth.closeAccount(user.id);
+    return resultado;
   }
 }

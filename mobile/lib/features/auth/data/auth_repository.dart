@@ -213,8 +213,33 @@ class AuthRepository {
   }
 
   Future<void> cerrarCuenta() async {
-    await _api.delete<Map<String, dynamic>>('/auth/me');
+    final res = await _api.delete<Map<String, dynamic>>('/auth/me');
+
+    /**
+     * ⚠️ Se comprueba el estado antes de limpiar, y antes NO se hacía.
+     *
+     * `ApiClient` usa `validateStatus: s < 500`, así que un 409 —hay pedidos en
+     * curso, el backend no cerró nada— volvía por acá como si todo hubiera
+     * salido bien. La app borraba la sesión local y mostraba "tu cuenta fue
+     * eliminada" sobre una cuenta que seguía viva, con las ventas pendientes
+     * intactas y sin forma de volver a entrar hasta iniciar sesión de nuevo.
+     */
+    if (res.statusCode != 200) {
+      throw AuthException(_mensajeDeError(res), codigo: _codigoDeError(res));
+    }
+
     await _tokens.limpiar();
+  }
+
+  /// Todo lo que el backend guarda sobre esta persona.
+  ///
+  /// Es un derecho, no una función de conveniencia: lo exige la Ley 25.326.
+  Future<Map<String, dynamic>> exportarMisDatos() async {
+    final res = await _api.get<Map<String, dynamic>>('/auth/me/export');
+    if (res.statusCode != 200 || res.data == null) {
+      throw AuthException(_mensajeDeError(res), codigo: _codigoDeError(res));
+    }
+    return res.data!;
   }
 
   List<DatoFaltante> _faltantes(Object? crudo) {

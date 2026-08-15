@@ -2,6 +2,7 @@ import { Global, Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 
 import { RateLimitGuard } from '@/shared/http/rate-limit.guard';
+import { UsersModule } from '@/modules/users/users.module';
 
 import { AuthController } from './auth.controller';
 import { AuthGuard } from './auth.guard';
@@ -29,6 +30,7 @@ import { SessionsService } from './sessions.service';
  */
 @Global()
 @Module({
+  imports: [UsersModule],
   controllers: [AuthController],
   providers: [
     AuthService,

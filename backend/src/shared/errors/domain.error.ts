@@ -75,6 +75,14 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<string, number>> = {
   // el estado actual, no un cuerpo mal formado.
   BIRTH_DATE_ALREADY_SET: 409,
 
+  // Cierre de cuenta.
+  //
+  // 409 y no 403: no es que no tenga permiso para irse —lo tiene, y la Ley
+  // 25.326 se lo garantiza— sino que hay operaciones abiertas ahora mismo.
+  // Cambia con el tiempo sin que la persona haga nada, que es justamente lo que
+  // significa un conflicto de estado.
+  ACCOUNT_HAS_OPEN_ORDERS: 409,
+
   // Moderación
   //
   // 409 y no 400: el reporte es válido, lo que pasa es que esta persona ya

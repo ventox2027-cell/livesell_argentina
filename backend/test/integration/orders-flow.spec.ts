@@ -2598,3 +2598,237 @@ describe('Mayoría de edad', () => {
     expect(me.body.birthDate).toBeNull();
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LOS DATOS SON DE LA PERSONA
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Exportación y cierre de cuenta.
+ *
+ * Los dos derechos que la Ley 25.326 obliga a dar: acceder a los propios datos
+ * (art. 14) e irse (art. 16). Ninguno de los dos estaba resuelto de verdad:
+ * la exportación no existía, y el cierre era un `DELETE` sin condiciones que
+ * dejaba a un vendedor cobrar y desaparecer.
+ */
+describe('Derechos sobre los propios datos', () => {
+  /** Un comprador con una compra entregada, para tener algo que exportar. */
+  async function conHistorial() {
+    const { variantId, sellerToken } = await nuevaVarianteConStock(5);
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, variantId));
+
+    proveedor.proximo = { status: 'approved' };
+    await pagar(comprador.token, orden.body.id);
+
+    return { comprador, orderId: orden.body.id as string, sellerToken };
+  }
+
+  describe('Exportar', () => {
+    it('trae el perfil, las direcciones y las compras', async () => {
+      const { comprador } = await conHistorial();
+
+      const r = await call('GET', '/api/v1/auth/me/export', { token: comprador.token });
+
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+      expect(r.body.usuario.id).toBe(comprador.userId);
+      expect(r.body.direcciones.length).toBeGreaterThan(0);
+      expect(r.body.compras.items.length).toBeGreaterThan(0);
+      expect(r.body.compras.truncado).toBe(false);
+      // Y avisa de qué se trata el archivo que se está bajando.
+      expect(r.body.aviso).toContain('datos personales');
+    });
+
+    it('⛔ no trae ningún token ni secreto', async () => {
+      /**
+       * El test más importante de este bloque.
+       *
+       * Una exportación es el paquete más completo de datos personales que el
+       * sistema produce, y es el lugar donde un `select` de más pasa
+       * inadvertido: nadie revisa un JSON de doscientas líneas.
+       *
+       * Se busca sobre el texto entero, no sobre campos concretos: así también
+       * falla si mañana alguien agrega una relación que arrastra un token.
+       */
+      const { comprador } = await conHistorial();
+
+      const r = await call('GET', '/api/v1/auth/me/export', { token: comprador.token });
+      const texto = JSON.stringify(r.body);
+
+      for (const prohibido of [
+        'APP_USR-', // access token de Mercado Pago
+        'TG-', // refresh token de Mercado Pago
+        'accessToken',
+        'refreshToken',
+        'pushToken',
+        'ciphertext',
+        'docNumberHash',
+        'taxIdHash',
+        'riskLevel',
+      ]) {
+        expect(texto.includes(prohibido), `no debería aparecer ${prohibido}`).toBe(false);
+      }
+    });
+
+    it('⛔ no trae el `subject` de la identidad', async () => {
+      /**
+       * El `sub` de Google es el identificador estable con el que se inicia
+       * sesión. A la persona no le sirve de nada y a quien le robe el archivo
+       * le sirve muchísimo.
+       */
+      const { comprador } = await conHistorial();
+
+      const r = await call('GET', '/api/v1/auth/me/export', { token: comprador.token });
+
+      expect(JSON.stringify(r.body)).not.toContain('subject');
+    });
+
+    it('⛔ el vendedor NO se lleva la dirección de quien le compró', async () => {
+      /**
+       * Sus ventas son suyas; la dirección de entrega de quien compró, no. Que
+       * alguien haya comprado en su tienda no le transfiere sus datos.
+       *
+       * Es el error clásico del "exportá todo lo relacionado": una consulta con
+       * `include` y de golpe cada vendedor se puede bajar el domicilio de todos
+       * sus clientes en un archivo.
+       */
+      const { sellerToken } = await conHistorial();
+
+      const r = await call('GET', '/api/v1/auth/me/export', { token: sellerToken });
+
+      expect(r.status).toBe(200);
+      expect(r.body.ventas.items.length).toBeGreaterThan(0);
+      expect(JSON.stringify(r.body.ventas)).not.toContain('shippingAddress');
+      expect(JSON.stringify(r.body.ventas)).not.toContain('Av. Corrientes');
+    });
+
+    it('el vendedor SÍ se lleva el registro de sus ventas', async () => {
+      // La contracara: recortar de más sería no cumplir el pedido de acceso.
+      const { sellerToken } = await conHistorial();
+
+      const r = await call('GET', '/api/v1/auth/me/export', { token: sellerToken });
+      const venta = r.body.ventas.items[0];
+
+      expect(venta.reference).toBeTruthy();
+      expect(venta.grossAmount).toBeGreaterThan(0);
+      expect(venta.platformFeeAmount).toBeGreaterThanOrEqual(0);
+      expect(venta.items.length).toBeGreaterThan(0);
+      // Su tienda y sus productos también.
+      expect(r.body.vendedor.stores.length).toBeGreaterThan(0);
+      expect(r.body.vendedor.productos.length).toBeGreaterThan(0);
+    });
+
+    it('⛔ sin sesión no se exporta nada', async () => {
+      const r = await call('GET', '/api/v1/auth/me/export');
+      expect(r.status).toBe(401);
+    });
+
+    it('queda registrado que se exportó', async () => {
+      /**
+       * Si mañana el archivo aparece filtrado, la bitácora dice quién lo pidió
+       * y cuándo. Y si alguna vez alguien lo pide con una sesión robada, es el
+       * único rastro que va a quedar.
+       */
+      const { comprador } = await conHistorial();
+
+      await call('GET', '/api/v1/auth/me/export', { token: comprador.token });
+
+      const registros = await prisma.auditLog.count({
+        where: { entityId: comprador.userId, action: 'user.data_exported' },
+      });
+      expect(registros).toBe(1);
+    });
+  });
+
+  describe('Cerrar la cuenta', () => {
+    it('⛔ un vendedor con una venta sin entregar no puede irse', async () => {
+      /**
+       * El agujero concreto: cobrar diez pedidos, tocar "eliminar cuenta" y
+       * desaparecer. Diez personas con la plata puesta y del otro lado una
+       * cuenta anonimizada sin forma de contactar a nadie.
+       */
+      const { sellerToken } = await conHistorial();
+
+      const r = await call('DELETE', '/api/v1/auth/me', { token: sellerToken });
+
+      expect(r.status).toBe(409);
+      expect(r.body.error.code).toBe('ACCOUNT_HAS_OPEN_ORDERS');
+      expect(r.body.error.message).toContain('ya pagaron');
+      expect(r.body.error.details.ventasComoVendedor).toBeGreaterThan(0);
+    });
+
+    it('⛔ y su sesión NO se cierra cuando el cierre falla', async () => {
+      /**
+       * El orden de las dos operaciones importaba y estaba al revés: se
+       * cerraban todas las sesiones y después se intentaba cerrar la cuenta.
+       * La persona perdía el acceso a todos sus dispositivos sin conseguir lo
+       * que había pedido.
+       */
+      const { sellerToken } = await conHistorial();
+
+      const fallido = await call('DELETE', '/api/v1/auth/me', { token: sellerToken });
+      expect(fallido.status).toBe(409);
+
+      // El token sigue sirviendo.
+      const me = await call('GET', '/api/v1/auth/me', { token: sellerToken });
+      expect(me.status).toBe(200);
+    });
+
+    it('⛔ un comprador con un pedido en camino tampoco', async () => {
+      const { comprador } = await conHistorial();
+
+      const r = await call('DELETE', '/api/v1/auth/me', { token: comprador.token });
+
+      expect(r.status).toBe(409);
+      expect(r.body.error.message).toContain('Mis pedidos');
+    });
+
+    it('sin nada en curso, se cierra y se anonimiza', async () => {
+      const usuario = await nuevoUsuario();
+
+      const r = await call('DELETE', '/api/v1/auth/me', { token: usuario.token });
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+
+      const fila = await prisma.user.findUniqueOrThrow({ where: { id: usuario.userId } });
+      expect(fila.status).toBe('deleted');
+      expect(fila.deletedAt).not.toBeNull();
+      expect(fila.email).toContain('cuenta.invalid');
+      expect(fila.phoneE164).toBeNull();
+
+      /**
+       * Y la fecha de nacimiento también se va.
+       *
+       * Se olvidaba. Sola no identifica a nadie, pero cruzada con las órdenes
+       * —que sobreviven, con la dirección de entrega adentro— sí.
+       */
+      expect(fila.birthDate).toBeNull();
+      // La constancia de que se declaró queda: es el registro de que se
+      // preguntó, y no dice nada sobre la persona.
+      expect(fila.birthDateDeclaredAt).not.toBeNull();
+    });
+
+    it('una vez entregado el pedido, el vendedor sí puede irse', async () => {
+      /**
+       * El bloqueo es temporal, no una retención. Convertir "tenés un pedido en
+       * camino" en "no te podés ir nunca" sería usar una regla legítima para
+       * atrapar gente.
+       */
+      const { comprador, orderId, sellerToken } = await conHistorial();
+
+      for (const estado of ['PREPARING', 'READY_TO_SHIP', 'SHIPPED']) {
+        await call('PATCH', `/api/v1/seller/orders/${orderId}/fulfillment`, {
+          token: sellerToken,
+          body: { status: estado },
+        });
+      }
+      const vista = await call('GET', `/api/v1/orders/${orderId}`, { token: comprador.token });
+      await call('POST', `/api/v1/seller/orders/${orderId}/delivery-confirmation`, {
+        token: sellerToken,
+        body: { code: vista.body.deliveryCode as string },
+      });
+
+      const r = await call('DELETE', '/api/v1/auth/me', { token: sellerToken });
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+    });
+  });
+});

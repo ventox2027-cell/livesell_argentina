@@ -4,6 +4,11 @@ import { Prisma, type User } from '@prisma/client';
 import { env } from '@/config/env.schema';
 import { DomainError } from '@/shared/errors/domain.error';
 import {
+  CuentaConOperacionesEnCursoError,
+  ESTADOS_QUE_IMPIDEN_CERRAR,
+  puedeCerrarCuenta,
+} from '@/modules/users/cierre-de-cuenta';
+import {
   FechaDeNacimientoInvalidaError,
   FechaDeNacimientoYaDeclaradaError,
   fechaDeNacimientoInvalida,
@@ -406,6 +411,35 @@ export class AuthService {
    * usarse —alguien que se va y vuelve— sin chocar con el índice UNIQUE.
    */
   async closeAccount(userId: string): Promise<{ ok: true }> {
+    /**
+     * Nadie se va con operaciones abiertas.
+     *
+     * El agujero que esto tapa: un vendedor cobraba diez pedidos, tocaba
+     * "eliminar cuenta" y desaparecía. Diez personas con la plata puesta y del
+     * otro lado una cuenta anonimizada sin forma de contactar a nadie.
+     *
+     * El bloqueo es temporal y explicado, no una retención: la Ley 25.326 da el
+     * derecho a irse y convertir "tenés un pedido en camino" en "no te podés ir
+     * nunca" sería usar una regla legítima para atrapar gente. Ver
+     * `users/cierre-de-cuenta.ts`.
+     */
+    const [comoComprador, comoVendedor] = await Promise.all([
+      this.prisma.order.count({
+        where: { buyerId: userId, status: { in: [...ESTADOS_QUE_IMPIDEN_CERRAR] } },
+      }),
+      this.prisma.order.count({
+        where: {
+          seller: { userId },
+          status: { in: [...ESTADOS_QUE_IMPIDEN_CERRAR] },
+        },
+      }),
+    ]);
+
+    const operaciones = { comoComprador, comoVendedor };
+    if (!puedeCerrarCuenta(operaciones)) {
+      throw new CuentaConOperacionesEnCursoError(operaciones);
+    }
+
     await this.prisma.$transaction(async (tx) => {
       const user = await tx.user.findUniqueOrThrow({ where: { id: userId } });
       await tx.user.update({
@@ -419,6 +453,17 @@ export class AuthService {
           avatarUrl: null,
           firstName: 'Cuenta',
           lastName: 'eliminada',
+          /**
+           * La fecha de nacimiento también se va.
+           *
+           * Se olvidaba, y es de los datos más personales que guardamos: sola
+           * no identifica a nadie, pero cruzada con las órdenes —que sí
+           * sobreviven, con la dirección de entrega adentro— sí.
+           *
+           * La constancia de que se declaró queda: es el registro de que se
+           * preguntó, y no dice nada sobre la persona.
+           */
+          birthDate: null,
         },
       });
       // Las identidades se borran: si no, volver a entrar con Google

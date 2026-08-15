@@ -1,6 +1,10 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:share_plus/share_plus.dart';
 
+import '../../auth/data/auth_repository.dart';
 import '../../notifications/data/notifications_api.dart';
 import '../../notifications/presentation/notifications_screen.dart';
 import '../../../core/config/runtime_config.dart';
@@ -81,9 +85,24 @@ class ProfileScreen extends ConsumerWidget {
           ),
           _Fila(icono: Icons.mail_outline_rounded, texto: 'Email', detalle: u.email),
           _Fila(
+            icono: Icons.cake_outlined,
+            texto: 'Fecha de nacimiento',
+            // Se muestra pero no se puede tocar: el backend rechaza el cambio y
+            // ofrecer un campo que va a fallar es peor que no ofrecerlo.
+            detalle: u.fechaDeNacimiento == null
+                ? 'Se pide en tu primera compra'
+                : _enCastellano(u.fechaDeNacimiento!),
+          ),
+          _Fila(
             icono: Icons.devices_outlined,
             texto: 'Sesiones activas',
             onTap: () => _verSesiones(context, ref),
+          ),
+          _Fila(
+            icono: Icons.download_outlined,
+            texto: 'Descargar mis datos',
+            detalle: 'Todo lo que guardamos sobre vos',
+            onTap: () => _descargarMisDatos(context, ref),
           ),
 
           const SizedBox(height: Gap.xl),
@@ -129,6 +148,17 @@ class ProfileScreen extends ConsumerWidget {
     );
   }
 
+  /// `1990-05-20` → `20/05/1990`.
+  ///
+  /// El backend manda ISO porque es lo que no se malinterpreta entre sistemas.
+  /// Acá se muestra como se escribe una fecha en Argentina: nadie lee su fecha
+  /// de nacimiento al revés.
+  String _enCastellano(String iso) {
+    final p = iso.split('-');
+    if (p.length != 3) return iso;
+    return '${p[2]}/${p[1]}/${p[0]}';
+  }
+
   Future<void> _cerrarSesion(BuildContext context, WidgetRef ref) async {
     await ref.read(sesionProvider.notifier).cerrarSesion();
   }
@@ -157,7 +187,62 @@ class ProfileScreen extends ConsumerWidget {
     );
 
     if (confirma != true) return;
-    await ref.read(sesionProvider.notifier).cerrarCuenta();
+
+    try {
+      await ref.read(sesionProvider.notifier).cerrarCuenta();
+    } on AuthException catch (e) {
+      if (!context.mounted) return;
+      /**
+       * El backend puede negarse: hay pedidos en curso.
+       *
+       * Se muestra en un diálogo y no en un cartelito: el mensaje explica
+       * cuántas operaciones quedan y qué hacer, y eso no entra ni se lee en
+       * tres segundos.
+       */
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: AppColor.superficie,
+          title: const Text('Todavía no'),
+          content: Text(
+            e.mensaje,
+            style: const TextStyle(color: AppColor.textoSuave, height: 1.45),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Entendido')),
+          ],
+        ),
+      );
+    } catch (_) {
+      if (context.mounted) AppSnack.error(context, 'No pudimos eliminar la cuenta. Probá de nuevo.');
+    }
+  }
+
+  /// Descarga todo lo que el backend guarda sobre esta persona.
+  ///
+  /// ─── Por qué se muestra en pantalla y no se guarda un archivo ───
+  ///
+  /// Guardar en el teléfono pide permisos de almacenamiento, un selector de
+  /// carpeta y manejo de errores por sistema operativo. Compartirlo con la hoja
+  /// nativa deja que la persona elija a dónde va —Drive, correo, notas— y es
+  /// una línea de código.
+  Future<void> _descargarMisDatos(BuildContext context, WidgetRef ref) async {
+    AppSnack.info(context, 'Preparando tus datos…');
+    try {
+      final datos = await ref.read(authRepositoryProvider).exportarMisDatos();
+      if (!context.mounted) return;
+
+      // Con sangría: el archivo lo puede llegar a leer una persona, no sólo un
+      // programa. Un JSON en una sola línea es ilegible.
+      const codificador = JsonEncoder.withIndent('  ');
+      await Share.share(codificador.convert(datos), subject: 'Mis datos de VendoX');
+    } on AuthException catch (e) {
+      if (context.mounted) AppSnack.error(context, e.mensaje);
+    } catch (_) {
+      if (context.mounted) {
+        AppSnack.error(context, 'No pudimos preparar tus datos. Probá de nuevo.');
+      }
+    }
   }
 
   Future<void> _verSesiones(BuildContext context, WidgetRef ref) async {
