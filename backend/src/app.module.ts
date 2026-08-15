@@ -27,6 +27,7 @@ import { RedisModule } from '@/shared/redis/redis.module';
 import { StorageModule } from '@/shared/storage/storage.module';
 import { AdminModule } from '@/modules/admin/admin.module';
 import { SellersModule } from '@/modules/sellers/sellers.module';
+import { LandingModule } from '@/modules/landing/landing.module';
 import { LiveModule } from '@/modules/live/live.module';
 import { StoresModule } from '@/modules/stores/stores.module';
 
@@ -69,6 +70,7 @@ function optionalModules(): DynamicModule['imports'] {
     SupportModule,
     OrdersModule,
     SellersModule,
+    LandingModule,
     LiveModule,
     StoresModule,
     AdminModule,

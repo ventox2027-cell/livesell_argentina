@@ -205,6 +205,23 @@ function pngDePrueba(): Buffer {
   ]);
 }
 
+
+/**
+ * Como , pero devuelve la respuesta cruda.
+ *
+ *  parsea el cuerpo como JSON y descarta las cabeceras, que es lo
+ * correcto para una API. Las páginas de enlaces compartidos devuelven HTML y
+ * lo que hay que verificar es justamente el  y el
+ * .
+ */
+async function llamarCrudo(method: string, url: string) {
+  const res = await (app as NestFastifyApplication)
+    .getHttpAdapter()
+    .getInstance()
+    .inject({ method: method as never, url });
+  return { status: res.statusCode, headers: res.headers, body: res.body };
+}
+
 async function crearProducto(token: string, extra: Record<string, unknown> = {}) {
   n += 1;
 
@@ -3042,5 +3059,158 @@ describe('Filtros del feed', () => {
     const ids = (r.body.items as { id: string }[]).map((p) => p.id);
     expect(ids).toContain(objetivo.id);
     expect(ids).toHaveLength(1);
+  });
+});
+
+describe('Enlaces compartidos', () => {
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * ESTOS ENLACES DABAN 404
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * `compartir.ts` viene generando `vendox.com.ar/p/…` desde hace meses, y su
+   * propio comentario avisaba que la página no existía. Cada producto
+   * compartido por WhatsApp llevaba a una pantalla de error — y compartir es
+   * justamente cómo llega gente que todavía no tiene la app.
+   */
+
+  /** Un producto publicado, con stock y su vendedor. */
+  async function productoCompartible(stock = 3) {
+    const v = await nuevoVendedor();
+    const p = await crearProducto(v.token, { status: 'ACTIVE', categoryId: 'cat_otros' });
+    await prisma.inventory.update({
+      where: { productVariantId: p.variants[0].id as string },
+      data: { onHand: stock },
+    });
+    return { productId: p.id as string, sellerToken: v.token, sellerId: v.seller.id as string };
+  }
+
+  it('⛔ el enlace que genera compartir ABRE una página', async () => {
+    /**
+     * Se toma la URL del endpoint de compartir y se pide esa misma ruta. Es el
+     * test que ata las dos mitades: si mañana cambia el formato en
+     * `compartir.ts` y la ruta no, esto falla.
+     */
+    const { productId } = await productoCompartible(3);
+    const persona = await nuevoUsuario();
+
+    const enlace = await call('GET', `/api/v1/share/product/${productId}`, {
+      token: persona.token,
+    });
+    expect(enlace.status).toBe(200);
+
+    const ruta = new URL(enlace.body.url as string).pathname;
+    const pagina = await llamarCrudo('GET', ruta);
+
+    expect(pagina.status, `la ruta ${ruta} no responde`).toBe(200);
+  });
+
+  it('la página de un producto trae las etiquetas de previsualización', async () => {
+    const { productId } = await productoCompartible(3);
+
+    const r = await llamarCrudo('GET', `/p/${productId}`);
+    expect(r.status).toBe(200);
+
+    const html = r.body;
+    expect(html).toContain('property="og:title"');
+    expect(html).toContain('property="og:url"');
+    expect(html).toContain('VendoX');
+  });
+
+  it('⛔ un producto pausado NO tiene página', async () => {
+    /**
+     * Reutiliza `PRODUCTO_COMPRABLE`, el mismo filtro del feed. Si la página
+     * tuviera su propio criterio, una sanción de moderación se podría esquivar
+     * compartiendo el enlace.
+     */
+    const { productId, sellerToken } = await productoCompartible(1);
+
+    await call('PATCH', `/api/v1/products/${productId}`, {
+      token: sellerToken,
+      body: { status: 'PAUSED' },
+    });
+
+    const r = await llamarCrudo('GET', `/p/${productId}`);
+    expect(r.status).toBe(404);
+    expect(r.body).toContain('ya no está disponible');
+  });
+
+  it('⛔ y la página de «ya no está» no dice por qué', async () => {
+    // «Este producto fue despublicado» filtra una decisión del vendedor a
+    // cualquiera que tenga el enlace.
+    const r = await llamarCrudo('GET', '/p/prd_no_existe');
+    expect(r.status).toBe(404);
+
+    const html = (r.body).toLowerCase();
+    for (const filtracion of ['despublicado', 'suspendido', 'moderación']) {
+      expect(html).not.toContain(filtracion);
+    }
+  });
+
+  it('⛔ la página NO muestra el stock exacto', async () => {
+    /**
+     * Es la misma regla que el feed: publicar el stock de cada variante le
+     * regala a la competencia el ritmo de ventas de un vendedor. En una página
+     * pública sin sesión sería todavía más fácil de raspar.
+     */
+    const { productId } = await productoCompartible(7);
+
+    const html = (await llamarCrudo('GET', `/p/${productId}`)).body;
+    expect(html).toContain('Disponible');
+    expect(html).not.toContain('7 unidades');
+    expect(html).not.toMatch(/quedan\s*7/i);
+  });
+
+  it('un vivo al aire se anuncia como tal', async () => {
+    const v = await productoCompartible(1);
+    const tienda = await prisma.store.findFirstOrThrow({ where: { sellerId: v.sellerId } });
+
+    const vivo = await prisma.liveSession.create({
+      data: {
+        id: `liv_land${Date.now().toString(36)}`,
+        sellerId: v.sellerId,
+        storeId: tienda.id,
+        title: 'Vendiendo ahora',
+        roomName: `room-land-${Date.now()}`,
+        state: 'LIVE',
+        startedAt: new Date(),
+      },
+    });
+
+    const html = (await llamarCrudo('GET', `/v/${vivo.id}`)).body;
+    expect(html).toContain('EN VIVO AHORA');
+    expect(html).toContain('Vendiendo ahora');
+  });
+
+  it('⛔ no se indexa en buscadores', async () => {
+    /**
+     * Estas páginas existen para que un enlace compartido se abra, no para
+     * posicionar. Dejarlas indexar llenaría Google de productos agotados y
+     * vivos terminados con el nombre de VendoX al lado.
+     */
+    const { productId } = await productoCompartible(1);
+    const r = await llamarCrudo('GET', `/p/${productId}`);
+    expect(r.headers['x-robots-tag']).toContain('noindex');
+  });
+
+  it('el HTML se sirve como HTML, no como JSON', async () => {
+    // Sin el content-type correcto, el navegador muestra el código fuente.
+    const { productId } = await productoCompartible(1);
+    const r = await llamarCrudo('GET', `/p/${productId}`);
+    expect(r.headers['content-type']).toContain('text/html');
+  });
+
+  it('⛔ assetlinks está vacío hasta que exista la clave de firma', async () => {
+    /**
+     * Devolver una huella inventada sería peor que no devolver nada: Android
+     * la compara con la real y falla en silencio, y quien depure eso va a
+     * mirar el manifiesto durante horas antes de sospechar de un JSON.
+     *
+     * Con la lista vacía, los enlaces abren la página web. Está incompleto, no
+     * roto.
+     */
+    const r = await call('GET', '/.well-known/assetlinks.json');
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual([]);
   });
 });

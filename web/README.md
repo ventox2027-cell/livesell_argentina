@@ -42,6 +42,33 @@ Si el hosting no resuelve `carpeta/index.html` automáticamente, hay que activar
 esa opción o renombrar los archivos a `privacidad.html` y `eliminar-cuenta.html`
 y cambiar las URLs declaradas.
 
+## ⚠️ Las páginas de enlaces compartidos NO están acá
+
+`/p/:id`, `/v/:id`, `/t/:slug` y `/u/:slug` —las que se abren al tocar un enlace
+compartido por WhatsApp— **las sirve el backend**, no esta carpeta.
+
+El motivo es que la previsualización del chat la arma un robot que **no ejecuta
+JavaScript**. Las etiquetas `og:` tienen que venir ya escritas en el HTML que
+responde el servidor, con el nombre del producto, su foto y su precio adentro:
+una página estática que pide los datos al cargar le muestra al robot una página
+vacía, y el enlace aparece pelado en el chat.
+
+**Al configurar el hosting**, esas cuatro rutas y
+`/.well-known/assetlinks.json` tienen que ir al backend y no a los archivos
+estáticos. En Cloudflare Pages se hace con un archivo `_redirects`:
+
+```
+/p/*  https://API/p/:splat  200
+/v/*  https://API/v/:splat  200
+/t/*  https://API/t/:splat  200
+/u/*  https://API/u/:splat  200
+/.well-known/assetlinks.json  https://API/.well-known/assetlinks.json  200
+```
+
+⚠️ El `200` del final es lo que importa: hace un proxy, no una redirección. Con
+un `302`, WhatsApp sigue el salto y muestra el dominio del backend en la
+previsualización en lugar de vendox.com.ar.
+
 ## Antes de publicar
 
 - [ ] Que `privacidad@vendox.com.ar` **exista y alguien lo lea**. La página

@@ -751,6 +751,22 @@ export const envSchema = z
     SENTRY_TRACES_SAMPLE_RATE: z.coerce.number().min(0).max(1).default(0.1),
     METRICS_ENABLED: envBoolean(true),
 
+    /**
+     * Las huellas SHA-256 de las claves que firman la APK, separadas por coma.
+     *
+     * Sirven para un solo archivo: `/.well-known/assetlinks.json`, que es lo
+     * que Android lee para permitir que la app abra los enlaces de
+     * vendox.com.ar en vez del navegador.
+     *
+     * ⛔ Vacío hasta que exista la clave de firma. Con esto vacío los enlaces
+     * abren la página web, que funciona: está incompleto, no roto.
+     *
+     * ⚠️ Van DOS: la de la clave de subida y la de la clave de firma que
+     * genera Google Play. Con una sola, los enlaces abren la app en el teléfono
+     * de quien compiló y no en el de nadie más. Ver docs/MIGRACION-PACKAGE.md.
+     */
+    ANDROID_CERT_SHA256: optionalOrEmpty(z.string().max(2000)),
+
     // ─── Interruptores de emergencia ────────────────────────────────────────
     //
     // Cuatro llaves de luz para apagar una parte del sistema sin desplegar

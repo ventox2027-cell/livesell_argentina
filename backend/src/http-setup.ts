@@ -194,6 +194,18 @@ export function configurarPrefijoYVersionado(app: NestFastifyApplication): void 
       { path: `${RUTA_OAUTH_MERCADOPAGO}/callback`, method: RequestMethod.GET },
       { path: 'media/*', method: RequestMethod.GET },
       { path: 'checkout', method: RequestMethod.GET },
+      /**
+       * Las páginas de los enlaces compartidos.
+       *
+       * Las abre un navegador siguiendo un enlace pegado en un chat, no la
+       * app. El formato corto lo genera `social/compartir.ts` desde hace meses
+       * y hay enlaces dando vueltas con él: no se puede cambiar.
+       */
+      { path: 'p/:id', method: RequestMethod.GET },
+      { path: 'v/:id', method: RequestMethod.GET },
+      { path: 't/:slug', method: RequestMethod.GET },
+      { path: 'u/:slug', method: RequestMethod.GET },
+      { path: '.well-known/assetlinks.json', method: RequestMethod.GET },
     ],
   });
   app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
