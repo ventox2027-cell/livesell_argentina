@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Política de red para DEBUG.
+
+  Reemplaza al archivo del mismo nombre de `src/main/` sólo en las
+  compilaciones de debug: Gradle superpone los recursos del tipo de compilación
+  sobre los de `main`.
+
+  Permite texto plano contra cualquier dirección porque el backend de
+  desarrollo corre en `http://<ip-de-la-notebook>:3100` y esa IP cambia cada
+  vez que la red asigna otra.
+
+  ⛔ Este archivo NO viaja en la APK de release. Ver `src/main/res/xml/`.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <!--
+              Los certificados que instaló quien usa el teléfono.
+
+              Sin esto, un proxy de inspección (Charles, mitmproxy) no puede
+              leer el tráfico ni siquiera en debug — que es exactamente cuando
+              hace falta poder leerlo para depurar una petición.
+            -->
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

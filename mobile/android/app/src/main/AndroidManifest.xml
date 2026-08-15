@@ -22,16 +22,20 @@
     <uses-feature android:name="android.hardware.camera" android:required="true"/>
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
 
-    <!-- usesCleartextTraffic: SOLO para el spike. Permite hablar con el backend
-         por http:// contra la IP de la notebook en la red local; Android 9+
-         bloquea texto plano por defecto.
-         ⛔ La app del producto va siempre por HTTPS: esta línea NO debe existir
-         allí. Es una de las razones por las que este proyecto es descartable. -->
+    <!-- La política de red va en un recurso, no acá.
+         Antes esta etiqueta tenía usesCleartextTraffic="true" para toda la app
+         —puesto en el spike, para hablar con la notebook por http://— y con el
+         botón "Configurar servidor" al lado era un camino completo de
+         degradación: apuntar la app a un http:// cualquiera y ver pasar
+         sesiones, direcciones y pedidos en texto plano.
+         Ahora depende del tipo de compilación: release sólo habla HTTPS,
+         debug y profile permiten texto plano para la prueba de campo. Ver
+         res/xml/network_security_config.xml. -->
     <application
         android:label="VendoX"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
-        android:usesCleartextTraffic="true">
+        android:networkSecurityConfig="@xml/network_security_config">
         <activity
             android:name=".MainActivity"
             android:exported="true"

@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Política de red de la APK de PRODUCCIÓN.
+
+  ════════════════════════════════════════════════════════════════════════════
+  QUÉ REEMPLAZA
+  ════════════════════════════════════════════════════════════════════════════
+
+  El manifiesto tenía `android:usesCleartextTraffic="true"` para toda la app,
+  puesto durante el spike para hablar por http:// con la notebook en la red
+  local. Su propio comentario decía que no debía existir en el producto.
+
+  Con el botón "Configurar servidor" al lado, era un camino completo de
+  degradación: apuntar la app a un http:// cualquiera y ver pasar sesiones,
+  direcciones y pedidos en texto plano. El botón ya está detrás de una bandera
+  de compilación; esto cierra la otra mitad.
+
+  ════════════════════════════════════════════════════════════════════════════
+  CÓMO SIGUE FUNCIONANDO LA PRUEBA DE CAMPO
+  ════════════════════════════════════════════════════════════════════════════
+
+  Por tipo de compilación, no por configuración en tiempo de ejecución:
+
+    · debug   → `src/debug/res/xml/`   permite texto plano contra cualquier IP
+    · profile → `src/profile/res/xml/` idem. Es la compilación de las APKs de
+                prueba: AOT como release, y por eso sirve para medir latencia
+    · release → este archivo. Sólo HTTPS
+
+  Una APK de release no puede volver a texto plano de ninguna manera: la
+  política vive en los recursos del binario, no en una preferencia.
+-->
+<network-security-config>
+    <!--
+      Todo lo demás: sólo HTTPS.
+
+      `cleartextTrafficPermitted="false"` es el valor por defecto desde Android
+      9, pero se escribe igual: dejarlo implícito hace que la próxima persona
+      que lea este archivo tenga que ir a buscar cuál es el default.
+    -->
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <!--
+      El localhost del emulador.
+
+      `10.0.2.2` es la dirección con la que un emulador de Android alcanza a su
+      máquina anfitriona. Fuera de un emulador no lleva a ningún lado, así que
+      permitirlo no abre nada en un teléfono real.
+
+      No se agregan IPs de red local acá: hoy es la notebook de alguien, en seis
+      meses es la IP que le tocó a otro dispositivo en un WiFi ajeno.
+    -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">10.0.2.2</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>

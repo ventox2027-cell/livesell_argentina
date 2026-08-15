@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/auth/google_signin_service.dart';
+import '../../../core/config/entorno.dart';
 import '../../../core/config/paginas_publicas.dart';
 import '../../../core/config/runtime_config.dart';
 import '../../../core/design/tokens.dart';
@@ -122,48 +123,8 @@ class _WelcomeScreenState extends ConsumerState<WelcomeScreen> {
                     ),
                   ),
 
-                  // Acceso de desarrollo. Se muestra sólo si el backend lo
-                  // habilita, que en producción está prohibido por configuración.
                   const SizedBox(height: Gap.sm),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      if (config.devLoginEnabled) ...[
-                        TextButton(
-                          onPressed: _ocupado ? null : _accesoDePrueba,
-                          child: const Text('Entrar en modo prueba'),
-                        ),
-                        const Text('·', style: TextStyle(color: AppColor.textoDebil)),
-                      ],
-                      /**
-                       * El acceso de la cuenta de revisión de Google Play.
-                       *
-                       * Va acá, discreto y con nombre explícito, y no escondido
-                       * detrás de un gesto secreto: quien revisa la app recibe
-                       * instrucciones y tiene que poder encontrarlo sin
-                       * adivinar. Y una persona normal lee "revisión" y sigue
-                       * de largo.
-                       *
-                       * Sólo aparece si el servidor lo tiene habilitado.
-                       */
-                      if (config.demoLoginEnabled) ...[
-                        TextButton(
-                          onPressed: _ocupado ? null : _accesoDeRevision,
-                          child: const Text('Acceso de revisión'),
-                        ),
-                        const Text('·', style: TextStyle(color: AppColor.textoDebil)),
-                      ],
-
-                      /// Configurar el backend TIENE que estar disponible antes
-                      /// de entrar. Escondido detrás del login, una instalación
-                      /// nueva apuntando a una URL vieja no tiene salida: no se
-                      /// puede iniciar sesión ni cambiar a dónde apunta.
-                      TextButton(
-                        onPressed: _ocupado ? null : _configurarBackend,
-                        child: const Text('Configurar servidor'),
-                      ),
-                    ],
-                  ),
+                  _AccesosDeServicio(accesos: _accesosDeServicio(config)),
                 ],
               ),
             ),
@@ -177,6 +138,53 @@ class _WelcomeScreenState extends ConsumerState<WelcomeScreen> {
       ),
     );
   }
+
+  /// Los accesos de servicio que corresponden a esta compilación y a este
+  /// servidor.
+  ///
+  /// ═════════════════════════════════════════════════════════════════════════
+  /// TRES CANDADOS DISTINTOS
+  /// ═════════════════════════════════════════════════════════════════════════
+  ///
+  /// Se agrupan acá porque cada uno depende de algo diferente y mezclarlos en
+  /// el `build` hacía imposible ver cuál dependía de qué:
+  ///
+  ///   · **modo prueba** y **acceso de revisión** los habilita el SERVIDOR
+  ///     (`/auth/config`). No están en la app: ofrecerlos contra un backend que
+  ///     los tiene apagados es prometer algo que va a fallar, y `production`
+  ///     tiene prohibido encender el primero por configuración.
+  ///   · **configurar servidor** lo habilita la COMPILACIÓN. Es lo único que
+  ///     el backend no puede decidir, porque justamente sirve para cambiar de
+  ///     backend.
+  List<({String etiqueta, VoidCallback accion})> _accesosDeServicio(AuthConfig config) => [
+        if (config.devLoginEnabled) (etiqueta: 'Entrar en modo prueba', accion: _accesoDePrueba),
+
+        /**
+         * El acceso de la cuenta de revisión de Google Play.
+         *
+         * Discreto y con nombre explícito, no escondido detrás de un gesto
+         * secreto: quien revisa la app recibe instrucciones y tiene que poder
+         * encontrarlo sin adivinar. Y una persona normal lee "revisión" y sigue
+         * de largo.
+         */
+        if (config.demoLoginEnabled) (etiqueta: 'Acceso de revisión', accion: _accesoDeRevision),
+
+        /**
+         * Configurar el backend: sólo en las compilaciones de prueba.
+         *
+         * Tiene que estar ANTES de entrar —escondido detrás del login, una
+         * instalación nueva apuntando a una URL vieja no tiene salida— y a la
+         * vez no puede viajar en la APK pública: un botón que apunta la app al
+         * servidor que uno quiera, en el teléfono de otra persona, es alguien
+         * redirigiéndola a un servidor suyo y viendo pasar todo lo que la app
+         * manda.
+         *
+         * Las APKs de prueba de campo se compilan con
+         * `--dart-define=VENDOX_HERRAMIENTAS=true` y conservan el botón. Ver
+         * `core/config/entorno.dart`.
+         */
+        if (Entorno.herramientas) (etiqueta: 'Configurar servidor', accion: _configurarBackend),
+      ];
 
   Future<void> _google() async {
     var config = ref.read(authConfigProvider).valueOrNull;
@@ -388,6 +396,36 @@ class _FondoAnimadoState extends State<_FondoAnimado> with SingleTickerProviderS
         );
       },
     );
+  }
+}
+
+/// La fila de accesos de servicio, con sus separadores.
+///
+/// ⚠️ Los separadores se intercalan, no se pegan a cada botón.
+///
+/// Antes cada acceso opcional agregaba su botón Y un `·` detrás. Con los tres
+/// visibles se leía bien; con uno solo quedaba «Acceso de revisión ·», un punto
+/// colgando al final que en la APK de Google Play iba a ser el caso normal —
+/// justamente el que nadie mira mientras desarrolla, porque en debug están los
+/// tres.
+class _AccesosDeServicio extends StatelessWidget {
+  const _AccesosDeServicio({required this.accesos});
+
+  final List<({String etiqueta, VoidCallback accion})> accesos;
+
+  @override
+  Widget build(BuildContext context) {
+    if (accesos.isEmpty) return const SizedBox.shrink();
+
+    final hijos = <Widget>[];
+    for (final a in accesos) {
+      if (hijos.isNotEmpty) {
+        hijos.add(const Text('·', style: TextStyle(color: AppColor.textoDebil)));
+      }
+      hijos.add(TextButton(onPressed: a.accion, child: Text(a.etiqueta)));
+    }
+
+    return Row(mainAxisAlignment: MainAxisAlignment.center, children: hijos);
   }
 }
 

@@ -29,7 +29,13 @@ import {
 
 let carpeta: string;
 
-/** Un `service account` con la forma que descarga la consola de Firebase. */
+/**
+ * Un `service account` con la forma que descarga la consola de Firebase.
+ *
+ * Los bytes son basura y no descifran nada. Tiene forma de PEM porque lo que
+ * se prueba es justamente que el lector distinga un PEM de algo que no lo es.
+ */
+// escaner:ok fixture con forma de PEM, contenido inventado
 const CLAVE_FALSA =
   '-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n-----END PRIVATE KEY-----\n';
 
@@ -76,6 +82,7 @@ describe('Leer la credencial', () => {
      * error de OpenSSL que no dice nada útil.
      */
     const conEscapes = serviceAccount({
+      // escaner:ok el mismo PEM inventado, con los saltos escapados
       private_key: '-----BEGIN PRIVATE KEY-----\\nMIIEvQ\\n-----END PRIVATE KEY-----\\n',
     });
 

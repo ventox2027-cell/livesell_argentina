@@ -26,6 +26,8 @@ import {
  */
 describe('Cifrado de secretos', () => {
   const llave = randomBytes(32);
+  // escaner:ok token inventado. Necesita la forma exacta de uno real porque lo
+  // que se prueba es que el cifrado y el tachado de logs lo reconozcan.
   const TOKEN = 'APP_USR-1234567890123456-081414-abcdef0123456789abcdef0123456789-987654321';
 
   describe('Ida y vuelta', () => {

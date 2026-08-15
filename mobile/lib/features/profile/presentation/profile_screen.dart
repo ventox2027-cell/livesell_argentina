@@ -8,6 +8,7 @@ import '../../auth/data/auth_repository.dart';
 import '../../moderation/presentation/bloqueados_screen.dart';
 import '../../notifications/data/notifications_api.dart';
 import '../../notifications/presentation/notifications_screen.dart';
+import '../../../core/config/entorno.dart';
 import '../../../core/config/paginas_publicas.dart';
 import '../../../core/config/runtime_config.dart';
 import '../../../core/design/tokens.dart';
@@ -148,21 +149,35 @@ class ProfileScreen extends ConsumerWidget {
             ),
           ),
 
-          const SizedBox(height: Gap.xl),
-          const _Titulo('Desarrollo'),
-          _Fila(
-            icono: Icons.speed_rounded,
-            texto: 'Herramientas del Sprint 0',
-            detalle: 'Medición de LiveKit y pagos',
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(builder: (_) => const SpikeHomeScreen()),
+          /**
+           * La sección de desarrollo NO viaja en la APK de Google Play.
+           *
+           * Una pantalla de medición de latencia de LiveKit en una app de
+           * compras es lo que hace que una revisión se detenga a preguntar qué
+           * es. Y la URL del backend a la vista le regala a cualquiera el
+           * objetivo sin tener que abrir la APK.
+           *
+           * `Entorno.herramientas` es una constante de compilación, así que
+           * este bloque ni siquiera queda en el binario de release. Ver
+           * `core/config/entorno.dart`.
+           */
+          if (Entorno.herramientas) ...[
+            const SizedBox(height: Gap.xl),
+            const _Titulo('Desarrollo'),
+            _Fila(
+              icono: Icons.speed_rounded,
+              texto: 'Herramientas del Sprint 0',
+              detalle: 'Medición de LiveKit y pagos',
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(builder: (_) => const SpikeHomeScreen()),
+              ),
             ),
-          ),
-          _Fila(
-            icono: Icons.dns_outlined,
-            texto: 'Backend',
-            detalle: RuntimeConfig.instance.apiBaseUrl,
-          ),
+            _Fila(
+              icono: Icons.dns_outlined,
+              texto: 'Backend',
+              detalle: RuntimeConfig.instance.apiBaseUrl,
+            ),
+          ],
 
           const SizedBox(height: Gap.xxl),
           OutlinedButton(

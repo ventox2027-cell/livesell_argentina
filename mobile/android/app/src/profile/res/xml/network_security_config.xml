@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Política de red para PROFILE — las APKs de prueba de campo.
+
+  ════════════════════════════════════════════════════════════════════════════
+  POR QUÉ EXISTE ESTE TIPO DE COMPILACIÓN
+  ════════════════════════════════════════════════════════════════════════════
+
+  La prueba de campo necesita las dos cosas a la vez:
+
+    · el rendimiento de release —una compilación de debug no sirve para medir
+      latencia de video: el intérprete de Dart agrega decenas de milisegundos
+      y las mediciones no significan nada—;
+    · texto plano contra la IP de la notebook, porque el backend de pruebas no
+      tiene certificado.
+
+  `flutter build apk --profile` da AOT igual que release. Así que las APKs de
+  prueba se compilan en profile y las de Google Play en release, y la
+  diferencia deja de depender de que alguien se acuerde de sacar una línea del
+  manifiesto antes de publicar.
+
+  Se compila con las herramientas internas encendidas:
+
+      flutter build apk --profile --dart-define=VENDOX_HERRAMIENTAS=true
+
+  ⛔ NO usar profile para publicar. Ver `src/main/res/xml/`.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
