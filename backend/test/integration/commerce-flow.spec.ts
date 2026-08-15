@@ -2707,7 +2707,7 @@ describe('Interruptores de emergencia', () => {
    */
   async function conBanderaApagada<T>(bandera: string, fn: () => Promise<T>): Promise<T> {
     const { env } = await import('@/config/env.schema');
-    const mutable = env as unknown as Record<string, boolean>;
+    const mutable = env as unknown as Record<string, boolean | undefined>;
     const antes = mutable[bandera];
     mutable[bandera] = false;
     try {

@@ -3318,7 +3318,7 @@ describe('Interruptor de emergencia del checkout', () => {
    */
   async function conCheckoutApagado<T>(fn: () => Promise<T>): Promise<T> {
     const { env } = await import('@/config/env.schema');
-    const mutable = env as unknown as Record<string, boolean>;
+    const mutable = env as unknown as Record<string, boolean | undefined>;
     const antes = mutable.CHECKOUT_ENABLED;
     mutable.CHECKOUT_ENABLED = false;
     try {
