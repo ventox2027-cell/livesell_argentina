@@ -56,6 +56,25 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<string, number>> = {
   // hizo nada mal, y reintentar más tarde puede funcionar.
   SELLER_PAYMENT_ACCOUNT_MISSING: 409,
 
+  // Edad. VendoX es 18+. Ver `modules/users/edad.ts`.
+  //
+  // 422 y no 403 para los dos primeros, por el mismo motivo que
+  // `MP_ACCOUNT_REQUIRED`: es un requisito previo que la persona puede cumplir
+  // ahora mismo, y la app tiene que abrir el formulario en vez de decir "no
+  // tenés acceso".
+  BIRTH_DATE_REQUIRED: 422,
+  BIRTH_DATE_INVALID: 400,
+  //
+  // 403 y sí, permanente. A diferencia de los otros, este NO se puede resolver
+  // completando algo: la persona no cumple el requisito. Un 422 sugeriría que
+  // hay un formulario que arregla esto, y la app volvería a abrirlo en un
+  // bucle.
+  UNDERAGE: 403,
+  //
+  // 409: la fecha ya está declarada y la nueva es distinta. Es un conflicto con
+  // el estado actual, no un cuerpo mal formado.
+  BIRTH_DATE_ALREADY_SET: 409,
+
   // Moderación
   //
   // 409 y no 400: el reporte es válido, lo que pasa es que esta persona ya

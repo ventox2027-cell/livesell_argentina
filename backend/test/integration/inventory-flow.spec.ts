@@ -11,6 +11,7 @@ import type { PrismaService } from '@/shared/prisma/prisma.service';
 import type { RedisService } from '@/shared/redis/redis.service';
 
 import { crearAppDePrueba } from '../helpers/app';
+import { datosDeAdulto } from '../helpers/edad';
 
 /**
  * Inventario y reservas contra PostgreSQL REAL.
@@ -158,6 +159,8 @@ async function nuevoComprador(): Promise<{ token: string; userId: string }> {
       email: `inv-${n}-${Date.now()}@test.com`,
       emailVerified: true,
       role: 'buyer',
+      // VendoX es 18+ y el backend lo exige antes de comprar. Ver helpers/edad.
+      ...datosDeAdulto(),
     },
   });
 

@@ -9,6 +9,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 import '../../../core/config/runtime_config.dart';
 import '../../../core/design/tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
+import '../../auth/presentation/widgets/fecha_de_nacimiento_sheet.dart';
 import '../data/orders_repository.dart';
 import '../domain/order_models.dart';
 import 'address_sheet.dart';
@@ -126,6 +127,26 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
       // Falta la dirección: se pide AHORA, con la compra ya decidida.
       if (e.faltaDireccion) {
         setState(() => _paso = _Paso.direccion);
+        return;
+      }
+
+      /**
+       * VendoX es 18+ y todavía no declaró su fecha.
+       *
+       * Se pide acá y no al registrarse a propósito: meter un formulario de
+       * edad antes del primer video pierde a quien todavía no sabe si la app le
+       * sirve. Y una vez declarada, se reintenta sola: obligar a volver a tocar
+       * "comprar" después de completar un formulario que la app misma pidió es
+       * hacerle repetir el trabajo.
+       */
+      if (e.faltaFechaDeNacimiento) {
+        final declarada = await FechaDeNacimientoSheet.mostrar(context, AccionConEdad.comprar);
+        if (!mounted) return;
+        if (declarada) {
+          unawaited(_crearPedido());
+          return;
+        }
+        Navigator.of(context).pop();
         return;
       }
       if (e.reservaVencida) {

@@ -18,6 +18,7 @@ import {
 import { AuditService } from '@/shared/audit/audit.service';
 import { DomainEvent, DomainEventBus } from '@/shared/events/domain-events';
 import { DomainError } from '@/shared/errors/domain.error';
+import { exigirMayoriaDeEdad } from '@/modules/users/edad';
 import { PrismaService } from '@/shared/prisma/prisma.service';
 import { newId } from '@/shared/utils/id';
 import { slugDisponible } from '@/shared/utils/slug';
@@ -84,6 +85,23 @@ export class SellersService {
   async create(userId: string, dto: CreateSellerDto): Promise<{ seller: Seller; store: Store }> {
     const existente = await this.prisma.seller.findUnique({ where: { userId } });
     if (existente) throw new SellerAlreadyExistsError();
+
+    /**
+     * Vender en VendoX es 18+.
+     *
+     * Es más importante que del lado del comprador: detrás de una tienda hay
+     * una cuenta bancaria, retenciones y responsabilidad fiscal. Un menor
+     * vendiendo deja obligaciones a nombre de alguien sin capacidad para
+     * contraerlas.
+     *
+     * La fecha es DECLARADA. Ver `users/edad.ts` antes de asumir que está
+     * verificada — no lo está.
+     */
+    const persona = await this.prisma.user.findUniqueOrThrow({
+      where: { id: userId },
+      select: { birthDate: true },
+    });
+    exigirMayoriaDeEdad(persona.birthDate, 'vender');
 
     const slugSeller = dto.slug
       ? await this.verificarSlugLibre(dto.slug)

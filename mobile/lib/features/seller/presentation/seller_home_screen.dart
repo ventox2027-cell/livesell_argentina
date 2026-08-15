@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/design/tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
+import '../../auth/presentation/widgets/fecha_de_nacimiento_sheet.dart';
 import '../../auth/state/auth_providers.dart';
 import '../../lives/data/broadcaster_api.dart';
 import '../../lives/presentation/prepare_live_screen.dart';
@@ -107,6 +110,25 @@ class _SinVendedorState extends ConsumerState<_SinVendedor> {
       await ref.read(sesionProvider.notifier).restaurar();
       ref.invalidate(miPerfilVendedorProvider);
       if (mounted) AppSnack.exito(context, '¡Listo! Ya podés cargar productos.');
+    } on ComercioException catch (e) {
+      if (!mounted) return;
+
+      /**
+       * Vender en VendoX es 18+ y todavía no declaró su fecha.
+       *
+       * Se resuelve en el momento y se reintenta solo: alguien que ya escribió
+       * el nombre de su tienda y tocó el botón no tiene que volver a hacerlo
+       * porque la app le pidió un dato en el medio.
+       */
+      if (e.faltaFechaDeNacimiento) {
+        final declarada = await FechaDeNacimientoSheet.mostrar(context, AccionConEdad.vender);
+        if (!mounted) return;
+        setState(() => _creando = false);
+        if (declarada) unawaited(_crear());
+        return;
+      }
+
+      AppSnack.error(context, e.mensaje);
     } catch (e) {
       if (mounted) AppSnack.error(context, e.toString());
     } finally {

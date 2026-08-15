@@ -242,6 +242,22 @@ class PedidoException implements Exception {
 
   bool get faltaDireccion => codigo == 'ADDRESS_REQUIRED';
   bool get reservaVencida => codigo == 'RESERVATION_EXPIRED';
+
+  /// VendoX es 18+ y todavía no declaró su fecha de nacimiento.
+  ///
+  /// Se resuelve ahí mismo, con la hoja. Es el mismo criterio que
+  /// `faltaDireccion`: un requisito que la persona puede completar sin salir de
+  /// la compra.
+  bool get faltaFechaDeNacimiento => codigo == 'BIRTH_DATE_REQUIRED';
+
+  /// Declaró ser menor de 18.
+  ///
+  /// ⚠️ Esto NO se resuelve completando nada. La app tiene que explicar y
+  /// cerrar, no volver a abrir el formulario.
+  bool get esMenorDeEdad => codigo == 'UNDERAGE';
+
+  /// Este vendedor no puede recibir pagos ahora. Quien compra no hizo nada mal.
+  bool get vendedorSinCobros => codigo == 'MP_ACCOUNT_REQUIRED';
   bool get rechazado => codigo == 'PAYMENT_REJECTED';
   bool get yaHayUnPagoEnCurso => codigo == 'PAYMENT_IN_FLIGHT';
 

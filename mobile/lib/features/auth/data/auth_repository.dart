@@ -160,15 +160,20 @@ class AuthRepository {
     String? lastName,
     String? phone,
     bool? whatsappOptIn,
+    /// `AAAA-MM-DD`. VendoX es 18+ y sólo se puede declarar una vez.
+    String? fechaDeNacimiento,
   }) async {
     final res = await _api.patch<Map<String, dynamic>>('/auth/me', data: {
       if (firstName != null) 'firstName': firstName,
       if (lastName != null) 'lastName': lastName,
       if (phone != null) 'phone': phone,
       if (whatsappOptIn != null) 'whatsappOptIn': whatsappOptIn,
+      if (fechaDeNacimiento != null) 'birthDate': fechaDeNacimiento,
     });
 
-    if (res.statusCode != 200 || res.data == null) throw AuthException(_mensajeDeError(res));
+    if (res.statusCode != 200 || res.data == null) {
+      throw AuthException(_mensajeDeError(res), codigo: _codigoDeError(res));
+    }
 
     final usuario = Usuario.fromJson(res.data!);
     await _tokens.guardarUsuario(usuario.toJson());
@@ -234,11 +239,33 @@ class AuthRepository {
     }
     return 'No pudimos completar la operación. Probá de nuevo.';
   }
+
+  String? _codigoDeError(Response<dynamic> res) {
+    final datos = res.data;
+    if (datos is Map && datos['error'] is Map) {
+      return (datos['error'] as Map)['code'] as String?;
+    }
+    return null;
+  }
 }
 
 class AuthException implements Exception {
-  AuthException(this.mensaje);
+  AuthException(this.mensaje, {this.codigo});
   final String mensaje;
+
+  /// El código estable del backend. Por ejemplo UNDERAGE.
+  final String? codigo;
+
+  /// La persona declaró ser menor de 18.
+  ///
+  /// Se distingue del resto porque NO se resuelve reintentando ni completando
+  /// nada: la hoja tiene que cerrarse con una explicación, no volver a pedir la
+  /// fecha en un bucle.
+  bool get esMenorDeEdad => codigo == 'UNDERAGE';
+
+  /// Ya estaba declarada y la nueva es distinta. Se corrige por soporte.
+  bool get fechaYaDeclarada => codigo == 'BIRTH_DATE_ALREADY_SET';
+
   @override
   String toString() => mensaje;
 }

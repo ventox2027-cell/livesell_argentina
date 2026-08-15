@@ -12,6 +12,7 @@ import type { RedisService } from '@/shared/redis/redis.service';
 import { RUTA_WEBHOOK_MERCADOPAGO } from '@/shared/http/rutas-webhook';
 
 import { crearAppDePrueba } from '../helpers/app';
+import { datosDeAdulto } from '../helpers/edad';
 import { ProveedorFalso } from '../helpers/proveedor-falso';
 
 /**
@@ -141,7 +142,15 @@ async function call(
 
 let n = 0;
 
-async function nuevoUsuario(): Promise<{ token: string; userId: string }> {
+/**
+ * @param conEdad `false` deja la cuenta sin fecha declarada, como recién
+ *   registrada. Sólo lo usa el bloque de mayoría de edad: para todo lo demás,
+ *   una cuenta sin fecha no puede comprar y el test fallaría por un motivo que
+ *   no es el suyo.
+ */
+async function nuevoUsuario(
+  { conEdad = true }: { conEdad?: boolean } = {},
+): Promise<{ token: string; userId: string }> {
   n += 1;
   const userId = `usr_ord${String(n).padStart(21, '0')}`;
 
@@ -153,6 +162,8 @@ async function nuevoUsuario(): Promise<{ token: string; userId: string }> {
       email: `ord-${n}-${Date.now()}@test.com`,
       emailVerified: true,
       role: 'buyer',
+      // VendoX es 18+ y el backend lo exige antes de comprar. Ver helpers/edad.
+      ...(conEdad ? datosDeAdulto() : {}),
     },
   });
 
@@ -2383,5 +2394,207 @@ describe('Cambios y devoluciones', () => {
     const despues = registro?.after as Record<string, unknown>;
     expect(antes.exchangeWindowDays).toBe(10);
     expect(despues.exchangeWindowDays).toBe(30);
+  });
+});
+// ═══════════════════════════════════════════════════════════════════════════
+// VENDOX ES 18+
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * La mayoría de edad, de punta a punta.
+ *
+ * Los tests unitarios prueban la aritmética. Estos prueban que esté enchufada
+ * donde tiene que estar, por HTTP: una regla correcta que nadie llama es
+ * exactamente igual de útil que no tenerla.
+ *
+ * ─── Lo que NO prueban ───
+ *
+ * Que la edad sea cierta. Es declarada y no hay verificación contra ningún
+ * registro. Está explicado en `users/edad.ts` y conviene leerlo antes de decir
+ * en algún lado que la edad está comprobada.
+ */
+describe('Mayoría de edad', () => {
+  /** Alguien recién registrado, sin fecha declarada. */
+  async function recienLlegado() {
+    const usuario = await nuevoUsuario({ conEdad: false });
+    const r = await call('POST', '/api/v1/addresses', {
+      token: usuario.token,
+      body: {
+        recipientFullName: 'Ana Pérez',
+        documentType: 'DNI',
+        documentNumber: '30123456',
+        phoneE164: '+5491122334455',
+        street: 'Av. Corrientes',
+        number: '1234',
+        city: 'CABA',
+        province: 'Buenos Aires',
+        postalCode: 'C1043',
+      },
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    return usuario;
+  }
+
+  it('⛔ sin fecha declarada no se puede comprar', async () => {
+    const comprador = await recienLlegado();
+    const { variantId } = await nuevaVarianteConStock(3);
+    const reservationId = await reservar(comprador.token, variantId);
+
+    const r = await call('POST', '/api/v1/orders', {
+      token: comprador.token,
+      idempotencyKey: clave('edad-falta'),
+      body: { reservationId },
+    });
+
+    expect(r.status).toBe(422);
+    expect(r.body.error.code).toBe('BIRTH_DATE_REQUIRED');
+    // El mensaje dice para qué se pide, no sólo que falta.
+    expect(r.body.error.message).toContain('18');
+  });
+
+  it('⛔ un menor no puede comprar', async () => {
+    const comprador = await recienLlegado();
+
+    const perfil = await call('PATCH', '/api/v1/auth/me', {
+      token: comprador.token,
+      body: { birthDate: '2012-06-01' },
+    });
+    expect(perfil.status, JSON.stringify(perfil.body)).toBe(200);
+
+    const { variantId } = await nuevaVarianteConStock(3);
+    const reservationId = await reservar(comprador.token, variantId);
+
+    const r = await call('POST', '/api/v1/orders', {
+      token: comprador.token,
+      idempotencyKey: clave('edad-menor'),
+      body: { reservationId },
+    });
+
+    /**
+     * 403 y no 422: a diferencia de la fecha que falta, esto NO se resuelve
+     * completando un formulario. Un 422 haría que la app volviera a abrirlo en
+     * un bucle.
+     */
+    expect(r.status).toBe(403);
+    expect(r.body.error.code).toBe('UNDERAGE');
+    expect(r.body.error.message).toContain('requisito legal');
+  });
+
+  it('declarando la fecha, el mismo comprador sí puede', async () => {
+    // La contracara. Sin esto, "arreglar" el bloqueo rechazando siempre pasaría
+    // en verde.
+    const comprador = await recienLlegado();
+    await call('PATCH', '/api/v1/auth/me', {
+      token: comprador.token,
+      body: { birthDate: '1990-05-20' },
+    });
+
+    const { variantId } = await nuevaVarianteConStock(3);
+    const reservationId = await reservar(comprador.token, variantId);
+
+    const r = await call('POST', '/api/v1/orders', {
+      token: comprador.token,
+      idempotencyKey: clave('edad-ok'),
+      body: { reservationId },
+    });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+  });
+
+  it('⛔ la fecha se declara una vez y no se puede cambiar', async () => {
+    /**
+     * Si se pudiera, la regla no existiría: alguien pone una fecha cualquiera,
+     * la app lo frena, y vuelve a la pantalla a poner otra. Sería un formulario
+     * que enseña cuál es la respuesta correcta.
+     */
+    const usuario = await nuevoUsuario({ conEdad: false });
+
+    const primera = await call('PATCH', '/api/v1/auth/me', {
+      token: usuario.token,
+      body: { birthDate: '2012-06-01' },
+    });
+    expect(primera.status).toBe(200);
+
+    const segunda = await call('PATCH', '/api/v1/auth/me', {
+      token: usuario.token,
+      body: { birthDate: '1990-05-20' },
+    });
+
+    expect(segunda.status).toBe(409);
+    expect(segunda.body.error.code).toBe('BIRTH_DATE_ALREADY_SET');
+    // Y dice a dónde ir: quien lee esto suele ser alguien que tipeó mal el año.
+    expect(segunda.body.error.message).toContain('Ayuda');
+  });
+
+  it('mandar la MISMA fecha otra vez no es un error', async () => {
+    // La app reintenta peticiones. Un reintento no puede convertirse en un
+    // error que no existe.
+    const usuario = await nuevoUsuario({ conEdad: false });
+    const cuerpo = { birthDate: '1990-05-20' };
+
+    expect((await call('PATCH', '/api/v1/auth/me', { token: usuario.token, body: cuerpo })).status)
+      .toBe(200);
+    expect((await call('PATCH', '/api/v1/auth/me', { token: usuario.token, body: cuerpo })).status)
+      .toBe(200);
+  });
+
+  it('⛔ una fecha imposible se rechaza sin guardarse', async () => {
+    const usuario = await nuevoUsuario({ conEdad: false });
+
+    const r = await call('PATCH', '/api/v1/auth/me', {
+      token: usuario.token,
+      body: { birthDate: '2030-01-01' },
+    });
+
+    expect(r.status).toBe(400);
+    expect(r.body.error.code).toBe('BIRTH_DATE_INVALID');
+
+    // Y como no se guardó, todavía puede declarar la correcta.
+    const buena = await call('PATCH', '/api/v1/auth/me', {
+      token: usuario.token,
+      body: { birthDate: '1990-05-20' },
+    });
+    expect(buena.status).toBe(200);
+  });
+
+  it('⛔ un formato que no es AAAA-MM-DD ni llega al servicio', async () => {
+    const usuario = await nuevoUsuario({ conEdad: false });
+
+    const r = await call('PATCH', '/api/v1/auth/me', {
+      token: usuario.token,
+      body: { birthDate: '15/03/2008' },
+    });
+
+    // Lo frena el DTO: `new Date('15/03/2008')` da resultados distintos según
+    // el servidor, así que la forma se exige antes de interpretar nada.
+    expect(r.status).toBe(400);
+  });
+
+  it('la fecha vuelve en el perfil, sin hora', async () => {
+    /**
+     * `DATE` en la base, `AAAA-MM-DD` en la respuesta. Mandar el ISO entero
+     * haría que la app en Buenos Aires —UTC-3— muestre el día anterior.
+     */
+    const usuario = await nuevoUsuario({ conEdad: false });
+    await call('PATCH', '/api/v1/auth/me', {
+      token: usuario.token,
+      body: { birthDate: '1990-01-01' },
+    });
+
+    const me = await call('GET', '/api/v1/auth/me', { token: usuario.token });
+
+    expect(me.body.birthDate).toBe('1990-01-01');
+    expect(me.body.missing).not.toContain('birthDate');
+  });
+
+  it('el perfil avisa que falta antes de que la persona se choque', async () => {
+    // Para que la app pueda pedirla en el momento oportuno en vez de esperar al
+    // error en medio de la compra.
+    const usuario = await nuevoUsuario({ conEdad: false });
+
+    const me = await call('GET', '/api/v1/auth/me', { token: usuario.token });
+
+    expect(me.body.missing).toContain('birthDate');
+    expect(me.body.birthDate).toBeNull();
   });
 });

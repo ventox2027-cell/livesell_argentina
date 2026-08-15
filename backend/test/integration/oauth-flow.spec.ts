@@ -11,6 +11,7 @@ import type { RedisService } from '@/shared/redis/redis.service';
 import { RUTA_OAUTH_MERCADOPAGO } from '@/shared/http/rutas-webhook';
 
 import { crearAppDePrueba } from '../helpers/app';
+import { NACIMIENTO_ADULTO_ISO } from '../helpers/edad';
 
 /**
  * La conexión de un vendedor con Mercado Pago.
@@ -208,6 +209,18 @@ async function nuevoVendedor() {
     },
   });
   const token = u.body!.accessToken as string;
+
+  /**
+   * VendoX es 18+ y el backend lo exige antes de crear la tienda.
+   *
+   * Se declara por el mismo camino que usa la app —`PATCH /auth/me`— y no
+   * escribiendo la columna: así el test también falla si ese endpoint se rompe.
+   * Ver `helpers/edad.ts`.
+   */
+  await call('PATCH', '/api/v1/auth/me', {
+    token,
+    body: { birthDate: NACIMIENTO_ADULTO_ISO },
+  });
 
   const s = await call('POST', '/api/v1/sellers', {
     token,
@@ -982,6 +995,10 @@ describe('Sin Mercado Pago no se vende', () => {
       },
     });
     const tokenComprador = comprador.body!.accessToken as string;
+    await call('PATCH', '/api/v1/auth/me', {
+      token: tokenComprador,
+      body: { birthDate: NACIMIENTO_ADULTO_ISO },
+    });
 
     await call('POST', '/api/v1/addresses', {
       token: tokenComprador,
@@ -1082,6 +1099,14 @@ describe('Sin Mercado Pago no se vende', () => {
         },
       });
       const tokenComprador = comprador.body!.accessToken as string;
+      await call('PATCH', '/api/v1/auth/me', {
+        token: tokenComprador,
+        body: { birthDate: NACIMIENTO_ADULTO_ISO },
+      });
+    await call('PATCH', '/api/v1/auth/me', {
+      token: tokenComprador,
+      body: { birthDate: NACIMIENTO_ADULTO_ISO },
+    });
 
       await call('POST', '/api/v1/addresses', {
         token: tokenComprador,

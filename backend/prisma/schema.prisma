@@ -515,6 +515,30 @@ model User {
 
   avatarUrl String? @map("avatar_url")
 
+  /// Fecha de nacimiento DECLARADA. VendoX es 18+.
+  ///
+  /// ⚠️ No está verificada contra ningún registro: no hay integración con
+  /// RENAPER todavía. La explicación entera, con lo que esto sí y no logra,
+  /// está en `modules/users/edad.ts`.
+  ///
+  /// Es opcional porque no se pide al registrarse: se pide antes de la primera
+  /// compra y antes de crear la tienda, igual que el teléfono. Mirar un vivo no
+  /// requiere nada.
+  ///
+  /// `@db.Date` y no `timestamp`: una fecha de nacimiento no tiene hora, y
+  /// guardarla como timestamp la vuelve sensible al huso horario. En un país a
+  /// UTC-3, `2008-03-15T00:00:00Z` leído en local es el 14 de marzo, y alguien
+  /// cumple años un día tarde. Toda la aritmética de `edad.ts` usa `getUTC*`
+  /// por el mismo motivo.
+  birthDate DateTime? @map("birth_date") @db.Date
+
+  /// Cuándo declaró la fecha. Es la constancia de que se preguntó.
+  ///
+  /// Va aparte de `birthDate` porque lo que importa legalmente no es la fecha
+  /// sino el acto de declararla: sin esto, un `birthDate` cargado por un
+  /// proceso interno sería indistinguible de uno que escribió la persona.
+  birthDateDeclaredAt DateTime? @map("birth_date_declared_at")
+
   role   UserRole   @default(buyer)
   status UserStatus @default(active)
 

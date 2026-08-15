@@ -8,6 +8,7 @@ import { DomainEvent, DomainEventBus } from '@/shared/events/domain-events';
 import { leerLlave } from '@/shared/crypto/secretos';
 import { MetricsService } from '@/shared/observability/metrics.service';
 import { SellerOAuthService } from '@/modules/payments/seller-oauth.service';
+import { exigirMayoriaDeEdad } from '@/modules/users/edad';
 import { PrismaService } from '@/shared/prisma/prisma.service';
 import { newId } from '@/shared/utils/id';
 
@@ -283,8 +284,29 @@ export class OrdersService {
 
     const comprador = await this.prisma.user.findUniqueOrThrow({
       where: { id: buyerId },
-      select: { id: true, firstName: true, lastName: true, email: true, phoneE164: true },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        email: true,
+        phoneE164: true,
+        birthDate: true,
+      },
     });
+
+    /**
+     * VendoX es 18+.
+     *
+     * Acá y no al registrarse: meter un formulario de edad entre "Continuar con
+     * Google" y el primer video es la forma más cara de perder a alguien que
+     * todavía no sabe si la app le sirve. Es el mismo criterio con el que se
+     * pide el teléfono.
+     *
+     * La fecha es DECLARADA, no verificada. Lo que esto sí y no logra está
+     * explicado en `users/edad.ts`, y conviene leerlo antes de decir en algún
+     * lado que la edad está comprobada.
+     */
+    exigirMayoriaDeEdad(comprador.birthDate, 'comprar');
 
     // 5 · Los números. Una sola función los calcula, y se comprueban antes de
     // escribir: la base tiene los mismos CHECK, pero fallar acá permite decir

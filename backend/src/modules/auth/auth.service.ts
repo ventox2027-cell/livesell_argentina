@@ -3,6 +3,13 @@ import { Prisma, type User } from '@prisma/client';
 
 import { env } from '@/config/env.schema';
 import { DomainError } from '@/shared/errors/domain.error';
+import {
+  FechaDeNacimientoInvalidaError,
+  FechaDeNacimientoYaDeclaradaError,
+  fechaDeNacimientoInvalida,
+  mismaFecha,
+  parsearFechaDeNacimiento,
+} from '@/modules/users/edad';
 import { PrismaService } from '@/shared/prisma/prisma.service';
 import { newId } from '@/shared/utils/id';
 
@@ -56,6 +63,8 @@ export interface PublicUser {
   whatsappOptIn: boolean;
   avatarUrl: string | null;
   role: string;
+  /** `AAAA-MM-DD` o `null`. Declarada, no verificada. Ver `users/edad.ts`. */
+  birthDate: string | null;
   createdAt: string;
 }
 
@@ -323,6 +332,43 @@ export class AuthService {
       data.phoneVerified = false;
     }
 
+    if (dto.birthDate !== undefined) {
+      /**
+       * La fecha de nacimiento se declara UNA vez.
+       *
+       * ─── Por qué no se puede editar libremente ───
+       *
+       * Si se pudiera, la regla de 18+ no existiría: alguien pone una fecha
+       * cualquiera, la app lo frena, y vuelve a la pantalla a poner otra. Sería
+       * un formulario que enseña cuál es la respuesta correcta.
+       *
+       * Corregir un error genuino —el año tipeado mal— pasa por soporte, que es
+       * exactamente lo que hacen las plataformas que tienen esta regla en serio.
+       * Es incómodo a propósito y le pasa a poca gente.
+       *
+       * ⚠️ No se lanza si manda la MISMA fecha: la app reintenta peticiones y
+       * un reintento no puede convertirse en un error que no existe.
+       */
+      const nueva = parsearFechaDeNacimiento(dto.birthDate);
+      const invalida = fechaDeNacimientoInvalida(nueva);
+      if (invalida) throw new FechaDeNacimientoInvalidaError(invalida);
+
+      const actual = await this.prisma.user.findUniqueOrThrow({
+        where: { id: userId },
+        select: { birthDate: true },
+      });
+
+      if (actual.birthDate && !mismaFecha(actual.birthDate, nueva)) {
+        throw new FechaDeNacimientoYaDeclaradaError();
+      }
+
+      if (!actual.birthDate) {
+        data.birthDate = nueva;
+        // La constancia de que se preguntó y de cuándo. Ver `edad.ts`.
+        data.birthDateDeclaredAt = new Date();
+      }
+    }
+
     const user = await this.prisma.user.update({ where: { id: userId }, data });
     return this.toPublic(user);
   }
@@ -397,6 +443,9 @@ export class AuthService {
     if (!user.phoneE164) falta.push('phone');
     if (!user.phoneVerified) falta.push('phoneVerification');
     if (user.firstName === 'Sin nombre' || !user.lastName) falta.push('name');
+    // Se pide antes de comprar y antes de crear la tienda, no al registrarse.
+    // Ver `edad.ts`.
+    if (!user.birthDate) falta.push('birthDate');
     return falta;
   }
 
@@ -412,6 +461,12 @@ export class AuthService {
       whatsappOptIn: user.whatsappOptIn,
       avatarUrl: user.avatarUrl,
       role: user.role,
+      /**
+       * Sólo la fecha, sin hora. La columna es `DATE`, así que Prisma la
+       * devuelve a medianoche UTC; mandar el ISO entero haría que la app en
+       * Buenos Aires la muestre como el día anterior.
+       */
+      birthDate: user.birthDate ? user.birthDate.toISOString().slice(0, 10) : null,
       createdAt: user.createdAt.toISOString(),
     };
   }

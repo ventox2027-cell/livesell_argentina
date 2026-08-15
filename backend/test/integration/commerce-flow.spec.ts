@@ -7,6 +7,7 @@ import type { PrismaService } from '@/shared/prisma/prisma.service';
 import type { RedisService } from '@/shared/redis/redis.service';
 
 import { crearAppDePrueba } from '../helpers/app';
+import { NACIMIENTO_ADULTO_ISO } from '../helpers/edad';
 
 /**
  * Bloque comercial contra PostgreSQL REAL.
@@ -114,6 +115,19 @@ async function nuevoUsuario(): Promise<{ token: string; userId: string }> {
     },
   });
   expect(r.status, JSON.stringify(r.body)).toBe(201);
+
+  /**
+   * VendoX es 18+ y el backend lo exige antes de comprar y de crear la tienda.
+   *
+   * Se declara por el mismo camino que usa la app —`PATCH /auth/me`— y no
+   * escribiendo la columna: así el test también falla si ese endpoint se rompe.
+   * Ver `helpers/edad.ts`.
+   */
+  await call('PATCH', '/api/v1/auth/me', {
+    token: r.body.accessToken as string,
+    body: { birthDate: NACIMIENTO_ADULTO_ISO },
+  });
+
   return { token: r.body.accessToken, userId: r.body.user.id };
 }
 
@@ -2325,5 +2339,99 @@ describe('Codificación', () => {
       const nombres = (r.body.items as Array<{ name: string }>).map((p) => p.name);
       expect(nombres, q).toContain('Vela aromática de lavanda');
     }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// VENDER TAMBIÉN ES 18+
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * La mayoría de edad del lado del vendedor.
+ *
+ * Importa más que del lado del comprador: detrás de una tienda hay una cuenta
+ * bancaria, retenciones y responsabilidad fiscal. Un menor vendiendo deja
+ * obligaciones a nombre de alguien sin capacidad para contraerlas.
+ *
+ * La edad es DECLARADA, no verificada. Ver `users/edad.ts`.
+ */
+describe('Abrir tienda es 18+', () => {
+  /** Un usuario recién registrado, sin fecha declarada. */
+  async function sinEdad() {
+    n += 1;
+    const r = await call('POST', '/api/v1/auth/dev', {
+      body: {
+        email: `sinedad${n}-${Date.now()}@test.com`,
+        firstName: 'Sin',
+        lastName: `Edad${n}`,
+        device: {
+          installId: `install-sinedad-${n}-${Date.now()}`,
+          platform: 'android',
+          appVersion: '1.0.0',
+          osVersion: '14',
+        },
+      },
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    return r.body.accessToken as string;
+  }
+
+  it('⛔ sin fecha declarada no se puede crear la tienda', async () => {
+    const token = await sinEdad();
+
+    const r = await call('POST', '/api/v1/sellers', {
+      token,
+      body: { displayName: 'Tejidos sin edad' },
+    });
+
+    expect(r.status).toBe(422);
+    expect(r.body.error.code).toBe('BIRTH_DATE_REQUIRED');
+    // El mensaje habla de la tienda, no de comprar: quien lo lee tiene que
+    // reconocer qué estaba intentando hacer.
+    expect(r.body.error.message).toContain('tienda');
+  });
+
+  it('⛔ un menor no puede abrir tienda', async () => {
+    const token = await sinEdad();
+    await call('PATCH', '/api/v1/auth/me', { token, body: { birthDate: '2012-06-01' } });
+
+    const r = await call('POST', '/api/v1/sellers', {
+      token,
+      body: { displayName: 'Tejidos de un menor' },
+    });
+
+    expect(r.status).toBe(403);
+    expect(r.body.error.code).toBe('UNDERAGE');
+    expect(r.body.error.message).toContain('vender');
+  });
+
+  it('⛔ y no queda nada a medio crear', async () => {
+    /**
+     * Crear un vendedor crea también su tienda y le cambia el rol al usuario,
+     * todo en una transacción. Si el bloqueo estuviera adentro y no antes,
+     * podría quedar un usuario con rol `seller` y sin tienda.
+     */
+    const token = await sinEdad();
+    await call('PATCH', '/api/v1/auth/me', { token, body: { birthDate: '2012-06-01' } });
+
+    await call('POST', '/api/v1/sellers', { token, body: { displayName: 'Nada' } });
+
+    const me = await call('GET', '/api/v1/auth/me', { token });
+    expect(me.body.role).toBe('buyer');
+
+    const mio = await call('GET', '/api/v1/sellers/me', { token });
+    expect(mio.status).toBe(404);
+  });
+
+  it('declarando la fecha, el mismo usuario sí puede', async () => {
+    const token = await sinEdad();
+    await call('PATCH', '/api/v1/auth/me', { token, body: { birthDate: '1990-05-20' } });
+
+    const r = await call('POST', '/api/v1/sellers', {
+      token,
+      body: { displayName: `Tejidos con edad ${Date.now()}` },
+    });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
   });
 });

@@ -295,6 +295,18 @@ class ComercioException implements Exception {
   /// resuelve ofreciendo la pantalla de conectar. Ver ConectarMpSheet.
   bool get requiereMercadoPago => codigo == 'MP_ACCOUNT_REQUIRED';
 
+  /// Vender en VendoX es 18+ y todavía no declaró su fecha de nacimiento.
+  ///
+  /// Como el anterior: no se resuelve mostrando el error sino abriendo la hoja
+  /// donde la persona la carga. Ver FechaDeNacimientoSheet.
+  bool get faltaFechaDeNacimiento => codigo == 'BIRTH_DATE_REQUIRED';
+
+  /// Declaró ser menor de 18.
+  ///
+  /// ⚠️ Esto NO se resuelve completando nada, a diferencia de los dos de
+  /// arriba. La app explica y cierra.
+  bool get esMenorDeEdad => codigo == 'UNDERAGE';
+
   @override
   String toString() => mensaje;
 }

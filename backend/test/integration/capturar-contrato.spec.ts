@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { PrismaService } from '@/shared/prisma/prisma.service';
 
 import { crearAppDePrueba } from '../helpers/app';
+import { NACIMIENTO_ADULTO_ISO } from '../helpers/edad';
 
 /**
  * Captura las respuestas REALES de la API para los tests de contrato de Flutter.
@@ -127,6 +128,12 @@ describe('Captura de contratos', () => {
     });
     const token = vendedor.body.accessToken as string;
 
+    // VendoX es 18+. Ver `helpers/edad.ts`.
+    await call('PATCH', '/api/v1/auth/me', {
+      token,
+      body: { birthDate: NACIMIENTO_ADULTO_ISO },
+    });
+
     const seller = await call('POST', '/api/v1/sellers', {
       token,
       body: { displayName: `Tejidos Marta ${marca}`, storeName: `Tejidos Marta ${marca}` },
@@ -201,6 +208,11 @@ describe('Captura de contratos', () => {
       },
     });
     const tokenComprador = comprador.body.accessToken as string;
+
+    await call('PATCH', '/api/v1/auth/me', {
+      token: tokenComprador,
+      body: { birthDate: NACIMIENTO_ADULTO_ISO },
+    });
 
     await call('POST', '/api/v1/addresses', {
       token: tokenComprador,

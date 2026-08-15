@@ -16,6 +16,7 @@ class Usuario {
     this.phoneVerified = false,
     this.whatsappOptIn = true,
     this.avatarUrl,
+    this.fechaDeNacimiento,
   });
 
   factory Usuario.fromJson(Map<String, dynamic> j) => Usuario(
@@ -28,6 +29,8 @@ class Usuario {
         phoneVerified: j['phoneVerified'] as bool? ?? false,
         whatsappOptIn: j['whatsappOptIn'] as bool? ?? true,
         avatarUrl: j['avatarUrl'] as String?,
+        // `AAAA-MM-DD` o null. Declarada, no verificada.
+        fechaDeNacimiento: j['birthDate'] as String?,
       );
 
   final String id;
@@ -40,6 +43,12 @@ class Usuario {
   final bool whatsappOptIn;
   final String? avatarUrl;
 
+  /// Fecha de nacimiento declarada, `AAAA-MM-DD`. VendoX es 18+.
+  ///
+  /// Se declara una sola vez: el backend rechaza el cambio. Por eso la app
+  /// muestra el dato pero no ofrece editarlo.
+  final String? fechaDeNacimiento;
+
   Map<String, dynamic> toJson() => {
         'id': id,
         'firstName': firstName,
@@ -50,6 +59,7 @@ class Usuario {
         'phoneVerified': phoneVerified,
         'whatsappOptIn': whatsappOptIn,
         'avatarUrl': avatarUrl,
+        'birthDate': fechaDeNacimiento,
       };
 
   String get nombreCompleto => '$firstName $lastName'.trim();
@@ -73,12 +83,15 @@ class Usuario {
 enum DatoFaltante {
   telefono,
   verificacionTelefono,
-  nombre;
+  nombre,
+  /// VendoX es 18+. Se pide antes de comprar y antes de crear la tienda.
+  fechaDeNacimiento;
 
   static DatoFaltante? desde(String raw) => switch (raw) {
         'phone' => DatoFaltante.telefono,
         'phoneVerification' => DatoFaltante.verificacionTelefono,
         'name' => DatoFaltante.nombre,
+        'birthDate' => DatoFaltante.fechaDeNacimiento,
         _ => null,
       };
 }

@@ -79,6 +79,22 @@ export const CompleteProfileSchema = z
     /** Se normaliza a E.164 en el servicio; acá se acepta como lo escriba. */
     phone: z.string().min(6).max(32).optional(),
     whatsappOptIn: z.boolean().optional(),
+    /**
+     * Fecha de nacimiento, `AAAA-MM-DD`. VendoX es 18+.
+     *
+     * Se exige el formato exacto y no `z.coerce.date()`: `new Date('15/03/2008')`
+     * devuelve `Invalid Date` en un servidor y una fecha equivocada en otro,
+     * según cómo interprete el día y el mes. Con el formato fijo, la app manda
+     * lo que la base guarda y no hay nada que interpretar.
+     *
+     * La validación de si es una fecha posible y de si esa persona es mayor la
+     * hace `edad.ts`, que puede dar mensajes distintos para "revisá el año" y
+     * "hay que tener 18". Acá sólo se comprueba la forma.
+     */
+    birthDate: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, 'La fecha tiene que ser AAAA-MM-DD')
+      .optional(),
   })
   .refine((v) => Object.values(v).some((x) => x !== undefined), {
     message: 'No hay nada que actualizar',

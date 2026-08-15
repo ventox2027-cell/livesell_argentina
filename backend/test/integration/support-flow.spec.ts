@@ -7,6 +7,7 @@ import type { PrismaService } from '@/shared/prisma/prisma.service';
 import type { RedisService } from '@/shared/redis/redis.service';
 
 import { crearAppDePrueba } from '../helpers/app';
+import { NACIMIENTO_ADULTO_ISO } from '../helpers/edad';
 
 /**
  * Soporte, extremo a extremo.
@@ -122,6 +123,19 @@ async function nuevoUsuario(rol: 'buyer' | 'admin' = 'buyer') {
     // tenemos sirve igual. Es lo que hace que un cambio de rol tenga efecto
     // inmediato sin obligar a volver a entrar.
   }
+
+
+  /**
+   * VendoX es 18+ y el backend lo exige antes de comprar y de crear la tienda.
+   *
+   * Se declara por el mismo camino que usa la app —`PATCH /auth/me`— y no
+   * escribiendo la columna: así el test también falla si ese endpoint se rompe.
+   * Ver `helpers/edad.ts`.
+   */
+  await call('PATCH', '/api/v1/auth/me', {
+    token: r.body.accessToken as string,
+    body: { birthDate: NACIMIENTO_ADULTO_ISO },
+  });
 
   return { token: r.body.accessToken as string, userId };
 }
