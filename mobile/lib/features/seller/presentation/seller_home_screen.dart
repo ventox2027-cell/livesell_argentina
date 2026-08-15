@@ -12,6 +12,7 @@ import '../domain/seller_models.dart';
 import 'interesados_screen.dart';
 import 'product_editor_screen.dart';
 import 'store_settings_screen.dart';
+import 'widgets/estado_de_cobros.dart';
 
 /// Panel del vendedor.
 ///
@@ -231,6 +232,13 @@ class _Panel extends ConsumerWidget {
 
           _Encabezado(perfil: perfil),
           const SizedBox(height: Gap.lg),
+
+          // Cobros arriba de todo: sin Mercado Pago conectado no se puede
+          // publicar ni transmitir, así que no es una preferencia escondida en
+          // un submenú — es el paso que le falta para empezar a trabajar.
+          //
+          // Cuando ya está conectado se reduce a una línea. Ver el widget.
+          const EstadoDeCobros(),
 
           // Transmitir es la acción principal de esta app. Va arriba de todo y
           // en un solo toque: enterrarla dos niveles adentro de ajustes sería

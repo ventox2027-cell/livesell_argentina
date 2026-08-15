@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 
 import { LiveKitService } from '@/modules/livekit/livekit.service';
+import { SellerOAuthService } from '@/modules/payments/seller-oauth.service';
 import { AuditService } from '@/shared/audit/audit.service';
 import { DomainError } from '@/shared/errors/domain.error';
 import { PrismaService } from '@/shared/prisma/prisma.service';
@@ -59,6 +60,7 @@ export class LiveService {
     private readonly livekit: LiveKitService,
     private readonly gateway: LiveGateway,
     private readonly audit: AuditService,
+    private readonly sellerOAuth: SellerOAuthService,
   ) {}
 
   /**
@@ -96,6 +98,19 @@ export class LiveService {
     if (vendedor.status !== 'ACTIVE') {
       throw new VendedorNoHabilitadoError(vendedor.status);
     }
+
+    /**
+     * Sin Mercado Pago conectado no hay vivo comercial.
+     *
+     * Se frena acá, al PREPARAR, y no al salir al aire: enterarse de que no
+     * podés transmitir cuando ya tenés la cámara encendida y gente esperando es
+     * la peor forma de descubrirlo.
+     *
+     * Un vivo es la superficie más visible de la plataforma y su único punto
+     * es vender. Dejar transmitir sin poder cobrar en la cuenta del vendedor
+     * significa que cada venta de ese vivo entra en la nuestra.
+     */
+    await this.sellerOAuth.exigirParaVender(vendedor.id, 'transmitir');
 
     const tienda = vendedor.stores[0];
     if (!tienda) throw new NoEsTuVivoError();

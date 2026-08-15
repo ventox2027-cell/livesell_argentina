@@ -15,6 +15,12 @@ import { PrismaService } from '@/shared/prisma/prisma.service';
 import { newId } from '@/shared/utils/id';
 
 import { MercadoPagoOAuthClient, OAuthNoConfiguradoError } from './mp-oauth.client';
+import { generarPkce } from './pkce';
+import {
+  RequiereMercadoPagoError,
+  puedeVender,
+  type AccionQueRequiereMp,
+} from './puede-vender';
 
 /**
  * La conexión de un vendedor con su cuenta de Mercado Pago.
@@ -112,6 +118,14 @@ export class SellerOAuthService {
      * su secuencia se puede predecir observando salidas anteriores.
      */
     const state = randomBytes(32).toString('base64url');
+
+    /**
+     * PKCE: el verificador se guarda, el desafío viaja.
+     *
+     * Ata el código a ESTA petición. El `state` ata el callback a esta persona;
+     * son defensas distintas y las dos hacen falta. Ver `pkce.ts`.
+     */
+    const pkce = generarPkce();
     const expiresAt = new Date(Date.now() + MINUTOS_DEL_STATE * 60_000);
 
     /**
@@ -127,11 +141,18 @@ export class SellerOAuthService {
     });
 
     await this.prisma.oAuthState.create({
-      data: { id: newId('oas'), sellerId: seller.id, state, expiresAt },
+      data: {
+        id: newId('oas'),
+        sellerId: seller.id,
+        state,
+        expiresAt,
+        // ⛔ El verificador vive sólo acá. Nunca sale por HTTP.
+        codeVerifier: pkce.verifier,
+      },
     });
 
     return {
-      url: this.cliente.urlDeAutorizacion(state),
+      url: this.cliente.urlDeAutorizacion(state, pkce.challenge),
       expiraEn: MINUTOS_DEL_STATE * 60,
     };
   }
@@ -179,11 +200,11 @@ export class SellerOAuthService {
 
     const fila = await this.prisma.oAuthState.findUnique({
       where: { state },
-      select: { sellerId: true },
+      select: { sellerId: true, codeVerifier: true },
     });
     if (!fila) throw new EstadoInvalidoError();
 
-    const tokens = await this.cliente.canjearCodigo(code);
+    const tokens = await this.cliente.canjearCodigo(code, fila.codeVerifier);
     await this.guardar(fila.sellerId, tokens);
 
     return { sellerId: fila.sellerId };
@@ -322,6 +343,15 @@ export class SellerOAuthService {
       tokenTerminaEn: credencial?.accessHint ?? null,
       /** La comisión que se le descuenta a cada venta. Vigente, no histórica. */
       comisionBps: env.VENDOX_PLATFORM_FEE_BPS,
+      /**
+       * Si sin esto no puede vender.
+       *
+       * Lo decide el servidor y no la app: la regla depende de un interruptor y
+       * de si el OAuth está configurado acá, y la app no tiene forma de saber
+       * ninguna de las dos cosas.
+       */
+      obligatoriaParaVender:
+        env.SELLER_MUST_CONNECT_MP && this.disponible && cuenta?.status !== 'CONNECTED',
     };
   }
 
@@ -362,6 +392,30 @@ export class SellerOAuthService {
     });
 
     return { ok: true };
+  }
+
+  /**
+   * ¿Este vendedor puede publicar y transmitir?
+   *
+   * Lo llaman productos y vivos antes de dejar publicar, y también la app para
+   * mostrar el estado. Por eso devuelve un booleano y no lanza: la pantalla de
+   * "Mi tienda" necesita la respuesta, no una excepción.
+   */
+  async puedeVender(sellerId: string): Promise<boolean> {
+    const conectada = await this.prisma.sellerPaymentAccount.count({
+      where: { sellerId, provider: 'MERCADO_PAGO', status: 'CONNECTED' },
+    });
+
+    return puedeVender({
+      reglaActiva: env.SELLER_MUST_CONNECT_MP,
+      oauthDisponible: this.disponible,
+      cuentaConectada: conectada > 0,
+    });
+  }
+
+  /** Lo mismo, pero lanza. Para los puntos donde hay que frenar. */
+  async exigirParaVender(sellerId: string, accion: AccionQueRequiereMp): Promise<void> {
+    if (!(await this.puedeVender(sellerId))) throw new RequiereMercadoPagoError(accion);
   }
 
   // ═══════════════════════════════════════════════════════════════════════

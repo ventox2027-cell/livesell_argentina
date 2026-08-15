@@ -3,6 +3,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { env } from '@/config/env.schema';
 import { DomainError } from '@/shared/errors/domain.error';
 
+import { METODO_DE_DESAFIO } from './pkce';
+
 /**
  * El cliente OAuth de Mercado Pago.
  *
@@ -85,7 +87,7 @@ export class MercadoPagoOAuthClient {
    * instante en que la URL ya está armada y la fila todavía no, y el callback
    * de un usuario muy rápido llegaría a un `state` que no existe.
    */
-  urlDeAutorizacion(state: string): string {
+  urlDeAutorizacion(state: string, codeChallenge: string): string {
     if (!this.configurado) throw new OAuthNoConfiguradoError();
 
     const url = new URL('https://auth.mercadopago.com.ar/authorization');
@@ -94,6 +96,16 @@ export class MercadoPagoOAuthClient {
     url.searchParams.set('platform_id', 'mp');
     url.searchParams.set('redirect_uri', env.MP_OAUTH_REDIRECT_URI!);
     url.searchParams.set('state', state);
+
+    /**
+     * PKCE. Viaja el DESAFÍO, nunca el verificador.
+     *
+     * Quien vea esta URL —el historial del navegador, un log de proxy— ve el
+     * hash. Del hash no se puede volver al verificador, así que interceptar el
+     * código no alcanza para canjearlo. Ver `pkce.ts`.
+     */
+    url.searchParams.set('code_challenge', codeChallenge);
+    url.searchParams.set('code_challenge_method', METODO_DE_DESAFIO);
 
     return url.toString();
   }
@@ -104,11 +116,22 @@ export class MercadoPagoOAuthClient {
    * El `client_secret` sale del entorno de este proceso y no viaja a ningún
    * lado más.
    */
-  async canjearCodigo(code: string): Promise<TokensDeVendedor> {
+  async canjearCodigo(code: string, codeVerifier: string | null): Promise<TokensDeVendedor> {
     return this.pedirTokens({
       grant_type: 'authorization_code',
       code,
       redirect_uri: env.MP_OAUTH_REDIRECT_URI!,
+      /**
+       * El verificador cierra el circuito de PKCE.
+       *
+       * Mercado Pago comprueba que su hash coincida con el desafío que recibió
+       * al empezar. Si no coincide —o si falta— rechaza el canje.
+       *
+       * Se manda condicionalmente porque una autorización empezada ANTES de que
+       * existiera PKCE tiene la columna en `null`. Mandar `undefined` haría que
+       * el canje fallara para esa persona, que no hizo nada mal.
+       */
+      ...(codeVerifier ? { code_verifier: codeVerifier } : {}),
     });
   }
 

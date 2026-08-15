@@ -2552,6 +2552,26 @@ model OAuthState {
 
   provider PaymentProvider @default(MERCADO_PAGO)
 
+  /// El verificador de PKCE. **Nunca sale de acá.**
+  ///
+  /// ═══════════════════════════════════════════════════════════════════════
+  /// QUÉ AGREGA PKCE SOBRE EL `state`
+  /// ═══════════════════════════════════════════════════════════════════════
+  ///
+  /// El `state` ata el callback a la persona que inició la autorización. PKCE
+  /// ata el CÓDIGO a la petición que lo pidió.
+  ///
+  /// Son cosas distintas y las dos hacen falta. Si alguien logra interceptar el
+  /// código —del historial del navegador, de un log de proxy, de una
+  /// redirección mal configurada— con `state` solo podría canjearlo desde otro
+  /// lado. Con PKCE no: el canje exige el verificador, que nunca viajó por el
+  /// navegador. Sólo viajó su hash.
+  ///
+  /// Nuestro cliente es confidencial —tenemos `client_secret` en el servidor—
+  /// así que PKCE no es obligatorio. Se agrega igual: cuesta veinte líneas y
+  /// cubre el caso en que el secreto se filtre.
+  codeVerifier String? @map("code_verifier")
+
   /// Cuándo deja de valer. Diez minutos: es lo que tarda una persona en
   /// autorizar, y más tiempo sólo agranda la ventana de un ataque.
   expiresAt DateTime @map("expires_at")

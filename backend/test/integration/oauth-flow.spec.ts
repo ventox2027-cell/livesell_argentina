@@ -81,9 +81,11 @@ beforeAll(async () => {
     .overrideProvider(MercadoPagoOAuthClient)
     .useValue({
       configurado: true,
-      // La URL sí se arma de verdad: es parte de lo que hay que verificar.
-      urlDeAutorizacion: (state: string) =>
-        `https://auth.mercadopago.com.ar/authorization?client_id=1234567890123456&state=${state}`,
+      // La URL sí se arma de verdad: es parte de lo que hay que verificar,
+      // incluido el desafío de PKCE.
+      urlDeAutorizacion: (state: string, codeChallenge: string) =>
+        `https://auth.mercadopago.com.ar/authorization?client_id=1234567890123456` +
+        `&state=${state}&code_challenge=${codeChallenge}&code_challenge_method=S256`,
       canjearCodigo,
       renovar,
     })
@@ -519,5 +521,56 @@ describe('Conectar Mercado Pago', () => {
       expect(borrados).toBeGreaterThanOrEqual(1);
       expect(await prisma.oAuthState.findUnique({ where: { state } })).toBeNull();
     });
+  });
+});
+
+describe('PKCE', () => {
+  it('⛔ el desafío viaja en la URL y el verificador NUNCA sale', async () => {
+    /**
+     * Es lo que hace que PKCE sirva. Si el verificador viajara por el
+     * navegador, quien intercepte la URL podría canjear el código igual — y
+     * PKCE no protegería de nada.
+     */
+    const v = await nuevoVendedor();
+
+    const r = await call('POST', '/api/v1/sellers/me/payment-account/connect', {
+      token: v.token,
+    });
+
+    const url = new URL(r.body!.url as string);
+    const desafio = url.searchParams.get('code_challenge');
+
+    expect(desafio).toBeTruthy();
+    expect(url.searchParams.get('code_challenge_method')).toBe('S256');
+
+    const fila = await prisma.oAuthState.findFirstOrThrow({
+      where: { sellerId: v.sellerId },
+    });
+
+    // El verificador está guardado…
+    expect(fila.codeVerifier).toBeTruthy();
+    // …y NO es lo que viajó.
+    expect(fila.codeVerifier).not.toBe(desafio);
+    expect(r.texto).not.toContain(fila.codeVerifier!);
+  });
+
+  it('el canje manda el verificador guardado', async () => {
+    const v = await nuevoVendedor();
+    canjearCodigo.mockResolvedValue(tokensFalsos('pkce'));
+
+    const inicio = await call('POST', '/api/v1/sellers/me/payment-account/connect', {
+      token: v.token,
+    });
+    const state = new URL(inicio.body!.url as string).searchParams.get('state')!;
+    const fila = await prisma.oAuthState.findFirstOrThrow({ where: { state } });
+
+    await call(
+      'GET',
+      `/${RUTA_OAUTH_MERCADOPAGO}/callback?code=TG-codigo&state=${encodeURIComponent(state)}`,
+    );
+
+    // Mercado Pago comprueba que el hash del verificador coincida con el
+    // desafío. Sin mandarlo, rechaza el canje.
+    expect(canjearCodigo).toHaveBeenCalledWith('TG-codigo', fila.codeVerifier);
   });
 });

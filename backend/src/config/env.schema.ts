@@ -314,6 +314,32 @@ export const envSchema = z
      */
     CREDENTIALS_ENCRYPTION_KEY: optionalOrEmpty(z.string().min(40)),
 
+    /**
+     * Si hace falta conectar Mercado Pago para poder vender.
+     *
+     * ═══════════════════════════════════════════════════════════════════════
+     * ES UNA REGLA DE NEGOCIO, NO UNA CONFIGURACIÓN TÉCNICA
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * Con esto encendido, un vendedor sin cuenta conectada puede crear su
+     * tienda, cargar productos en borrador y configurar todo — pero **no puede
+     * publicar un producto vendible ni iniciar un vivo comercial**.
+     *
+     * La alternativa es lo que había antes: el cobro entra en la cuenta de
+     * VendoX. Eso nos convierte en intermediarios del dinero de terceros, y
+     * cada venta acumulada sin cuenta conectada es plata que le debemos a
+     * alguien y que hay que girar a mano.
+     *
+     * ⚠️ El interruptor existe por una razón concreta: si el OAuth de Mercado
+     * Pago se cae o queda mal configurado, esto deja a TODOS los vendedores sin
+     * poder publicar. Poder apagarlo en un incidente, sin desplegar, es la
+     * diferencia entre una tarde mala y un día perdido.
+     *
+     * Y no aplica si el OAuth no está configurado en este servidor: exigir
+     * conectar algo que no se puede conectar dejaría la app inservible.
+     */
+    SELLER_MUST_CONNECT_MP: envBoolean(true),
+
     MP_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(60_000).default(10_000),
     PAYMENTS_SPIKE_ENABLED: envBoolean(false),
 

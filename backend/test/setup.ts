@@ -80,6 +80,18 @@ const TEST_DEFAULTS: Record<string, string> = {
    * ⛔ Obviamente no se usa en ningún otro lado.
    */
   CREDENTIALS_ENCRYPTION_KEY: 'dGVzdC1rZXktc29sby1wYXJhLXRlc3RzLTMyYnl0ZXM=',
+  /**
+   * La regla de "sin Mercado Pago no vendés" queda APAGADA en la suite.
+   *
+   * No es que no importe: tiene sus propios tests, que la encienden
+   * explícitamente. Apagarla acá evita que cien tests que crean productos
+   * publicados —y que no tienen nada que ver con Mercado Pago— tengan que
+   * conectar una cuenta falsa antes de empezar.
+   *
+   * En producción el valor por omisión es `true`. Ver `env.schema.ts`.
+   */
+  SELLER_MUST_CONNECT_MP: 'false',
+
 
 
   METRICS_ENABLED: 'false',

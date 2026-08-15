@@ -21,6 +21,8 @@ import type {
 import { OwnershipService } from './ownership.service';
 import { ordenarPorPuntaje } from './ranking';
 import { SearchService } from './search.service';
+import { SellerOAuthService } from '@/modules/payments/seller-oauth.service';
+
 import { PRODUCTO_COMPRABLE, PRODUCTO_VISIBLE } from './visibilidad';
 import {
   calcularOptionsKey,
@@ -130,6 +132,7 @@ export class ProductsService {
     private readonly audit: AuditService,
     private readonly events: DomainEventBus,
     private readonly search: SearchService,
+    private readonly sellerOAuth: SellerOAuthService,
   ) {}
 
   /**
@@ -141,6 +144,18 @@ export class ProductsService {
    */
   async create(userId: string, dto: CreateProductDto) {
     const { store } = await this.ownership.primaryStoreOf(userId, { requireActive: true });
+
+    /**
+     * Sin Mercado Pago conectado se puede crear el BORRADOR, no publicarlo.
+     *
+     * La diferencia importa: alguien que se sienta una tarde a cargar cuarenta
+     * productos no se topa con el bloqueo hasta el final, cuando ya tiene todo
+     * hecho y le queda un solo paso. Frenarlo al primero sería mandarlo a
+     * conectar una cuenta antes de saber si le sirve la app.
+     */
+    if (dto.status === 'ACTIVE') {
+      await this.sellerOAuth.exigirParaVender(store.sellerId, 'publicar');
+    }
 
     if (!esComparativoValido(dto.basePriceCents, dto.compareAtPriceCents)) {
       throw new InvalidPriceError('El precio tachado tiene que ser mayor que el de venta');
@@ -270,6 +285,21 @@ export class ProductsService {
 
   async update(userId: string, productId: string, dto: UpdateProductDto) {
     const { product } = await this.ownership.productOf(userId, productId, { requireActive: true });
+
+    /**
+     * Sólo al PASAR a publicado.
+     *
+     * Un producto que ya está publicado se puede seguir editando aunque el
+     * vendedor haya desconectado su cuenta: quitarle la posibilidad de
+     * corregir un precio mal puesto sería castigarlo dos veces.
+     */
+    if (dto.status === 'ACTIVE' && product.status !== 'ACTIVE') {
+      const tienda = await this.prisma.store.findUniqueOrThrow({
+        where: { id: product.storeId },
+        select: { sellerId: true },
+      });
+      await this.sellerOAuth.exigirParaVender(tienda.sellerId, 'publicar');
+    }
 
     const base = dto.basePriceCents ?? product.basePriceCents;
     const comparativo =

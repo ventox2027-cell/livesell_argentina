@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 
+import { SellerOAuthModule } from '@/modules/payments/seller-oauth.module';
+
 import { AuditService } from '@/shared/audit/audit.service';
 import { DomainEventBus } from '@/shared/events/domain-events';
 
@@ -26,6 +28,8 @@ import { SellersService } from './sellers.service';
  * corran sin credenciales y sin red.
  */
 @Module({
+  // Para exigir Mercado Pago conectado antes de publicar. Ver `puede-vender.ts`.
+  imports: [SellerOAuthModule],
   controllers: [CommerceController],
   providers: [
     SellersService,

@@ -63,7 +63,7 @@ beforeAll(async () => {
     throw new Error('Los tests de integración borran datos y sólo corren contra una base *_test');
   }
   await prisma.$executeRawUnsafe(
-    'TRUNCATE reports, moderation_actions, notifications, live_sessions, likes, audit_logs, product_variant_options, product_images, product_variants, ' +
+    'TRUNCATE seller_payment_accounts, seller_oauth_credentials, oauth_states, reports, moderation_actions, notifications, live_sessions, likes, audit_logs, product_variant_options, product_images, product_variants, ' +
       'product_option_values, product_options, products, stores, sellers, ' +
       'auth_events, refresh_tokens, devices, user_identities, users CASCADE',
   );
@@ -1938,5 +1938,279 @@ describe('La cola de moderación', () => {
     // El HIDE fue automático; el UNHIDE lo hizo una persona.
     expect(acciones[0]!.automatic).toBe(false);
     expect(acciones[1]!.automatic).toBe(true);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SIN MERCADO PAGO NO SE VENDE
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * La regla de negocio, extremo a extremo.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * LO QUE PROTEGE
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Si un vendedor publica sin conectar su cuenta, el cobro entra en la de
+ * VendoX. Cada venta así es plata que le debemos a alguien y que hay que girar
+ * a mano — y legalmente nos convierte en intermediarios del dinero de terceros.
+ *
+ * Pero el bloqueo tiene que caer en el lugar correcto: **publicar y
+ * transmitir**, no crear ni configurar. Alguien que se sienta una tarde a
+ * cargar cuarenta productos no puede toparse con esto al primero.
+ *
+ * ⚠️ Estos tests encienden la regla a mano. En la suite está apagada porque cien
+ * tests que crean productos publicados no tienen nada que ver con Mercado Pago.
+ */
+describe('Sin Mercado Pago no se vende', () => {
+  /** Enciende la regla sólo para este bloque. */
+  const original = process.env.SELLER_MUST_CONNECT_MP;
+
+  beforeAll(() => {
+    process.env.SELLER_MUST_CONNECT_MP = 'true';
+  });
+
+  afterAll(() => {
+    process.env.SELLER_MUST_CONNECT_MP = original;
+  });
+
+  /**
+   * ⚠️ `env` ya está evaluado y congelado: cambiar `process.env` no lo mueve.
+   *
+   * Así que el interruptor se toca sobre el objeto de configuración, que es lo
+   * que el código lee de verdad. Es feo y sólo vale en un test; la alternativa
+   * —levantar una segunda aplicación entera con otra configuración— tarda diez
+   * segundos por caso.
+   */
+  async function conReglaEncendida<T>(fn: () => Promise<T>): Promise<T> {
+    const { env } = await import('@/config/env.schema');
+    const antes = env.SELLER_MUST_CONNECT_MP;
+    (env as { SELLER_MUST_CONNECT_MP: boolean }).SELLER_MUST_CONNECT_MP = true;
+    try {
+      return await fn();
+    } finally {
+      (env as { SELLER_MUST_CONNECT_MP: boolean }).SELLER_MUST_CONNECT_MP = antes;
+    }
+  }
+
+  describe('Lo que SÍ puede hacer sin conectar', () => {
+    it('crear su tienda', async () => {
+      await conReglaEncendida(async () => {
+        const v = await nuevoVendedor();
+        expect(v.seller.id).toBeTruthy();
+      });
+    });
+
+    it('⛔ cargar un producto en BORRADOR', async () => {
+      /**
+       * Es la mitad más importante de la regla. Frenarlo acá lo mandaría a
+       * conectar una cuenta antes de saber si le sirve la app.
+       */
+      await conReglaEncendida(async () => {
+        const v = await nuevoVendedor();
+        n += 1;
+        const r = await call('POST', '/api/v1/products', {
+          token: v.token,
+          body: {
+            name: `Borrador sin MP ${n}`,
+            slug: `borrador-sin-mp-${n}-${Date.now().toString(36)}`,
+            basePriceCents: 500_000,
+            status: 'DRAFT',
+          },
+        });
+
+        expect(r.status, JSON.stringify(r.body)).toBe(201);
+      });
+    });
+
+    it('configurar envío y devoluciones', async () => {
+      await conReglaEncendida(async () => {
+        const v = await nuevoVendedor();
+        const tienda = await prisma.store.findFirstOrThrow({
+          where: { sellerId: v.seller.id as string },
+        });
+
+        const r = await call('PATCH', `/api/v1/stores/${tienda.id}/shipping`, {
+          token: v.token,
+          body: {
+            shippingMode: 'FIXED_PRICE',
+            shippingFlatAmount: 350_000,
+            processorFeeMode: 'ABSORBED',
+          },
+        });
+
+        expect(r.status, JSON.stringify(r.body)).toBe(200);
+      });
+    });
+  });
+
+  describe('⛔ Lo que NO puede', () => {
+    it('publicar un producto', async () => {
+      await conReglaEncendida(async () => {
+        const v = await nuevoVendedor();
+        n += 1;
+        const r = await call('POST', '/api/v1/products', {
+          token: v.token,
+          body: {
+            name: `Publicado sin MP ${n}`,
+            slug: `publicado-sin-mp-${n}-${Date.now().toString(36)}`,
+            basePriceCents: 500_000,
+            status: 'ACTIVE',
+          },
+        });
+
+        // 422 y no 403: no es falta de permiso, es un requisito que PUEDE
+        // cumplir. La app tiene que ofrecer el botón de conectar.
+        expect(r.status, JSON.stringify(r.body)).toBe(422);
+        expect(r.body.error.code).toBe('MP_ACCOUNT_REQUIRED');
+        expect(r.body.error.message).toContain('Mercado Pago');
+      });
+    });
+
+    it('pasar un borrador a publicado', async () => {
+      await conReglaEncendida(async () => {
+        const v = await nuevoVendedor();
+        n += 1;
+        const creado = await call('POST', '/api/v1/products', {
+          token: v.token,
+          body: {
+            name: `Borrador a publicar ${n}`,
+            slug: `borr-pub-${n}-${Date.now().toString(36)}`,
+            basePriceCents: 500_000,
+            status: 'DRAFT',
+          },
+        });
+        expect(creado.status).toBe(201);
+
+        const r = await call('PATCH', `/api/v1/products/${creado.body.id}`, {
+          token: v.token,
+          body: { status: 'ACTIVE' },
+        });
+
+        expect(r.status, JSON.stringify(r.body)).toBe(422);
+        expect(r.body.error.code).toBe('MP_ACCOUNT_REQUIRED');
+      });
+    });
+
+    it('el mensaje dice qué acción se frenó', async () => {
+      // Un mensaje genérico deja a la persona sin saber qué estaba haciendo,
+      // sobre todo si tocó "publicar" en una lista de veinte productos.
+      await conReglaEncendida(async () => {
+        const v = await nuevoVendedor();
+        n += 1;
+        const r = await call('POST', '/api/v1/products', {
+          token: v.token,
+          body: {
+            name: `Mensaje ${n}`,
+            slug: `mensaje-${n}-${Date.now().toString(36)}`,
+            basePriceCents: 500_000,
+            status: 'ACTIVE',
+          },
+        });
+
+        expect(r.body.error.message).toContain('publicar un producto');
+        expect(r.body.error.message).toContain('una sola vez');
+      });
+    });
+  });
+
+  describe('Con la cuenta conectada', () => {
+    /** Deja al vendedor con la cuenta conectada, sin pasar por el OAuth real. */
+    async function conectar(sellerId: string) {
+      await prisma.sellerPaymentAccount.create({
+        data: {
+          id: `spa_test${sellerId.slice(-20)}`,
+          sellerId,
+          provider: 'MERCADO_PAGO',
+          providerAccountId: '987654321',
+          status: 'CONNECTED',
+          connectedAt: new Date(),
+        },
+      });
+    }
+
+    it('publicar funciona', async () => {
+      await conReglaEncendida(async () => {
+        const v = await nuevoVendedor();
+        await conectar(v.seller.id as string);
+
+        n += 1;
+        const r = await call('POST', '/api/v1/products', {
+          token: v.token,
+          body: {
+            name: `Publicado con MP ${n}`,
+            slug: `pub-con-mp-${n}-${Date.now().toString(36)}`,
+            basePriceCents: 500_000,
+            status: 'ACTIVE',
+          },
+        });
+
+        expect(r.status, JSON.stringify(r.body)).toBe(201);
+        expect(r.body.status).toBe('ACTIVE');
+      });
+    });
+
+    it('una cuenta REVOCADA no alcanza', async () => {
+      // Desconectar tiene que volver a frenar la publicación: si no, alguien
+      // conecta, publica y desconecta.
+      await conReglaEncendida(async () => {
+        const v = await nuevoVendedor();
+        const sellerId = v.seller.id as string;
+        await conectar(sellerId);
+        await prisma.sellerPaymentAccount.updateMany({
+          where: { sellerId },
+          data: { status: 'REVOKED' },
+        });
+
+        n += 1;
+        const r = await call('POST', '/api/v1/products', {
+          token: v.token,
+          body: {
+            name: `Revocado ${n}`,
+            slug: `revocado-${n}-${Date.now().toString(36)}`,
+            basePriceCents: 500_000,
+            status: 'ACTIVE',
+          },
+        });
+
+        expect(r.status).toBe(422);
+      });
+    });
+
+    it('un producto YA publicado se puede seguir editando', async () => {
+      /**
+       * Quitarle la posibilidad de corregir un precio mal puesto sería
+       * castigarlo dos veces. Sólo se frena el paso A publicado.
+       */
+      await conReglaEncendida(async () => {
+        const v = await nuevoVendedor();
+        const sellerId = v.seller.id as string;
+        await conectar(sellerId);
+
+        n += 1;
+        const creado = await call('POST', '/api/v1/products', {
+          token: v.token,
+          body: {
+            name: `Editable ${n}`,
+            slug: `editable-${n}-${Date.now().toString(36)}`,
+            basePriceCents: 500_000,
+            status: 'ACTIVE',
+          },
+        });
+
+        await prisma.sellerPaymentAccount.updateMany({
+          where: { sellerId },
+          data: { status: 'REVOKED' },
+        });
+
+        const r = await call('PATCH', `/api/v1/products/${creado.body.id}`, {
+          token: v.token,
+          body: { basePriceCents: 400_000 },
+        });
+
+        expect(r.status, JSON.stringify(r.body)).toBe(200);
+      });
+    });
   });
 });

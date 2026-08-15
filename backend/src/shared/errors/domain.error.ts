@@ -46,6 +46,11 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<string, number>> = {
   // corregir el JSON sino mostrarle el motivo a la persona.
   EXCHANGE_POLICY_INVALID: 422,
 
+  // 422 y no 403: no es falta de permiso, es un requisito previo que la
+  // persona PUEDE cumplir. La app tiene que ofrecer el botón de conectar, no
+  // decir "no tenés acceso".
+  MP_ACCOUNT_REQUIRED: 422,
+
   // Moderación
   //
   // 409 y no 400: el reporte es válido, lo que pasa es que esta persona ya

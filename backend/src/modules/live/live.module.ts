@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 
+import { SellerOAuthModule } from '@/modules/payments/seller-oauth.module';
+
 import { AuthModule } from '@/modules/auth/auth.module';
 import { LiveKitModule } from '@/modules/livekit/livekit.module';
 import { AuditService } from '@/shared/audit/audit.service';
@@ -19,7 +21,7 @@ import { LiveService } from './live.service';
  * cambios de stock a las salas donde ese producto está destacado.
  */
 @Module({
-  imports: [AuthModule, LiveKitModule],
+  imports: [AuthModule, LiveKitModule, SellerOAuthModule],
   controllers: [LiveController],
   providers: [LiveService, LiveGateway, LiveStockListener, AuditService],
   exports: [LiveService],
