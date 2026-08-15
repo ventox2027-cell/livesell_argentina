@@ -14,6 +14,7 @@ import '../../auth/presentation/widgets/fecha_de_nacimiento_sheet.dart';
 import '../data/orders_repository.dart';
 import '../domain/order_models.dart';
 import 'address_sheet.dart';
+import 'widgets/campo_de_cupon.dart';
 import 'widgets/desglose_de_precio.dart';
 
 /// El checkout.
@@ -179,6 +180,47 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
     }
   }
 
+  /// Aplica un cupón al pedido ya creado.
+  ///
+  /// ⚠️ Manda el **código** y vuelve a pintar con el pedido que devuelve el
+  /// backend. La app no calcula el descuento ni ajusta el total por su cuenta:
+  /// el número que se muestra es el mismo que se va a cobrar.
+  ///
+  /// Devuelve el mensaje de error para que el campo lo muestre al lado, en vez
+  /// de un aviso flotante que tapa el formulario y desaparece solo.
+  Future<String?> _aplicarCupon(String codigo) async {
+    final pedido = _pedido;
+    if (pedido == null) return null;
+
+    try {
+      final actualizado = await ref.read(ordersRepositoryProvider).aplicarCupon(pedido.id, codigo);
+      if (!mounted) return null;
+      unawaited(HapticFeedback.lightImpact());
+      setState(() => _pedido = actualizado);
+      return null;
+    } on PedidoException catch (e) {
+      // El mensaje viene del servidor y dice cuál es el problema —vencido,
+      // agotado, ya usado—. Ver `MENSAJE_DE_RECHAZO`.
+      return e.mensaje;
+    } catch (_) {
+      return 'No pudimos aplicar el cupón';
+    }
+  }
+
+  Future<void> _quitarCupon() async {
+    final pedido = _pedido;
+    if (pedido == null) return;
+
+    try {
+      final actualizado = await ref.read(ordersRepositoryProvider).quitarCupon(pedido.id);
+      if (!mounted) return;
+      setState(() => _pedido = actualizado);
+    } catch (_) {
+      if (!mounted) return;
+      AppSnack.error(context, 'No pudimos quitar el cupón');
+    }
+  }
+
   Future<void> _pedirDireccion() async {
     final direccion = await AddressSheet.mostrar(context);
     if (direccion == null || !mounted) return;
@@ -268,6 +310,8 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
                 _Paso.resumen => _Resumen(
                     pedido: _pedido!,
                     onPagar: () => setState(() => _paso = _Paso.tarjeta),
+                    onAplicarCupon: _aplicarCupon,
+                    onQuitarCupon: _quitarCupon,
                   ),
                 _Paso.tarjeta => _FormularioDeTarjeta(pedido: _pedido!, onToken: _cobrar),
                 _Paso.procesando => const _Cargando('No cierres la app'),
@@ -362,9 +406,16 @@ class _PedirDireccion extends StatelessWidget {
 }
 
 class _Resumen extends StatelessWidget {
-  const _Resumen({required this.pedido, required this.onPagar});
+  const _Resumen({
+    required this.pedido,
+    required this.onPagar,
+    required this.onAplicarCupon,
+    required this.onQuitarCupon,
+  });
   final Pedido pedido;
   final VoidCallback onPagar;
+  final Future<String?> Function(String codigo) onAplicarCupon;
+  final Future<void> Function() onQuitarCupon;
 
   @override
   Widget build(BuildContext context) {
@@ -435,6 +486,14 @@ class _Resumen extends StatelessWidget {
           ),
           const SizedBox(height: Gap.lg),
         ],
+
+        // Arranca cerrado a propósito: ver `CampoDeCupon`.
+        CampoDeCupon(
+          pedido: pedido,
+          onAplicar: onAplicarCupon,
+          onQuitar: onQuitarCupon,
+        ),
+        const SizedBox(height: Gap.md),
 
         // Una línea por concepto. Ver el comentario de `DesgloseDePrecio`.
         DesgloseDePrecio(pedido: pedido),

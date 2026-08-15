@@ -85,6 +85,31 @@ export function porcentajeDe(monto: number, bps: number): number {
 }
 
 /**
+ * Sobre cuánto se cobra la comisión.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * SOBRE LO QUE SE PAGÓ, NO SOBRE LO QUE DECÍA LA ETIQUETA
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * El 6 % sale del subtotal de productos **menos el descuento**. Un vendedor que
+ * pone un cupón de $3.000 en una compra de $10.000 cobra $7.000, y la comisión
+ * es $420 y no $600.
+ *
+ * Cobrar sobre el precio de lista sería quedarse con parte del descuento: el
+ * vendedor puso la plata para atraer una venta y VendoX le cobraría por un
+ * ingreso que no tuvo. Sobre descuentos grandes la comisión efectiva se dispara
+ * —un 50 % de descuento la duplica— y el vendedor deja de hacer promociones.
+ *
+ * ⚠️ El piso en cero no es defensivo por gusto: `verificarCoherencia` permite
+ * que el descuento cubra también el envío, así que puede superar el subtotal de
+ * productos. Sin el piso, la comisión sería negativa y VendoX le estaría
+ * pagando al vendedor por vender.
+ */
+export function baseDeComision(itemsSubtotal: number, discountAmount: number): number {
+  return Math.max(0, itemsSubtotal - discountAmount);
+}
+
+/**
  * Calcula todos los importes de una orden.
  *
  * ─── Sobre qué se cobra la comisión ───
@@ -107,7 +132,10 @@ export function calcularPrecio(entrada: EntradaDePrecio): Precio {
   const grossAmount = itemsSubtotal + shippingAmount + processorSurchargeAmount - discountAmount;
 
   /**
-   * ⚠️ Sobre el subtotal de PRODUCTOS. No sobre el bruto.
+   * ⚠️ Sobre el subtotal de PRODUCTOS **ya descontado**. No sobre el bruto.
+   *
+   * Lo del descuento está explicado en `baseDeComision`. Lo que sigue es por
+   * qué el envío y el recargo quedan afuera.
    *
    * VendoX cobra 6 % sobre lo que se vendió, no sobre lo que se movió:
    *
@@ -125,7 +153,7 @@ export function calcularPrecio(entrada: EntradaDePrecio): Precio {
    * Cambiar esta línea no corrige un cálculo: cambia el modelo de negocio.
    * `orders-flow.spec.ts` tiene un test que lo dice explícitamente.
    */
-  const platformFeeAmount = porcentajeDe(itemsSubtotal, entrada.platformFeeBps);
+  const platformFeeAmount = porcentajeDe(baseDeComision(itemsSubtotal, discountAmount), entrada.platformFeeBps);
 
   return {
     itemsSubtotal,

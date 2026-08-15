@@ -65,6 +65,25 @@ class OrdersRepository {
     return Pedido.fromJson(res.data!);
   }
 
+  /// Aplica un cupón a un pedido que todavía no se pagó.
+  ///
+  /// ⚠️ Manda el **código**, nunca el descuento. Cuánto descuenta lo resuelve
+  /// el backend contra la base del vendedor de esta compra.
+  Future<Pedido> aplicarCupon(String orderId, String codigo) async {
+    final res = await _api.raw.post<Map<String, dynamic>>(
+      '/orders/$orderId/coupon',
+      data: {'codigo': codigo},
+    );
+    if (res.statusCode != 201 && res.statusCode != 200) throw _error(res);
+    return Pedido.fromJson(res.data!);
+  }
+
+  Future<Pedido> quitarCupon(String orderId) async {
+    final res = await _api.delete<Map<String, dynamic>>('/orders/$orderId/coupon');
+    if (res.statusCode != 200) throw _error(res);
+    return Pedido.fromJson(res.data!);
+  }
+
   Future<Pedido> pedido(String id) async {
     final res = await _api.get<Map<String, dynamic>>('/orders/$id');
     if (res.statusCode != 200 || res.data == null) throw _error(res);

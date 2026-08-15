@@ -47,8 +47,25 @@ export const CreateOrderSchema = z.object({
    * compra un televisor por un peso.
    */
   liveSessionId: z.string().max(40).optional(),
+
+  /**
+   * El código del cupón, tal como lo tipeó la persona.
+   *
+   * ⚠️ Igual que el precio: viaja el **código**, nunca el descuento. Cuánto
+   * descuenta lo busca el servidor en la base del vendedor de esta compra.
+   *
+   * Se acepta con minúsculas y espacios porque así lo escribe alguien en el
+   * teclado del teléfono; el servidor normaliza. Ver `normalizarCodigo`.
+   */
+  cupon: z.string().trim().min(1).max(30).optional(),
 });
 export type CreateOrderDto = z.infer<typeof CreateOrderSchema>;
+
+/** Aplicar un cupón a un pedido pendiente. Sólo el código. */
+export const AplicarCuponSchema = z.object({
+  codigo: z.string().trim().min(1).max(30),
+});
+export type AplicarCuponDto = z.infer<typeof AplicarCuponSchema>;
 
 /**
  * Datos del cobro.

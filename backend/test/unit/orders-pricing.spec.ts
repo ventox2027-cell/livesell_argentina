@@ -104,8 +104,20 @@ describe('Precio de una orden', () => {
     });
 
     expect(p.grossAmount).toBe(80_000);
-    // La comisión sigue siendo sobre el subtotal de productos.
-    expect(p.platformFeeAmount).toBe(6_000);
+
+    /**
+     * ⚠️ La comisión sale del subtotal **ya descontado**.
+     *
+     * Este test decía 6.000 —el 6 % de $1.000— mientras `discountAmount` no lo
+     * usaba nadie. Con los cupones sí se usa, y cobrar sobre el precio de lista
+     * sería quedarse con parte del descuento que puso el vendedor de su
+     * bolsillo: sobre descuentos grandes la comisión efectiva se dispara y deja
+     * de convenirle hacer promociones.
+     *
+     * Ver `baseDeComision`. Cambiar esta línea no corrige un cálculo: cambia el
+     * modelo de negocio.
+     */
+    expect(p.platformFeeAmount).toBe(4_800);
   });
 
   it('el total siempre cierra con sus partes', () => {

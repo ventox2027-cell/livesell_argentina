@@ -1,11 +1,14 @@
 import { Module } from '@nestjs/common';
 
 import { SellerOAuthModule } from '@/modules/payments/seller-oauth.module';
+import { SellersModule } from '@/modules/sellers/sellers.module';
 
 import { AuditService } from '@/shared/audit/audit.service';
 import { DomainEventBus } from '@/shared/events/domain-events';
 
 import { CommerceController } from './commerce.controller';
+import { CuponesDelCompradorController, CuponesDelVendedorController } from './cupones.controller';
+import { CuponesService } from './cupones.service';
 import { CategoriasService } from './categorias.service';
 import { ImagesService } from './images.service';
 import { OwnershipService } from './ownership.service';
@@ -30,8 +33,9 @@ import { SellersService } from './sellers.service';
  */
 @Module({
   // Para exigir Mercado Pago conectado antes de publicar. Ver `puede-vender.ts`.
-  imports: [SellerOAuthModule],
-  controllers: [CommerceController],
+  // `SellersModule` por las membresías: los cupones son función de VendoX Pro.
+  imports: [SellerOAuthModule, SellersModule],
+  controllers: [CommerceController, CuponesDelVendedorController, CuponesDelCompradorController],
   providers: [
     SellersService,
     ProductsService,
@@ -39,9 +43,10 @@ import { SellersService } from './sellers.service';
     SearchService,
     ImagesService,
     OwnershipService,
+    CuponesService,
     AuditService,
     DomainEventBus,
   ],
-  exports: [OwnershipService, ProductsService, SellersService, CategoriasService],
+  exports: [OwnershipService, ProductsService, SellersService, CategoriasService, CuponesService],
 })
 export class CommerceModule {}

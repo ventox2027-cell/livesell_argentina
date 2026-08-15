@@ -162,6 +162,7 @@ class Pedido {
     this.itemsSubtotal = 0,
     this.shippingAmount = 0,
     this.recargoProcesador = 0,
+    this.descuento = 0,
     this.modoDeEnvio,
     this.retiraEnPersona = false,
     this.platformFeeAmount = 0,
@@ -192,6 +193,7 @@ class Pedido {
       itemsSubtotal: _int(j['itemsSubtotal']),
       shippingAmount: _int(j['shippingAmount']),
       recargoProcesador: _int(j['processorSurchargeAmount']),
+      descuento: _int(j['discountAmount']),
       modoDeEnvio: j['shippingModeSnapshot'] as String?,
       retiraEnPersona: j['pickupSelected'] as bool? ?? false,
       platformFeeAmount: _int(j['platformFeeAmount']),
@@ -228,8 +230,15 @@ class Pedido {
   /// Lo que se le sumó por el medio de pago, si el vendedor lo traslada.
   ///
   /// Línea propia y no sumada al envío: si fuera parte del envío, el comprador
-  /// vería "Envío .200" cuando el vendedor cobra .500.
+  /// vería «Envío $4.200» cuando el vendedor cobra $3.500 de envío.
   final int recargoProcesador;
+
+  /// Lo que descontó el cupón, si hay uno aplicado. Cero si no.
+  ///
+  /// Lo calcula el servidor a partir del código: la app nunca manda un monto.
+  final int descuento;
+
+  bool get tieneCupon => descuento > 0;
 
   /// La política con la que se cobró ESTE pedido, no la actual de la tienda.
   final String? modoDeEnvio;

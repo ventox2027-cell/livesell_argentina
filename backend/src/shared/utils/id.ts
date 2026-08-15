@@ -74,6 +74,8 @@ export const ID_PREFIX = {
   supportMessage: 'sms',
   oauthState: 'oas',
   oauthCredential: 'soc',
+  coupon: 'cup',
+  couponRedemption: 'cur',
   auditLog: 'aud',
 } as const;
 

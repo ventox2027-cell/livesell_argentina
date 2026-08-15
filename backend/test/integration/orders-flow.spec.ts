@@ -4555,3 +4555,656 @@ describe('Precio exclusivo del vivo', () => {
     });
   });
 });
+
+describe('Cupones', () => {
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * EL DESCUENTO LO DECIDE EL SERVIDOR, Y LO PAGA EL VENDEDOR
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * La app manda el **código**. Nunca cuánto descuenta: si el cuerpo de la
+   * petición pudiera decirlo, cualquiera compraría a un peso.
+   *
+   * Y la comisión del 6 % se cobra sobre lo que se pagó. Cobrarla sobre el
+   * precio de lista sería quedarse con parte del descuento del vendedor.
+   */
+
+  /** Un vendedor con Pro, un producto con stock y un cupón cargado. */
+  async function vendedorConCupon(
+    cupon: Record<string, unknown> = { codigo: 'VERANO25', tipo: 'PORCENTAJE', valor: 25 },
+    precio = 1_000_000,
+  ) {
+    const { variantId, sellerToken, sellerId, productId } = await nuevaVarianteConStock(5);
+    await prisma.product.update({ where: { id: productId }, data: { basePriceCents: precio } });
+
+    // Pro se otorga desde el panel: no hay cobro. Ver `membresias.ts`.
+    await prisma.sellerMembership.create({
+      data: {
+        id: `mem_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+        sellerId,
+        plan: 'PRO',
+        periodo: 'MENSUAL',
+        origen: 'CORTESIA',
+        vigenteHasta: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      },
+    });
+
+    const creado = await call('POST', '/api/v1/seller/coupons', {
+      token: sellerToken,
+      body: cupon,
+    });
+    expect(creado.status, JSON.stringify(creado.body)).toBe(201);
+
+    return { variantId, sellerToken, sellerId, productId, precio, cuponId: creado.body.id };
+  }
+
+  it('⛔ un vendedor Free NO puede crear cupones', async () => {
+    // Es la regla que el producto define explícitamente: los cupones son Pro.
+    const { sellerToken } = await nuevaVarianteConStock(1);
+
+    const r = await call('POST', '/api/v1/seller/coupons', {
+      token: sellerToken,
+      body: { codigo: 'GRATIS', tipo: 'PORCENTAJE', valor: 10 },
+    });
+
+    // 402 y no 403: la función existe y está bien pedida, lo que falta es el
+    // plan. La app muestra qué es Pro, no un «no podés hacer eso».
+    expect(r.status, JSON.stringify(r.body)).toBe(402);
+    expect(r.body.error.code).toBe('PRO_REQUIRED');
+  });
+
+  it('⛔ un Pro VENCIDO tampoco', async () => {
+    /**
+     * La fila sigue diciendo PRO hasta que algo la actualice, y no hay nada que
+     * la actualice. Si `crear` leyera el plan sin mirar la fecha, un vendedor
+     * que dejó de pagar seguiría con cupones para siempre.
+     */
+    const v = await vendedorConCupon();
+    await prisma.sellerMembership.update({
+      where: { sellerId: v.sellerId },
+      data: { vigenteHasta: new Date(Date.now() - 60_000) },
+    });
+
+    const r = await call('POST', '/api/v1/seller/coupons', {
+      token: v.sellerToken,
+      body: { codigo: 'OTRO', tipo: 'PORCENTAJE', valor: 10 },
+    });
+
+    expect(r.status).toBe(402);
+  });
+
+  it('⛔ la comisión del 6 % sale sobre lo que se PAGÓ', async () => {
+    /**
+     * EL INVARIANTE COMERCIAL DE ESTE BLOQUE.
+     *
+     * Un cupón del 25 % sobre $10.000 deja $7.500. La comisión es $450, no
+     * $600. Cobrar sobre el precio de lista sería quedarse con parte del
+     * descuento que puso el vendedor de su bolsillo.
+     */
+    const v = await vendedorConCupon();
+    const comprador = await nuevoComprador();
+
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId), {
+      cupon: 'VERANO25',
+    });
+
+    expect(orden.status, JSON.stringify(orden.body)).toBe(201);
+    expect(orden.body.discountAmount).toBe(250_000);
+    expect(orden.body.grossAmount).toBe(750_000);
+
+    // 6 % de $7.500, no de $10.000.
+    expect(orden.body.platformFeeAmount).toBe(45_000);
+    expect(orden.body.platformFeeAmount).not.toBe(60_000);
+  });
+
+  it('⛔ el cupón de OTRA tienda no sirve acá', async () => {
+    /**
+     * El cupón lo paga el vendedor que lo creó. Aplicar el «VERANO25» de una
+     * tienda grande en la compra de otra sería sacarle plata a quien no lo
+     * ofreció.
+     */
+    await vendedorConCupon();
+    const otra = await vendedorConCupon({
+      codigo: 'AJENO50',
+      tipo: 'PORCENTAJE',
+      valor: 50,
+    });
+    // Se compra en la tienda que NO tiene AJENO50... salvo que sí lo tiene.
+    const victima = await vendedorConCupon({ codigo: 'PROPIO10', tipo: 'PORCENTAJE', valor: 10 });
+    expect(otra.cuponId).not.toBe(victima.cuponId);
+
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(
+      comprador.token,
+      await reservar(comprador.token, victima.variantId),
+      { cupon: 'AJENO50' },
+    );
+
+    expect(orden.status).toBe(422);
+    expect(orden.body.error.code).toBe('COUPON_NOT_APPLICABLE');
+  });
+
+  /**
+   * Otro producto de la MISMA tienda, con stock.
+   *
+   * Hace falta porque una segunda compra del mismo producto reusaría la reserva
+   * activa —el inventario devuelve la que ya tenía— y el pedido saldría siendo
+   * el mismo. Sin esto, un test de «dos compras» no prueba dos compras.
+   */
+  async function otroProductoDe(sellerToken: string, precio = 1_000_000) {
+    const producto = await call('POST', '/api/v1/products', {
+      token: sellerToken,
+      body: {
+        name: `Otro producto ${Math.random().toString(36).slice(2, 8)}`,
+        basePriceCents: precio,
+        status: 'ACTIVE',
+        categoryId: 'cat_otros',
+      },
+    });
+    expect(producto.status, JSON.stringify(producto.body)).toBe(201);
+
+    const variantId = producto.body.variants[0].id as string;
+    await prisma.inventory.update({ where: { productVariantId: variantId }, data: { onHand: 5 } });
+    return variantId;
+  }
+
+  it('⛔ la MISMA persona no puede usarlo dos veces', async () => {
+    // La restricción única lo impide. Va en la base y no en un `if`: dos
+    // pedidos simultáneos pasarían los dos por cualquier comprobación previa.
+    const v = await vendedorConCupon();
+    const otraVariante = await otroProductoDe(v.sellerToken);
+    const comprador = await nuevoComprador();
+
+    const primera = await crearOrden(
+      comprador.token,
+      await reservar(comprador.token, v.variantId),
+      { cupon: 'VERANO25' },
+    );
+    expect(primera.status, JSON.stringify(primera.body)).toBe(201);
+
+    const segunda = await crearOrden(
+      comprador.token,
+      await reservar(comprador.token, otraVariante),
+      { cupon: 'VERANO25' },
+    );
+
+    expect(segunda.status, JSON.stringify(segunda.body)).toBe(422);
+    expect(segunda.body.error.message).toMatch(/[Yy]a usaste/);
+  });
+
+  it('⛔ cuando el cupón falla, NO queda una orden a medias', async () => {
+    /**
+     * El canje va adentro de la transacción que crea la orden. Si el cupón se
+     * rechaza en el último paso, se deshace todo — no puede quedar una orden
+     * cobrando el precio entero de una compra que la persona hizo esperando un
+     * descuento.
+     *
+     * Es el caso que el orden de las operaciones hace posible: el cupo se toma
+     * ANTES de crear la orden y el canje se registra DESPUÉS, porque la fila
+     * apunta a la orden por clave foránea.
+     */
+    const v = await vendedorConCupon();
+    const otraVariante = await otroProductoDe(v.sellerToken);
+    const comprador = await nuevoComprador();
+
+    await crearOrden(comprador.token, await reservar(comprador.token, v.variantId), {
+      cupon: 'VERANO25',
+    });
+
+    const reservaNueva = await reservar(comprador.token, otraVariante);
+    const segunda = await crearOrden(comprador.token, reservaNueva, { cupon: 'VERANO25' });
+    expect(segunda.status).toBe(422);
+
+    const huerfana = await prisma.order.findUnique({ where: { reservationId: reservaNueva } });
+    expect(huerfana).toBeNull();
+
+    // Y el cupo tampoco se gastó: la transacción se deshizo entera.
+    const cupon = await prisma.coupon.findUniqueOrThrow({ where: { id: v.cuponId } });
+    expect(cupon.usos).toBe(1);
+  });
+
+  it('⛔ un cupón vencido corta el pedido en vez de cobrar el precio entero', async () => {
+    /**
+     * Ignorarlo en silencio sería peor que fallar: alguien que escribió un
+     * código espera ese descuento, y enterarse después de que se lo cobraron
+     * completo es exactamente el reclamo que no queremos.
+     */
+    const v = await vendedorConCupon();
+    await prisma.coupon.update({
+      where: { id: v.cuponId },
+      data: { hasta: new Date(Date.now() - 60_000) },
+    });
+
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId), {
+      cupon: 'VERANO25',
+    });
+
+    expect(orden.status).toBe(422);
+    expect(orden.body.error.message).toMatch(/venció/);
+  });
+
+  it('⛔ el límite de usos se respeta aunque dos pedidos lleguen juntos', async () => {
+    /**
+     * EL TEST DE LA CARRERA.
+     *
+     * Un cupón de un solo uso, dos compradores distintos pidiendo a la vez. Con
+     * un «leer y después incrementar», los dos leerían 0 usos y los dos
+     * escribirían 1. Con el UPDATE condicional, la base deja pasar uno.
+     */
+    const v = await vendedorConCupon({
+      codigo: 'UNICO',
+      tipo: 'PORCENTAJE',
+      valor: 20,
+      usosMaximos: 1,
+    });
+
+    const a = await nuevoComprador();
+    const b = await nuevoComprador();
+    const reservaA = await reservar(a.token, v.variantId);
+    const reservaB = await reservar(b.token, v.variantId);
+
+    const [ra, rb] = await Promise.all([
+      crearOrden(a.token, reservaA, { cupon: 'UNICO' }),
+      crearOrden(b.token, reservaB, { cupon: 'UNICO' }),
+    ]);
+
+    const exitosas = [ra, rb].filter((r) => r.status === 201);
+    const rechazadas = [ra, rb].filter((r) => r.status === 422);
+
+    expect(exitosas).toHaveLength(1);
+    expect(rechazadas).toHaveLength(1);
+
+    const cupon = await prisma.coupon.findUniqueOrThrow({ where: { id: v.cuponId } });
+    expect(cupon.usos).toBe(1);
+  });
+
+  it('⛔ sin cupón, nada cambia', async () => {
+    // La comisión sigue siendo el 6 % del subtotal y no hay descuento.
+    const v = await vendedorConCupon();
+    const comprador = await nuevoComprador();
+
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId));
+
+    expect(orden.body.discountAmount).toBe(0);
+    expect(orden.body.platformFeeAmount).toBe(60_000);
+  });
+
+  it('el tope recorta el descuento', async () => {
+    // Es lo que evita que «20 % de descuento» le cueste $40.000 en la única
+    // venta grande del mes.
+    const v = await vendedorConCupon(
+      { codigo: 'TOPE', tipo: 'PORCENTAJE', valor: 50, topeCentavos: 100_000 },
+      2_000_000,
+    );
+
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId), {
+      cupon: 'TOPE',
+    });
+
+    // 50 % de $20.000 serían $10.000, pero el tope es $1.000.
+    expect(orden.body.discountAmount).toBe(100_000);
+  });
+
+  it('el código se normaliza: se acepta en minúsculas y con espacios', async () => {
+    // Quien lo tipea en el teclado del teléfono manda esto. Rechazarlo sería
+    // perder la venta por un detalle de tipeo.
+    const v = await vendedorConCupon();
+    const comprador = await nuevoComprador();
+
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId), {
+      cupon: '  verano25 ',
+    });
+
+    expect(orden.status, JSON.stringify(orden.body)).toBe(201);
+    expect(orden.body.discountAmount).toBe(250_000);
+  });
+
+  describe('Lo que el vendedor administra', () => {
+    it('⛔ no puede repetir un código', async () => {
+      const v = await vendedorConCupon();
+
+      const r = await call('POST', '/api/v1/seller/coupons', {
+        token: v.sellerToken,
+        body: { codigo: 'verano25', tipo: 'PORCENTAJE', valor: 10 },
+      });
+
+      expect(r.status).toBe(422);
+      expect(r.body.error.message).toMatch(/ya tenés/i);
+    });
+
+    it('dos tiendas distintas SÍ pueden tener el mismo código', async () => {
+      // Hacerlos globales sería que la primera tienda se quede con los códigos
+      // buenos.
+      await vendedorConCupon();
+      const otra = await vendedorConCupon();
+      expect(otra.cuponId).toBeTruthy();
+    });
+
+    it('⛔ no puede tocar el cupón de otro', async () => {
+      const mio = await vendedorConCupon();
+      const ajeno = await vendedorConCupon({ codigo: 'AJENO', tipo: 'PORCENTAJE', valor: 10 });
+
+      const r = await call('POST', `/api/v1/seller/coupons/${ajeno.cuponId}/toggle`, {
+        token: mio.sellerToken,
+        body: { activo: false },
+      });
+
+      expect(r.status).toBe(404);
+    });
+
+    it('pausar deja de aplicarlo, pero no borra el historial', async () => {
+      const v = await vendedorConCupon();
+
+      await call('POST', `/api/v1/seller/coupons/${v.cuponId}/toggle`, {
+        token: v.sellerToken,
+        body: { activo: false },
+      });
+
+      const comprador = await nuevoComprador();
+      const orden = await crearOrden(
+        comprador.token,
+        await reservar(comprador.token, v.variantId),
+        { cupon: 'VERANO25' },
+      );
+
+      expect(orden.status).toBe(422);
+
+      // Sigue en la lista del vendedor, apagado.
+      const lista = await call('GET', '/api/v1/seller/coupons', { token: v.sellerToken });
+      const enLista = lista.body.find((c: { id: string }) => c.id === v.cuponId);
+      expect(enLista.activo).toBe(false);
+    });
+
+    it('la lista dice cuántos usos quedan, y null cuando es ilimitado', async () => {
+      // `null` y no un número inventado: no se puede mostrar una cifra que no
+      // existe.
+      const v = await vendedorConCupon();
+
+      const lista = await call('GET', '/api/v1/seller/coupons', { token: v.sellerToken });
+      const enLista = lista.body.find((c: { id: string }) => c.id === v.cuponId);
+
+      expect(enLista.usosRestantes).toBeNull();
+      expect(enLista.usos).toBe(0);
+    });
+
+    it('⛔ queda en la bitácora', async () => {
+      const v = await vendedorConCupon();
+
+      const registro = await prisma.auditLog.findFirst({
+        where: { action: 'coupon.created', entityId: v.cuponId },
+      });
+
+      expect(registro).not.toBeNull();
+      expect(JSON.stringify(registro?.after)).toContain('VERANO25');
+    });
+  });
+
+  describe('Probar un código antes de pagar', () => {
+    it('dice cuánto descontaría', async () => {
+      const v = await vendedorConCupon();
+      const comprador = await nuevoComprador();
+
+      const r = await call(
+        'GET',
+        `/api/v1/coupons/check?sellerId=${v.sellerId}&codigo=VERANO25&subtotalCentavos=1000000`,
+        { token: comprador.token },
+      );
+
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+      expect(r.body.aplica).toBe(true);
+      expect(r.body.descuentoCentavos).toBe(250_000);
+    });
+
+    it('⛔ un código que no existe responde lo MISMO que uno pausado', async () => {
+      /**
+       * A propósito.
+       *
+       * Responder distinto convertiría este endpoint en un oráculo para
+       * descubrir qué códigos tiene una tienda probando palabras.
+       */
+      const v = await vendedorConCupon();
+      const comprador = await nuevoComprador();
+
+      const inventado = await call(
+        'GET',
+        `/api/v1/coupons/check?sellerId=${v.sellerId}&codigo=NOEXISTE&subtotalCentavos=1000000`,
+        { token: comprador.token },
+      );
+
+      await call('POST', `/api/v1/seller/coupons/${v.cuponId}/toggle`, {
+        token: v.sellerToken,
+        body: { activo: false },
+      });
+
+      const pausado = await call(
+        'GET',
+        `/api/v1/coupons/check?sellerId=${v.sellerId}&codigo=VERANO25&subtotalCentavos=1000000`,
+        { token: comprador.token },
+      );
+
+      expect(inventado.body.aplica).toBe(false);
+      expect(pausado.body.aplica).toBe(false);
+      expect(inventado.body.motivo).toBe(pausado.body.motivo);
+    });
+
+    it('dice POR QUÉ no aplica cuando no es un secreto', async () => {
+      // «No se puede usar» hace que la persona lo intente tres veces más;
+      // «venció» hace que deje de intentar y compre igual.
+      const v = await vendedorConCupon({
+        codigo: 'MINIMO',
+        tipo: 'PORCENTAJE',
+        valor: 20,
+        minimoCentavos: 5_000_000,
+      });
+      const comprador = await nuevoComprador();
+
+      const r = await call(
+        'GET',
+        `/api/v1/coupons/check?sellerId=${v.sellerId}&codigo=MINIMO&subtotalCentavos=1000000`,
+        { token: comprador.token },
+      );
+
+      expect(r.body.aplica).toBe(false);
+      expect(r.body.motivo).toMatch(/mínimo/);
+    });
+  });
+});
+
+describe('Aplicar un cupón a un pedido ya creado', () => {
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * POR QUÉ ESTE CAMINO EXISTE
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * El checkout crea el pedido apenas se abre, para que la persona vea el total
+   * mientras decide. El cupón se escribe después, en el resumen — que es donde
+   * todo el mundo espera escribirlo.
+   *
+   * Es el mismo canje que en `create`, no un segundo sistema: usa `tomarCupo` y
+   * `registrarCanje`. Lo que cambia es cuándo.
+   */
+
+  async function pedidoPendienteConCupon(cupon = 25) {
+    const { variantId, sellerToken, sellerId, productId } = await nuevaVarianteConStock(5);
+    await prisma.product.update({
+      where: { id: productId },
+      data: { basePriceCents: 1_000_000 },
+    });
+
+    await prisma.sellerMembership.create({
+      data: {
+        id: `mem_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+        sellerId,
+        plan: 'PRO',
+        periodo: 'MENSUAL',
+        origen: 'CORTESIA',
+        vigenteHasta: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      },
+    });
+
+    const creado = await call('POST', '/api/v1/seller/coupons', {
+      token: sellerToken,
+      body: { codigo: 'DESPUES', tipo: 'PORCENTAJE', valor: cupon },
+    });
+    expect(creado.status, JSON.stringify(creado.body)).toBe(201);
+
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, variantId));
+    expect(orden.status, JSON.stringify(orden.body)).toBe(201);
+
+    return { comprador, orden: orden.body, sellerToken, cuponId: creado.body.id as string };
+  }
+
+  it('aplica el descuento y recalcula la comisión', async () => {
+    const p = await pedidoPendienteConCupon();
+
+    const r = await call('POST', `/api/v1/orders/${p.orden.id}/coupon`, {
+      token: p.comprador.token,
+      body: { codigo: 'DESPUES' },
+    });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(r.body.discountAmount).toBe(250_000);
+    expect(r.body.grossAmount).toBe(750_000);
+    // ⚠️ La comisión se rehace: 6 % de $7.500. No alcanza con restar del total.
+    expect(r.body.platformFeeAmount).toBe(45_000);
+    expect(r.body.sellerNetAmount).toBe(705_000);
+  });
+
+  it('⛔ no se puede aplicar dos veces', async () => {
+    const p = await pedidoPendienteConCupon();
+
+    await call('POST', `/api/v1/orders/${p.orden.id}/coupon`, {
+      token: p.comprador.token,
+      body: { codigo: 'DESPUES' },
+    });
+    const segunda = await call('POST', `/api/v1/orders/${p.orden.id}/coupon`, {
+      token: p.comprador.token,
+      body: { codigo: 'DESPUES' },
+    });
+
+    expect(segunda.status).toBe(409);
+    expect(segunda.body.error.code).toBe('ORDER_NOT_EDITABLE');
+  });
+
+  it('⛔ no se puede aplicar a un pedido AJENO', async () => {
+    // La pertenencia va en el WHERE: 404, no 403.
+    const p = await pedidoPendienteConCupon();
+    const otro = await nuevoComprador();
+
+    const r = await call('POST', `/api/v1/orders/${p.orden.id}/coupon`, {
+      token: otro.token,
+      body: { codigo: 'DESPUES' },
+    });
+
+    expect(r.status).toBe(404);
+  });
+
+  it('⛔ no se puede aplicar después de pagar', async () => {
+    // Lo ataja el estado: pagar saca al pedido de PENDING_PAYMENT.
+    const p = await pedidoPendienteConCupon();
+    await pagar(p.comprador.token, p.orden.id);
+
+    const r = await call('POST', `/api/v1/orders/${p.orden.id}/coupon`, {
+      token: p.comprador.token,
+      body: { codigo: 'DESPUES' },
+    });
+
+    expect(r.status).toBe(409);
+    expect(r.body.error.code).toBe('ORDER_NOT_EDITABLE');
+  });
+
+  it('⛔ ni con un cobro EN CURSO, aunque el pedido siga pendiente', async () => {
+    /**
+     * EL TEST QUE IMPORTA, y el que el estado NO alcanza a cubrir.
+     *
+     * Un pago que Mercado Pago deja `in_process` —revisión antifraude, débito
+     * en proceso— crea el intento y deja la orden en `PENDING_PAYMENT`. La
+     * preferencia ya está abierta por el importe viejo.
+     *
+     * Si el cupón se aplicara ahí, el comprador terminaría pagando $10.000 por
+     * una orden que dice $7.500, y la conciliación no cerraría nunca. Por eso
+     * la guarda mira los intentos y no sólo el estado.
+     *
+     * ⚠️ El intento se inserta a mano justamente porque es un estado que el
+     * flujo normal de este test no produce. Sin este montaje, sacar la guarda
+     * de `_count.attempts` no rompería ningún test.
+     */
+    const p = await pedidoPendienteConCupon();
+
+    await prisma.paymentAttempt.create({
+      data: {
+        id: `pat_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+        orderId: p.orden.id as string,
+        status: 'PROCESSING',
+        amount: p.orden.grossAmount as number,
+        idempotencyKey: `idem-pat-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      },
+    });
+
+    // La orden sigue pendiente: es exactamente el estado del agujero.
+    const antes = await prisma.order.findUniqueOrThrow({ where: { id: p.orden.id as string } });
+    expect(antes.status).toBe('PENDING_PAYMENT');
+
+    const r = await call('POST', `/api/v1/orders/${p.orden.id}/coupon`, {
+      token: p.comprador.token,
+      body: { codigo: 'DESPUES' },
+    });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(409);
+    expect(r.body.error.code).toBe('ORDER_NOT_EDITABLE');
+  });
+
+  it('quitarlo devuelve el cupo', async () => {
+    /**
+     * Sin esto, probar y arrepentirse gastaría un uso de un cupón limitado. Y
+     * peor: por la restricción de uno por persona, esa persona no podría
+     * volver a usarlo nunca.
+     */
+    const p = await pedidoPendienteConCupon();
+
+    await call('POST', `/api/v1/orders/${p.orden.id}/coupon`, {
+      token: p.comprador.token,
+      body: { codigo: 'DESPUES' },
+    });
+    const conCupon = await prisma.coupon.findUniqueOrThrow({ where: { id: p.cuponId } });
+    expect(conCupon.usos).toBe(1);
+
+    const r = await call('DELETE', `/api/v1/orders/${p.orden.id}/coupon`, {
+      token: p.comprador.token,
+    });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.body.discountAmount).toBe(0);
+    expect(r.body.grossAmount).toBe(1_000_000);
+    expect(r.body.platformFeeAmount).toBe(60_000);
+
+    const sinCupon = await prisma.coupon.findUniqueOrThrow({ where: { id: p.cuponId } });
+    expect(sinCupon.usos).toBe(0);
+
+    // Y puede volver a usarlo: el canje se borró.
+    const otraVez = await call('POST', `/api/v1/orders/${p.orden.id}/coupon`, {
+      token: p.comprador.token,
+      body: { codigo: 'DESPUES' },
+    });
+    expect(otraVez.status, JSON.stringify(otraVez.body)).toBe(201);
+  });
+
+  it('⛔ un código que no aplica no toca el pedido', async () => {
+    const p = await pedidoPendienteConCupon();
+
+    const r = await call('POST', `/api/v1/orders/${p.orden.id}/coupon`, {
+      token: p.comprador.token,
+      body: { codigo: 'NOEXISTE' },
+    });
+
+    expect(r.status).toBe(422);
+
+    const enBase = await prisma.order.findUniqueOrThrow({ where: { id: p.orden.id } });
+    expect(enBase.discountAmount).toBe(0);
+    expect(enBase.grossAmount).toBe(1_000_000);
+    expect(enBase.platformFeeAmount).toBe(60_000);
+  });
+});

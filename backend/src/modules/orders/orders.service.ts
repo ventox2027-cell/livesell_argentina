@@ -3,6 +3,7 @@ import { Prisma, type OrderStatus } from '@prisma/client';
 
 import { env } from '@/config/env.schema';
 import { AuditService } from '@/shared/audit/audit.service';
+import { CuponesService } from '@/modules/commerce/cupones.service';
 import { resolverPrecio } from '@/modules/live/precio-de-vivo';
 import { exigirHabilitada } from '@/shared/config/banderas';
 import { DomainError } from '@/shared/errors/domain.error';
@@ -142,6 +143,7 @@ export class OrdersService {
     private readonly events: DomainEventBus,
     private readonly metrics: MetricsService,
     private readonly sellerOAuth: SellerOAuthService,
+    private readonly cupones: CuponesService,
   ) {}
 
   /**
@@ -197,6 +199,13 @@ export class OrdersService {
      * decide el servidor.
      */
     liveSessionId?: string;
+    /**
+     * El código del cupón, tal como lo tipeó la persona.
+     *
+     * ⚠️ El **código**, nunca el descuento. Se normaliza y se busca en la base
+     * del vendedor de esta compra; cuánto descuenta lo decide el servidor.
+     */
+    cupon?: string;
   }): Promise<OrdenPublica> {
     const { buyerId, reservationId } = params;
 
@@ -400,7 +409,15 @@ export class OrdersService {
       habilitado: env.BUYER_PROCESSOR_SURCHARGE_ENABLED,
     });
 
-    const precio = calcularPrecio({
+    /**
+     * El precio SIN cupón.
+     *
+     * El descuento no se puede calcular todavía: tomar el cupo de un cupón es
+     * una escritura, y tiene que pasar adentro de la misma transacción que crea
+     * la orden para que se deshaga junto con ella si algo falla. Se recalcula
+     * ahí adentro. Ver más abajo.
+     */
+    const precioSinCupon = calcularPrecio({
       unitPrice,
       quantity: reserva.quantity,
       shippingAmount: envio,
@@ -411,17 +428,68 @@ export class OrdersService {
       platformFeeBps: env.VENDOX_PLATFORM_FEE_BPS,
     });
 
-    const coherencia = verificarCoherencia(precio);
-    if (!coherencia.ok) {
-      // Nunca debería pasar. Si pasa, es un bug de cálculo y hay que verlo.
-      this.logger.error({ msg: 'precio incoherente al crear la orden', motivo: coherencia.motivo });
-      throw new DomainError('VALIDATION_FAILED', 'No pudimos calcular el total de tu compra');
-    }
-
     const orderId = newId('ord');
+
+    /**
+     * El precio definitivo sale de adentro de la transacción, pero se necesita
+     * después para las métricas y la bitácora. Arranca en el precio sin cupón:
+     * si no hay cupón, es el mismo.
+     */
+    let precioFinal = precioSinCupon;
 
     try {
       await this.prisma.$transaction(async (tx) => {
+        /**
+         * El cupón, si mandó uno.
+         *
+         * ⚠️ Lo que viaja desde la app es el **código**, nunca el descuento. El
+         * servidor lo busca en su propia base, comprueba que sea de ESTE
+         * vendedor y calcula cuánto descuenta. Si el cuerpo de la petición
+         * pudiera decir «descuento: $9.900», cualquiera compraría a un peso.
+         *
+         * Un código que no aplica **corta el pedido** en vez de ignorarse:
+         * alguien que escribió un cupón espera ese descuento, y enterarse
+         * después de que se lo cobraron completo es peor que un error claro.
+         */
+        const cupon = params.cupon
+          ? await this.cupones.tomarCupo(tx, {
+              userId: buyerId,
+              sellerId: tienda.seller.id,
+              codigo: params.cupon,
+              subtotalCentavos: precioSinCupon.itemsSubtotal,
+            })
+          : null;
+
+        /**
+         * Y se recalcula todo con el descuento adentro.
+         *
+         * No alcanza con restarlo del total: la comisión del 6 % se cobra sobre
+         * el subtotal **ya descontado** —ver `baseDeComision`—, así que el
+         * cálculo entero tiene que rehacerse.
+         */
+        const precio = cupon
+          ? calcularPrecio({
+              unitPrice,
+              quantity: reserva.quantity,
+              shippingAmount: envio,
+              processorSurchargeAmount: recargo,
+              discountAmount: cupon.descuentoCentavos,
+              platformFeeBps: env.VENDOX_PLATFORM_FEE_BPS,
+            })
+          : precioSinCupon;
+
+        const coherencia = verificarCoherencia(precio);
+        if (!coherencia.ok) {
+          // Nunca debería pasar. Si pasa, es un bug de cálculo y hay que verlo.
+          this.logger.error({
+            msg: 'precio incoherente al crear la orden',
+            motivo: coherencia.motivo,
+          });
+          throw new DomainError('VALIDATION_FAILED', 'No pudimos calcular el total de tu compra');
+        }
+
+        precioFinal = precio;
+
         await tx.order.create({
           data: {
             id: orderId,
@@ -442,12 +510,12 @@ export class OrdersService {
             /**
              * De dónde vino la compra y a qué precio estaba en lista.
              *
-             * ⚠️  se guarda sólo si el vivo se VALIDÓ arriba
+             * ⚠️ `liveSessionId` se guarda sólo si el vivo se VALIDÓ arriba
              * —del mismo vendedor y al aire—. Guardar el que mandó la app sin
-             * validar dejaría que cualquiera atribuyera sus compras al vivo
-             * que quisiera, y las estadísticas del vendedor serían inventadas.
+             * validar dejaría que cualquiera atribuyera sus compras al vivo que
+             * quisiera, y las estadísticas del vendedor serían inventadas.
              *
-             *  responde, seis meses después, por qué dos
+             * `listPriceCents` responde, seis meses después, por qué dos
              * órdenes del mismo producto tienen precios distintos.
              */
             liveSessionId: enElVivo ? (params.liveSessionId ?? null) : null,
@@ -478,6 +546,19 @@ export class OrdersService {
             subtotal: precio.itemsSubtotal,
           },
         });
+
+        /**
+         * El canje va DESPUÉS de crear la orden: la fila apunta a ella por
+         * clave foránea.
+         *
+         * Y sigue adentro de la transacción, así que si la restricción única
+         * por (cupón, comprador) rechaza —la misma persona usándolo dos veces—
+         * se deshace todo, orden incluida. Que es lo correcto: se estaba
+         * creando con un descuento al que no tenía derecho.
+         */
+        if (cupon) {
+          await this.cupones.registrarCanje(tx, { cupon, userId: buyerId, orderId });
+        }
       });
     } catch (err) {
       // Carrera: otra petición con la misma reserva ganó. Se devuelve la suya,
@@ -496,7 +577,7 @@ export class OrdersService {
     this.events.publish(DomainEvent.orderCreated, {
       entityId: orderId,
       actorId: buyerId,
-      data: { sellerId: tienda.seller.id, grossAmount: precio.grossAmount },
+      data: { sellerId: tienda.seller.id, grossAmount: precioFinal.grossAmount },
     });
     void this.audit.log({
       action: 'order.created',
@@ -505,9 +586,10 @@ export class OrdersService {
       actorId: buyerId,
       after: {
         reservationId,
-        grossAmount: precio.grossAmount,
-        platformFeeBps: precio.platformFeeBps,
-        platformFeeAmount: precio.platformFeeAmount,
+        grossAmount: precioFinal.grossAmount,
+        platformFeeBps: precioFinal.platformFeeBps,
+        platformFeeAmount: precioFinal.platformFeeAmount,
+        descuento: precioFinal.discountAmount,
       },
     });
 
@@ -515,6 +597,198 @@ export class OrdersService {
       where: { id: orderId },
       select: ORDER_SELECT,
     });
+  }
+
+
+  /**
+   * Aplica un cupón a un pedido que todavía no se pagó.
+   *
+   * ═══════════════════════════════════════════════════════════════════════════
+   * POR QUÉ EXISTE ESTE MÉTODO Y NO ALCANZA CON EL DE `create`
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * El checkout crea el pedido apenas se abre, para que la persona vea el total
+   * mientras decide. El cupón se escribe después, en la pantalla del resumen —
+   * que es donde todo el mundo espera escribirlo.
+   *
+   * ⚠️ Sólo sobre un pedido en `PENDING_PAYMENT` y **sin ningún intento de
+   * cobro**. Cambiar el importe de algo que ya tiene una preferencia de pago
+   * abierta en Mercado Pago dejaría al comprador pagando un número y a la orden
+   * esperando otro, y la conciliación no cerraría nunca.
+   */
+  async aplicarCupon(orderId: string, buyerId: string, codigo: string): Promise<OrdenPublica> {
+    // La pertenencia va en el WHERE. Un pedido ajeno no se encuentra: 404.
+    const orden = await this.prisma.order.findFirst({
+      where: { id: orderId, buyerId },
+      select: {
+        id: true,
+        status: true,
+        sellerId: true,
+        itemsSubtotal: true,
+        shippingAmount: true,
+        processorSurchargeAmount: true,
+        discountAmount: true,
+        platformFeeBps: true,
+        _count: { select: { attempts: true } },
+      },
+    });
+    if (!orden) throw new OrderNotFoundError();
+
+    if (orden.status !== 'PENDING_PAYMENT') {
+      throw new DomainError(
+        'ORDER_NOT_EDITABLE',
+        'Este pedido ya no se puede modificar',
+        { estado: orden.status },
+      );
+    }
+
+    /**
+     * Ya intentó pagar.
+     *
+     * Aunque el intento haya fallado: la preferencia sigue viva del lado de
+     * Mercado Pago y podría aprobarse tarde por el importe viejo.
+     */
+    if (orden._count.attempts > 0) {
+      throw new DomainError(
+        'ORDER_NOT_EDITABLE',
+        'Ya empezaste a pagar este pedido. Cancelalo y hacelo de nuevo para usar un cupón',
+      );
+    }
+
+    if (orden.discountAmount > 0) {
+      throw new DomainError('ORDER_NOT_EDITABLE', 'Este pedido ya tiene un cupón aplicado');
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      const cupon = await this.cupones.tomarCupo(tx, {
+        userId: buyerId,
+        sellerId: orden.sellerId,
+        codigo,
+        subtotalCentavos: orden.itemsSubtotal,
+      });
+
+      /**
+       * Se recalcula TODO, no se resta el descuento del total.
+       *
+       * La comisión del 6 % se cobra sobre el subtotal ya descontado —ver
+       * `baseDeComision`—, así que restar sólo del bruto dejaría al vendedor
+       * pagando comisión sobre plata que no cobró.
+       */
+      const precio = calcularPrecio({
+        unitPrice: orden.itemsSubtotal,
+        quantity: 1,
+        shippingAmount: orden.shippingAmount,
+        processorSurchargeAmount: orden.processorSurchargeAmount,
+        discountAmount: cupon.descuentoCentavos,
+        platformFeeBps: orden.platformFeeBps,
+      });
+
+      const coherencia = verificarCoherencia(precio);
+      if (!coherencia.ok) {
+        this.logger.error({ msg: 'precio incoherente al aplicar cupón', motivo: coherencia.motivo });
+        throw new DomainError('VALIDATION_FAILED', 'No pudimos recalcular el total');
+      }
+
+      /**
+       * El estado va en el WHERE, otra vez.
+       *
+       * Entre la lectura de arriba y esta escritura, el pedido pudo vencer o
+       * empezar a pagarse. Si cambió, `updateMany` afecta cero filas y la
+       * transacción se corta sin haber tocado nada.
+       */
+      const { count } = await tx.order.updateMany({
+        where: { id: orderId, status: 'PENDING_PAYMENT', discountAmount: 0 },
+        data: {
+          discountAmount: precio.discountAmount,
+          grossAmount: precio.grossAmount,
+          platformFeeAmount: precio.platformFeeAmount,
+          sellerNetAmount: precio.sellerNetAmount,
+        },
+      });
+      if (count === 0) {
+        throw new DomainError('ORDER_NOT_EDITABLE', 'Este pedido ya no se puede modificar');
+      }
+
+      await this.cupones.registrarCanje(tx, { cupon, userId: buyerId, orderId });
+
+      await this.audit.log({
+        action: 'order.coupon_applied',
+        entityType: 'order',
+        entityId: orderId,
+        actorId: buyerId,
+        after: {
+          codigo: cupon.codigo,
+          descuento: cupon.descuentoCentavos,
+          grossAmount: precio.grossAmount,
+          platformFeeAmount: precio.platformFeeAmount,
+        },
+      });
+    });
+
+    return this.prisma.order.findUniqueOrThrow({ where: { id: orderId }, select: ORDER_SELECT });
+  }
+
+  /**
+   * Saca el cupón del pedido.
+   *
+   * Devuelve el cupo: la persona no lo consumió. Sin esto, probar y arrepentirse
+   * gastaría un uso de un cupón limitado — y encima el comprador no podría
+   * volver a usarlo nunca, por la restricción de uno por persona.
+   */
+  async quitarCupon(orderId: string, buyerId: string): Promise<OrdenPublica> {
+    const orden = await this.prisma.order.findFirst({
+      where: { id: orderId, buyerId },
+      select: {
+        id: true,
+        status: true,
+        itemsSubtotal: true,
+        shippingAmount: true,
+        processorSurchargeAmount: true,
+        platformFeeBps: true,
+        cuponCanjeado: { select: { id: true, couponId: true } },
+      },
+    });
+    if (!orden) throw new OrderNotFoundError();
+
+    if (orden.status !== 'PENDING_PAYMENT') {
+      throw new DomainError('ORDER_NOT_EDITABLE', 'Este pedido ya no se puede modificar');
+    }
+    if (!orden.cuponCanjeado) {
+      // Sacar algo que no está deja el mismo estado final. No es un error.
+      return this.prisma.order.findUniqueOrThrow({ where: { id: orderId }, select: ORDER_SELECT });
+    }
+
+    const precio = calcularPrecio({
+      unitPrice: orden.itemsSubtotal,
+      quantity: 1,
+      shippingAmount: orden.shippingAmount,
+      processorSurchargeAmount: orden.processorSurchargeAmount,
+      platformFeeBps: orden.platformFeeBps,
+    });
+
+    await this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.order.updateMany({
+        where: { id: orderId, status: 'PENDING_PAYMENT' },
+        data: {
+          discountAmount: 0,
+          grossAmount: precio.grossAmount,
+          platformFeeAmount: precio.platformFeeAmount,
+          sellerNetAmount: precio.sellerNetAmount,
+        },
+      });
+      if (count === 0) {
+        throw new DomainError('ORDER_NOT_EDITABLE', 'Este pedido ya no se puede modificar');
+      }
+
+      await tx.couponRedemption.delete({ where: { id: orden.cuponCanjeado!.id } });
+      // El cupo vuelve: no lo consumió.
+      await tx.coupon.update({
+        where: { id: orden.cuponCanjeado!.couponId },
+        data: { usos: { decrement: 1 } },
+      });
+    });
+
+    return this.prisma.order.findUniqueOrThrow({ where: { id: orderId }, select: ORDER_SELECT });
   }
 
   // ═══════════════════════════════════════════════════════════════════════

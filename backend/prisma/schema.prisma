@@ -593,6 +593,7 @@ model User {
   bloqueosRecibidos UserBlock[] @relation("bloqueosRecibidos")
   vistosRecientes   RecentlyViewed[]
   recordatorios     LiveReminder[]
+  cuponesCanjeados  CouponRedemption[]
 
   /// Qué avisos NO quiere recibir.
   ///
@@ -959,6 +960,7 @@ model Seller {
   /// VendoX Pro. Separada de `verificationStatus` a propósito: ver el
   /// comentario de `SellerMembership`.
   membership   SellerMembership?
+  coupons      Coupon[]
 
   @@index([status, createdAt])
   @@index([riskLevel, status])
@@ -1021,6 +1023,94 @@ model SellerMembership {
   /// Para el barrido que avisa los que vencen pronto.
   @@index([plan, vigenteHasta])
   @@map("seller_memberships")
+}
+
+/// Cupón de descuento de una tienda.
+///
+/// ═══════════════════════════════════════════════════════════════════════════
+/// EL DESCUENTO SALE DEL BOLSILLO DEL VENDEDOR
+/// ═══════════════════════════════════════════════════════════════════════════
+///
+/// VendoX no lo financia: la comisión se cobra sobre lo que se pagó de verdad
+/// —ver `baseDeComision` en `pricing.ts`—, así que un cupón le cuesta al
+/// vendedor, y a VendoX le cuesta su 6 % de esa diferencia.
+///
+/// Es una función de VendoX Pro. La comprobación no está acá sino en el
+/// servicio, contra `SellerMembership`: una restricción de base no puede
+/// preguntar por una fecha de vencimiento.
+model Coupon {
+  id       String @id // cup_<ulid>
+  sellerId String @map("seller_id")
+
+  /// Siempre en MAYÚSCULAS, sin espacios. Ver `normalizarCodigo`.
+  ///
+  /// Único **por vendedor**, no global: dos tiendas distintas pueden tener las
+  /// dos un cupón «VERANO25», y obligar a que no se repitan entre tiendas sería
+  /// hacer que la primera se quede con los códigos buenos.
+  codigo String
+
+  tipo  CouponType
+  /// Porcentaje entero (1–80) o centavos, según `tipo`.
+  valor Int
+
+  minimoCentavos Int? @map("minimo_centavos")
+  /// Tope del descuento. Sólo para porcentaje. `null` = sin tope.
+  topeCentavos   Int? @map("tope_centavos")
+
+  desde DateTime?
+  hasta DateTime?
+
+  /// `null` = ilimitado.
+  usosMaximos Int? @map("usos_maximos")
+  /// ⚠️ Sólo se incrementa con un UPDATE condicional. Ver `cupones.service.ts`.
+  usos        Int  @default(0)
+
+  /// Un cupón que se agotó no se borra: se pausa. El historial de canjes tiene
+  /// que seguir apuntando a algo.
+  activo    Boolean   @default(true)
+  deletedAt DateTime? @map("deleted_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  seller    Seller             @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  canjes    CouponRedemption[]
+
+  @@unique([sellerId, codigo])
+  @@index([sellerId, activo])
+  @@map("coupons")
+}
+
+/// Un uso concreto de un cupón.
+///
+/// ⚠️ La restricción única por (cupón, comprador) es lo que impide que la misma
+/// persona lo use dos veces. Va en la base y no en un `if`: dos pedidos
+/// simultáneos pasarían los dos por cualquier comprobación previa.
+model CouponRedemption {
+  id       String @id // cur_<ulid>
+  couponId String @map("coupon_id")
+  userId   String @map("user_id")
+  orderId  String @unique @map("order_id")
+
+  /// Cuánto descontó de verdad, ya recortado por el tope y por el resto mínimo.
+  /// Guardarlo evita tener que recalcularlo con reglas que pueden haber
+  /// cambiado desde entonces.
+  descuentoCentavos Int @map("descuento_centavos")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  coupon Coupon @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  order  Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([couponId, userId])
+  @@index([couponId, createdAt])
+  @@map("coupon_redemptions")
+}
+
+enum CouponType {
+  PORCENTAJE
+  MONTO_FIJO
 }
 
 enum MembershipPlan {
@@ -1813,6 +1903,8 @@ model Order {
   attempts PaymentAttempt[]
   refunds  Refund[]
   review   Review?
+  /// El cupón usado, si hubo. Uno solo por orden.
+  cuponCanjeado CouponRedemption?
 
   @@index([buyerId, createdAt])
   @@index([sellerId, status, createdAt])

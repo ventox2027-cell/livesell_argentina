@@ -49,6 +49,18 @@ class DesgloseDePrecio extends StatelessWidget {
       lineas.add(const _Linea(etiqueta: 'Envío', valor: 'Gratis', destacado: true));
     }
 
+    if (pedido.descuento > 0) {
+      // En verde y con el signo menos: es lo único de la lista que baja el
+      // total, y tiene que leerse distinto de las líneas que lo suben.
+      lineas.add(
+        _Linea(
+          etiqueta: 'Cupón de descuento',
+          valor: '−${formatearPesos(pedido.descuento)}',
+          destacado: true,
+        ),
+      );
+    }
+
     if (pedido.recargoProcesador > 0) {
       lineas.add(
         _Linea(

@@ -24,12 +24,14 @@ import { ZodValidationPipe } from '@/shared/http/zod-validation.pipe';
 
 import { AddressesService } from './addresses.service';
 import {
+  AplicarCuponSchema,
   CreateOrderSchema,
   CreatePaymentAttemptSchema,
   ConfirmarEntregaSchema,
   FulfillmentSchema,
   OrderPageQuerySchema,
   UpsertAddressSchema,
+  type AplicarCuponDto,
   type CreateOrderDto,
   type CreatePaymentAttemptDto,
   type ConfirmarEntregaDto,
@@ -105,6 +107,7 @@ export class OrdersController {
       addressId: dto.addressId,
       retiraEnPersona: dto.retiraEnPersona,
       liveSessionId: dto.liveSessionId,
+      cupon: dto.cupon,
     });
   }
 
@@ -125,6 +128,29 @@ export class OrdersController {
   @Delete('orders/:id')
   cancel(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
     return this.orders.cancelByBuyer(id, user.id);
+  }
+
+  /**
+   * Aplica un cupón a un pedido que todavía no se pagó.
+   *
+   * Existe además del campo de `POST /orders` porque el checkout crea el
+   * pedido apenas se abre —para que la persona vea el total mientras decide— y
+   * el cupón se escribe después, en el resumen.
+   *
+   * ⚠️ Viaja el **código**, nunca el descuento.
+   */
+  @Post('orders/:id/coupon')
+  aplicarCupon(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(AplicarCuponSchema)) dto: AplicarCuponDto,
+  ) {
+    return this.orders.aplicarCupon(id, user.id, dto.codigo);
+  }
+
+  @Delete('orders/:id/coupon')
+  quitarCupon(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.orders.quitarCupon(id, user.id);
   }
 
   // ═══════════════════════════════════════════════════════════════════════

@@ -186,6 +186,26 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<string, number>> = {
   PRO_REQUIRED: 402,
   /** Llegó al tope de su plan. Distinto de no tener el beneficio. */
   PLAN_LIMIT_REACHED: 409,
+
+  /** El vendedor cargó mal un cupón. 422: la regla, no el formato. */
+  COUPON_INVALID: 422,
+  /**
+   * El comprador usó un código que no aplica: vencido, agotado, ya usado, o no
+   * llega al mínimo.
+   *
+   * 422 y no 404: el pedido está bien formado y el cupón puede existir
+   * perfectamente. Y el mensaje dice cuál de esos casos es —salvo cuando el
+   * código no existe, que responde lo mismo que uno pausado a propósito, para
+   * no revelar qué códigos tiene esta tienda.
+   */
+  COUPON_NOT_APPLICABLE: 422,
+  /**
+   * El pedido ya no admite cambios: se está pagando, venció, o ya tiene cupón.
+   *
+   * 409 y no 422: no hay nada malo en lo que mandó: el conflicto es con el
+   * estado del pedido, que cambió mientras la persona miraba la pantalla.
+   */
+  ORDER_NOT_EDITABLE: 409,
   /**
    * 422 y no 400: el pedido está bien formado, lo que falla es una regla del
    * negocio. La app lo distingue para llevar al selector de categoría en lugar
