@@ -102,9 +102,7 @@ class InventoryRepository {
   Future<List<Reserva>> misReservas() async {
     final res = await _api.get<List<dynamic>>('/inventory/reservations/mine');
     if (res.statusCode != 200) throw _error(res);
-    return (res.data ?? [])
-        .map((e) => Reserva.fromJson(e as Map<String, dynamic>))
-        .toList();
+    return (res.data ?? []).map((e) => Reserva.fromJson(e as Map<String, dynamic>)).toList();
   }
 
   Future<void> cancelar(String reservationId) async {

@@ -122,7 +122,8 @@ class _ViewerScreenState extends State<ViewerScreen> with SingleTickerProviderSt
                 children: [
                   CircularProgressIndicator(),
                   SizedBox(height: 16),
-                  Text('Esperando el video del teléfono A…', style: TextStyle(color: Colors.white54)),
+                  Text('Esperando el video del teléfono A…',
+                      style: TextStyle(color: Colors.white54)),
                 ],
               ),
             ),
@@ -236,7 +237,8 @@ class _ViewerScreenState extends State<ViewerScreen> with SingleTickerProviderSt
           ),
 
           if (_starting)
-            Container(color: Colors.black87, child: const Center(child: CircularProgressIndicator())),
+            Container(
+                color: Colors.black87, child: const Center(child: CircularProgressIndicator())),
 
           if (_fatalError != null)
             Container(
@@ -494,7 +496,6 @@ class _MeasurementSheetState extends State<_MeasurementSheet> {
             style: TextStyle(color: Colors.white60, fontSize: 13),
           ),
           const SizedBox(height: 20),
-
           TextField(
             controller: _overlayCtrl,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
@@ -525,7 +526,6 @@ class _MeasurementSheetState extends State<_MeasurementSheet> {
               border: OutlineInputBorder(),
             ),
           ),
-
           if (widget.currentEstimate != null) ...[
             const SizedBox(height: 14),
             Text(
@@ -534,17 +534,16 @@ class _MeasurementSheetState extends State<_MeasurementSheet> {
               style: const TextStyle(color: Colors.white38, fontSize: 12),
             ),
           ],
-
           if (_error != null) ...[
             const SizedBox(height: 12),
             Text(_error!, style: const TextStyle(color: Colors.redAccent, fontSize: 13)),
           ],
-
           const SizedBox(height: 20),
           FilledButton(
             onPressed: _busy ? null : _submit,
             child: _busy
-                ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                ? const SizedBox(
+                    height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
                 : const Text('GUARDAR MEDICIÓN'),
           ),
         ],

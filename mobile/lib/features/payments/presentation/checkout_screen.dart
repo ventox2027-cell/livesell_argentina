@@ -137,7 +137,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       final r = await _api.reconcile();
       final cambiadas = (r['changed'] as List<dynamic>?)?.length ?? 0;
       await _refrescar();
-      _avisar('Conciliación: $cambiadas ${cambiadas == 1 ? "orden resuelta" : "órdenes resueltas"}');
+      _avisar(
+          'Conciliación: $cambiadas ${cambiadas == 1 ? "orden resuelta" : "órdenes resueltas"}');
     } catch (e) {
       _avisar('Falló la conciliación: $e', error: true);
     } finally {
@@ -159,7 +160,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
             montoCentavos: _montoCentavos,
           ),
           const SizedBox(height: 20),
-
           TextField(
             controller: _emailCtrl,
             enabled: orden == null && !_trabajando,
@@ -171,7 +171,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
             ),
           ),
           const SizedBox(height: 20),
-
           FilledButton(
             onPressed: _trabajando ? null : _comprar,
             style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
@@ -180,12 +179,10 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
               style: const TextStyle(fontSize: 17),
             ),
           ),
-
           if (_mensaje != null) ...[
             const SizedBox(height: 18),
             _Aviso(texto: _mensaje!, esError: _mensajeEsError),
           ],
-
           if (orden != null) ...[
             const SizedBox(height: 24),
             _EstadoOrden(orden: orden),
@@ -218,14 +215,15 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
             ),
             const SizedBox(height: 14),
             TextButton(
-              onPressed: _trabajando ? null : () => setState(() {
-                _orden = null;
-                _mensaje = null;
-              }),
+              onPressed: _trabajando
+                  ? null
+                  : () => setState(() {
+                        _orden = null;
+                        _mensaje = null;
+                      }),
               child: const Text('Empezar otra compra'),
             ),
           ],
-
           const SizedBox(height: 28),
           Text(
             'Backend: ${RuntimeConfig.instance.apiBaseUrl}',

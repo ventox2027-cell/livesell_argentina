@@ -68,9 +68,8 @@ class AuthConfig {
 /// Ahora la pantalla de bienvenida invalida este provider al reintentar.
 final authConfigProvider = FutureProvider<AuthConfig>((ref) async {
   try {
-    final res = await ref
-        .watch(apiClientProvider)
-        .get<Map<String, dynamic>>('/auth/config', sinAuth: true);
+    final res =
+        await ref.watch(apiClientProvider).get<Map<String, dynamic>>('/auth/config', sinAuth: true);
 
     final d = res.data;
 

@@ -103,7 +103,6 @@ class _ResenaSheetState extends ConsumerState<ResenaSheet> {
             ),
           ),
           const SizedBox(height: Gap.lg),
-
           Text('¿Cómo fue tu compra?', style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 2),
           Text(
@@ -111,7 +110,6 @@ class _ResenaSheetState extends ConsumerState<ResenaSheet> {
             style: const TextStyle(fontSize: 13.5, color: AppColor.textoSuave),
           ),
           const SizedBox(height: Gap.xl),
-
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -138,7 +136,6 @@ class _ResenaSheetState extends ConsumerState<ResenaSheet> {
                 ),
             ],
           ),
-
           if (_estrellas > 0) ...[
             const SizedBox(height: Gap.xs),
             Center(
@@ -148,7 +145,6 @@ class _ResenaSheetState extends ConsumerState<ResenaSheet> {
               ),
             ),
           ],
-
           const SizedBox(height: Gap.xl),
           TextField(
             controller: _comentario,
@@ -163,7 +159,6 @@ class _ResenaSheetState extends ConsumerState<ResenaSheet> {
             ),
           ),
           const SizedBox(height: Gap.lg),
-
           FilledButton(
             onPressed: _estrellas == 0 || _enviando ? null : () => unawaited(_enviar()),
             style: FilledButton.styleFrom(minimumSize: const Size(0, 52)),

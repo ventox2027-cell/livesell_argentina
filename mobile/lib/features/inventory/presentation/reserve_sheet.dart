@@ -270,7 +270,6 @@ class _ReserveSheetState extends ConsumerState<ReserveSheet> with WidgetsBinding
         children: [
           _Agarradera(),
           const SizedBox(height: Gap.lg),
-
           Text(
             widget.nombreProducto,
             maxLines: 2,
@@ -293,9 +292,7 @@ class _ReserveSheetState extends ConsumerState<ReserveSheet> with WidgetsBinding
               letterSpacing: -0.8,
             ),
           ),
-
           const SizedBox(height: Gap.xl),
-
           if (vencida)
             _Vencida(
               onReintentar: () {
@@ -470,7 +467,6 @@ class _Reservada extends StatelessWidget {
           ),
         ),
         const SizedBox(height: Gap.lg),
-
         FilledButton(
           onPressed: onPagar,
           style: FilledButton.styleFrom(minimumSize: const Size(0, 52)),

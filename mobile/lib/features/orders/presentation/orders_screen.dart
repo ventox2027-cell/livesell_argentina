@@ -122,7 +122,6 @@ class _TarjetaDePedido extends ConsumerWidget {
                 style: const TextStyle(fontSize: 12.5, color: AppColor.textoSuave, height: 1.35),
               ),
             ],
-
             if (pedido.sePuedePagar) ...[
               const SizedBox(height: Gap.md),
               SizedBox(

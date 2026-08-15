@@ -260,7 +260,8 @@ class SpikeSessionController extends ChangeNotifier {
         _onProbeReceived(e.data);
       })
       ..on<ParticipantConnectedEvent>((e) {
-        _record(SpikeEventType.QUALITY_CHANGED, detail: {'participantJoined': e.participant.identity});
+        _record(SpikeEventType.QUALITY_CHANGED,
+            detail: {'participantJoined': e.participant.identity});
       });
   }
 
@@ -397,7 +398,8 @@ class SpikeSessionController extends ChangeNotifier {
 
     try {
       if (samples.isNotEmpty) {
-        final accepted = await api.uploadSamples(sessionId: sessionId, role: role, samples: samples);
+        final accepted =
+            await api.uploadSamples(sessionId: sessionId, role: role, samples: samples);
         uploadedSamples += accepted;
       }
       if (events.isNotEmpty) {

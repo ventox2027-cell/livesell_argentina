@@ -78,7 +78,6 @@ class AccionesDeMensaje extends ConsumerWidget {
             ),
           ),
           const Divider(height: 1, color: AppColor.borde),
-
           ListTile(
             leading: const Icon(Icons.flag_outlined, color: AppColor.alerta),
             title: const Text('Reportar mensaje'),
@@ -95,7 +94,6 @@ class AccionesDeMensaje extends ConsumerWidget {
               );
             },
           ),
-
           ListTile(
             leading: const Icon(Icons.person_off_outlined, color: AppColor.alerta),
             title: Text('Reportar a ${mensaje.nombre}'),
@@ -115,7 +113,6 @@ class AccionesDeMensaje extends ConsumerWidget {
               );
             },
           ),
-
           if (soyElVendedor) ...[
             ListTile(
               leading: const Icon(Icons.delete_outline_rounded, color: AppColor.error),

@@ -122,8 +122,8 @@ class _VariantSheetState extends ConsumerState<VariantSheet> {
     final pedidoDeHorario = storeId == null
         ? Future<EstadoDeTienda?>.value()
         : api.estadoDeTienda(storeId).then<EstadoDeTienda?>((e) => e).catchError(
-            (Object _) => null,
-          );
+              (Object _) => null,
+            );
 
     try {
       final producto = await pedidoDeProducto;
@@ -242,7 +242,6 @@ class _VariantSheetState extends ConsumerState<VariantSheet> {
             borderRadius: BorderRadius.circular(2),
           ),
         ),
-
         Flexible(
           child: SingleChildScrollView(
             padding: const EdgeInsets.fromLTRB(Gap.xl, Gap.lg, Gap.xl, 0),
@@ -284,9 +283,8 @@ class _VariantSheetState extends ConsumerState<VariantSheet> {
                   envio: producto.envio,
                   cambios: producto.cambios,
                   retira: _retira,
-                  onCambiarRetiro: producto.envio.hayQueElegir
-                      ? (v) => setState(() => _retira = v)
-                      : null,
+                  onCambiarRetiro:
+                      producto.envio.hayQueElegir ? (v) => setState(() => _retira = v) : null,
                 ),
                 const SizedBox(height: Gap.lg),
 
@@ -327,7 +325,6 @@ class _VariantSheetState extends ConsumerState<VariantSheet> {
             ),
           ),
         ),
-
         Padding(
           padding: const EdgeInsets.fromLTRB(Gap.xl, Gap.lg, Gap.xl, Gap.xl),
           child: _BotonPrincipal(
@@ -403,9 +400,7 @@ class _Cabecera extends StatelessWidget {
               ),
               if (variante != null && !variante!.agotada && variante!.disponible <= 5)
                 Text(
-                  variante!.disponible == 1
-                      ? 'Última unidad'
-                      : 'Quedan ${variante!.disponible}',
+                  variante!.disponible == 1 ? 'Última unidad' : 'Quedan ${variante!.disponible}',
                   style: const TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w700,

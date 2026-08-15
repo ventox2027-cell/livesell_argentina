@@ -47,9 +47,7 @@ class _InteresadosScreenState extends ConsumerState<InteresadosScreen> {
     });
 
     try {
-      final r = await ref
-          .read(apiClientProvider)
-          .get<Map<String, dynamic>>('/stores/me/intents');
+      final r = await ref.read(apiClientProvider).get<Map<String, dynamic>>('/stores/me/intents');
       if (!mounted) return;
       setState(() {
         _datos = r.data;
@@ -84,8 +82,7 @@ class _InteresadosScreenState extends ConsumerState<InteresadosScreen> {
       );
     }
 
-    final items = (_datos?['items'] as List<dynamic>? ?? const [])
-        .cast<Map<String, dynamic>>();
+    final items = (_datos?['items'] as List<dynamic>? ?? const []).cast<Map<String, dynamic>>();
 
     if (items.isEmpty) {
       return const _Vacio(
@@ -176,8 +173,8 @@ class _Producto extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final variantes = (producto['variantes'] as List<dynamic>? ?? const [])
-        .cast<Map<String, dynamic>>();
+    final variantes =
+        (producto['variantes'] as List<dynamic>? ?? const []).cast<Map<String, dynamic>>();
     final personas = (producto['personas'] as num?)?.toInt() ?? 0;
     final publicado = producto['publicado'] as bool? ?? true;
 
@@ -205,7 +202,6 @@ class _Producto extends StatelessWidget {
               ),
             ],
           ),
-
           if (!publicado) ...[
             const SizedBox(height: Gap.sm),
             const Row(
@@ -223,7 +219,6 @@ class _Producto extends StatelessWidget {
               ],
             ),
           ],
-
           const SizedBox(height: Gap.md),
           for (final v in variantes) _Variante(variante: v),
         ],

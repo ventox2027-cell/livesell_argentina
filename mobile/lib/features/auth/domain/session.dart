@@ -84,6 +84,7 @@ enum DatoFaltante {
   telefono,
   verificacionTelefono,
   nombre,
+
   /// VendoX es 18+. Se pide antes de comprar y antes de crear la tienda.
   fechaDeNacimiento;
 
@@ -112,6 +113,7 @@ class SesionDesconocida extends EstadoSesion {
 
 class SinSesion extends EstadoSesion {
   const SinSesion({this.motivo});
+
   /// Por qué se cerró. Permite decir "tu sesión venció" en vez de mostrar el
   /// login sin explicación después de que la app se cerró sola.
   final String? motivo;

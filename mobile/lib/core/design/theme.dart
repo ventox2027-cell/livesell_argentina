@@ -31,19 +31,17 @@ ThemeData buildAppTheme() {
     colorScheme: esquema,
     scaffoldBackgroundColor: AppColor.fondo,
     splashFactory: InkSparkle.splashFactory,
-
-    textTheme: base
-        .apply(bodyColor: AppColor.texto, displayColor: AppColor.texto)
-        .copyWith(
+    textTheme: base.apply(bodyColor: AppColor.texto, displayColor: AppColor.texto).copyWith(
           // Los precios y los números grandes van más apretados: a tamaños
           // grandes el espaciado por defecto se ve suelto y poco intencional.
-          displayLarge: base.displayLarge?.copyWith(letterSpacing: -1.5, fontWeight: FontWeight.w700),
-          headlineMedium: base.headlineMedium?.copyWith(letterSpacing: -0.8, fontWeight: FontWeight.w700),
+          displayLarge:
+              base.displayLarge?.copyWith(letterSpacing: -1.5, fontWeight: FontWeight.w700),
+          headlineMedium:
+              base.headlineMedium?.copyWith(letterSpacing: -0.8, fontWeight: FontWeight.w700),
           titleLarge: base.titleLarge?.copyWith(letterSpacing: -0.4, fontWeight: FontWeight.w600),
           bodyMedium: base.bodyMedium?.copyWith(height: 1.45, color: AppColor.texto),
           bodySmall: base.bodySmall?.copyWith(color: AppColor.textoSuave, height: 1.4),
         ),
-
     appBarTheme: AppBarTheme(
       backgroundColor: Colors.transparent,
       surfaceTintColor: Colors.transparent,
@@ -58,7 +56,6 @@ ThemeData buildAppTheme() {
       // Iconos claros en la barra de estado: el fondo siempre es oscuro.
       systemOverlayStyle: SystemUiOverlayStyle.light,
     ),
-
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
         backgroundColor: AppColor.acento,
@@ -69,10 +66,10 @@ ThemeData buildAppTheme() {
         // una sola mano mientras se mira un video.
         minimumSize: const Size.fromHeight(52),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(Redondeo.md)),
-        textStyle: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.w600, letterSpacing: -0.2),
+        textStyle:
+            GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.w600, letterSpacing: -0.2),
       ),
     ),
-
     outlinedButtonTheme: OutlinedButtonThemeData(
       style: OutlinedButton.styleFrom(
         foregroundColor: AppColor.texto,
@@ -82,14 +79,12 @@ ThemeData buildAppTheme() {
         textStyle: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.w600),
       ),
     ),
-
     textButtonTheme: TextButtonThemeData(
       style: TextButton.styleFrom(
         foregroundColor: AppColor.textoSuave,
         textStyle: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w500),
       ),
     ),
-
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
       fillColor: AppColor.superficie,
@@ -113,14 +108,12 @@ ThemeData buildAppTheme() {
       labelStyle: const TextStyle(color: AppColor.textoSuave),
       hintStyle: const TextStyle(color: AppColor.textoDebil),
     ),
-
     cardTheme: CardThemeData(
       color: AppColor.superficie,
       elevation: 0,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(Redondeo.lg)),
       margin: EdgeInsets.zero,
     ),
-
     bottomSheetTheme: const BottomSheetThemeData(
       backgroundColor: AppColor.superficie,
       surfaceTintColor: Colors.transparent,
@@ -130,7 +123,6 @@ ThemeData buildAppTheme() {
       showDragHandle: true,
       dragHandleColor: AppColor.borde,
     ),
-
     dividerTheme: const DividerThemeData(color: AppColor.borde, thickness: 1, space: 1),
     snackBarTheme: SnackBarThemeData(
       backgroundColor: AppColor.superficieAlta,

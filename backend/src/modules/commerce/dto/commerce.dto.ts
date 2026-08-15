@@ -332,5 +332,15 @@ export type PageQueryDto = z.infer<typeof PageQuerySchema>;
  */
 export const DiscoverQuerySchema = PageQuerySchema.extend({
   q: z.string().trim().max(100).optional(),
+  /**
+   * Filtrar el feed por rubro.
+   *
+   * Se acepta el id (`cat_calzado`) y no el slug: es lo que devuelve
+   * `GET /categories` y lo que la app ya tiene en la mano. Un id inexistente
+   * no falla, devuelve vacío — un filtro es una vista, no una operación, y un
+   * enlace viejo a una categoría apagada tiene que mostrar "no hay nada acá",
+   * no un error.
+   */
+  categoria: z.string().trim().max(40).optional(),
 });
 export type DiscoverQueryDto = z.infer<typeof DiscoverQuerySchema>;

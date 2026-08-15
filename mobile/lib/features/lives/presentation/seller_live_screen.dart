@@ -670,8 +670,7 @@ class _Bandeja extends StatelessWidget {
                           itemCount: panel.bandeja.length,
                           itemBuilder: (_, i) {
                             final p = panel.bandeja[i];
-                            final activo =
-                                p.variantes.any((v) => v.id == panel.destacadoVariantId);
+                            final activo = p.variantes.any((v) => v.id == panel.destacadoVariantId);
                             return _FilaBandeja(
                               producto: p,
                               activo: activo,
@@ -734,7 +733,8 @@ class _FilaBandeja extends StatelessWidget {
                             fit: BoxFit.cover,
                             errorWidget: (_, __, ___) => const ColoredBox(
                               color: AppColor.superficie,
-                              child: Icon(Icons.image_rounded, size: 18, color: AppColor.textoDebil),
+                              child:
+                                  Icon(Icons.image_rounded, size: 18, color: AppColor.textoDebil),
                             ),
                           ),
                   ),

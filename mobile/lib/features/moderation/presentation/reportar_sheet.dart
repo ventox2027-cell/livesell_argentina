@@ -155,7 +155,6 @@ class _ReportarSheetState extends ConsumerState<ReportarSheet> {
               ),
             ),
             const SizedBox(height: Gap.md),
-
             Flexible(
               child: SingleChildScrollView(
                 padding: const EdgeInsets.symmetric(horizontal: Gap.xl),
@@ -185,7 +184,6 @@ class _ReportarSheetState extends ConsumerState<ReportarSheet> {
                 ),
               ),
             ),
-
             Padding(
               padding: const EdgeInsets.fromLTRB(Gap.xl, Gap.md, Gap.xl, Gap.lg),
               child: SizedBox(

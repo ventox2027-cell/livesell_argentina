@@ -37,9 +37,8 @@ class EstadoDeCobros extends ConsumerStatefulWidget {
 /// `autoDispose` porque al salir de "Mi tienda" el dato deja de importar, y
 /// mantenerlo vivo haría que al volver se muestre el de hace una hora.
 final estadoDeCobrosProvider = FutureProvider.autoDispose<EstadoDeCobrosDatos>((ref) async {
-  final r = await ref
-      .read(apiClientProvider)
-      .get<Map<String, dynamic>>('/sellers/me/payment-account');
+  final r =
+      await ref.read(apiClientProvider).get<Map<String, dynamic>>('/sellers/me/payment-account');
   return EstadoDeCobrosDatos.fromJson(r.data);
 });
 
@@ -117,10 +116,12 @@ class _EstadoDeCobrosState extends ConsumerState<EstadoDeCobros> {
       error: (_, __) => const SizedBox.shrink(),
       data: (d) {
         if (!d.disponible) return const SizedBox.shrink();
-        return d.conectada ? _Conectada(cuenta: d.cuenta, onTap: _abrir) : _Falta(
-          obligatoria: d.obligatoria,
-          onTap: _abrir,
-        );
+        return d.conectada
+            ? _Conectada(cuenta: d.cuenta, onTap: _abrir)
+            : _Falta(
+                obligatoria: d.obligatoria,
+                onTap: _abrir,
+              );
       },
     );
   }

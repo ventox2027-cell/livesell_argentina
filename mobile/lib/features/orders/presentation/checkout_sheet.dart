@@ -246,12 +246,10 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
                 // Durante el cobro no se puede cerrar: irse a mitad de una
                 // operación con plata en juego deja a la persona sin saber qué
                 // pasó.
-                onCerrar: _paso == _Paso.procesando
-                    ? null
-                    : () => Navigator.of(context).pop(_pedido),
+                onCerrar:
+                    _paso == _Paso.procesando ? null : () => Navigator.of(context).pop(_pedido),
               ),
               const SizedBox(height: Gap.lg),
-
               switch (_paso) {
                 _Paso.creando => const _Cargando('Reservando tu unidad…'),
                 _Paso.direccion => _PedirDireccion(onCargar: _pedirDireccion),
@@ -575,7 +573,6 @@ class _Resultado extends StatelessWidget {
           textAlign: TextAlign.center,
           style: const TextStyle(fontSize: 14, color: AppColor.textoSuave, height: 1.45),
         ),
-
         if (pedido != null) ...[
           const SizedBox(height: Gap.lg),
           Text(
@@ -584,7 +581,6 @@ class _Resultado extends StatelessWidget {
             style: const TextStyle(fontSize: 12.5, color: AppColor.textoDebil),
           ),
         ],
-
         const SizedBox(height: Gap.xl),
         if (puedeReintentar) ...[
           FilledButton(

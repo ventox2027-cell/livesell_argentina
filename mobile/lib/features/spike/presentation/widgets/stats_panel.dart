@@ -109,9 +109,9 @@ class _StatsPanelState extends State<StatsPanel> {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(role, style: const TextStyle(fontSize: 10, color: Colors.white54, letterSpacing: 1)),
+            Text(role,
+                style: const TextStyle(fontSize: 10, color: Colors.white54, letterSpacing: 1)),
             const SizedBox(height: 6),
-
             if (probeLatencyMs != null)
               // El número que se mira todo el tiempo. Es transporte, no
               // glass-to-glass: el color usa umbrales más exigentes a propósito.
@@ -121,7 +121,6 @@ class _StatsPanelState extends State<StatsPanel> {
                 color: _colorFor(probeLatencyMs, good: 300, warn: 600),
                 emphasized: true,
               ),
-
             _Row(label: 'bitrate', value: _fmt(stats.bitrateKbps, 'kbps')),
             _Row(label: 'fps', value: stats.fps?.toStringAsFixed(1) ?? '—'),
             _Row(
@@ -131,7 +130,8 @@ class _StatsPanelState extends State<StatsPanel> {
             ),
             _Row(
               label: 'pérdida',
-              value: stats.packetLossPct != null ? '${stats.packetLossPct!.toStringAsFixed(1)}%' : '—',
+              value:
+                  stats.packetLossPct != null ? '${stats.packetLossPct!.toStringAsFixed(1)}%' : '—',
               color: stats.packetLossPct != null
                   ? _colorFor(stats.packetLossPct!.round(), good: 1, warn: 5)
                   : null,
@@ -141,9 +141,7 @@ class _StatsPanelState extends State<StatsPanel> {
             if (stats.rttMs != null) _Row(label: 'rtt', value: '${stats.rttMs} ms'),
             if (stats.freezeCount != null && stats.freezeCount! > 0)
               _Row(label: 'freezes', value: '${stats.freezeCount}', color: Colors.orangeAccent),
-
             const Divider(height: 12, color: Colors.white12),
-
             if (connectMs != null) _Row(label: 'conexión', value: '$connectMs ms'),
             if (firstFrameMs != null)
               _Row(
@@ -160,7 +158,6 @@ class _StatsPanelState extends State<StatsPanel> {
       ),
     );
   }
-
 }
 
 String _fmt(num? v, String unit) => v == null ? '—' : '$v $unit';
@@ -172,7 +169,8 @@ Color _colorFor(int value, {required int good, required int warn}) {
 }
 
 class _Row extends StatelessWidget {
-  const _Row({required this.label, required this.value, this.color, this.suffix, this.emphasized = false});
+  const _Row(
+      {required this.label, required this.value, this.color, this.suffix, this.emphasized = false});
 
   final String label;
   final String value;

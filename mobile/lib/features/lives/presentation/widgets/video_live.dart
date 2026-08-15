@@ -168,9 +168,8 @@ class _VideoLiveState extends State<VideoLive> {
       if (sala == null || !mounted) return;
 
       try {
-        final pubs = sala.remoteParticipants.values
-            .expand((p) => p.videoTrackPublications)
-            .toList();
+        final pubs =
+            sala.remoteParticipants.values.expand((p) => p.videoTrackPublications).toList();
 
         var cuadros = 0;
         for (final pub in pubs) {
@@ -240,9 +239,7 @@ class _VideoLiveState extends State<VideoLive> {
         reconectandoSegunBackend: widget.live.reconectando,
         vioAlgunCuadro: _vioAlgunCuadro,
         sinAvance: DateTime.now().difference(_ultimoAvance),
-        desdeElCorte: _sinVideoDesde == null
-            ? null
-            : DateTime.now().difference(_sinVideoDesde!),
+        desdeElCorte: _sinVideoDesde == null ? null : DateTime.now().difference(_sinVideoDesde!),
       );
 
   @override

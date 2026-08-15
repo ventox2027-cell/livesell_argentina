@@ -142,7 +142,6 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
             children: [
               if (store != null) _Direccion(slug: store.slug),
               const SizedBox(height: Gap.xl),
-
               TextField(
                 controller: _nombre,
                 textCapitalization: TextCapitalization.words,
@@ -152,7 +151,6 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
                 ),
               ),
               const SizedBox(height: Gap.xl),
-
               TextField(
                 controller: _descripcion,
                 maxLines: 3,
@@ -165,7 +163,6 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
                 ),
               ),
               const SizedBox(height: Gap.md),
-
               TextField(
                 controller: _bio,
                 maxLines: 2,
@@ -177,7 +174,6 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
                 ),
               ),
               const SizedBox(height: Gap.lg),
-
               FilledButton(
                 onPressed: _guardando ? null : () => _guardar(p),
                 child: _guardando
@@ -188,7 +184,6 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
                       )
                     : const Text('Guardar'),
               ),
-
               if (store != null) ...[
                 const SizedBox(height: Gap.xxl),
                 // Horarios y pausa son cosas distintas y van separadas:

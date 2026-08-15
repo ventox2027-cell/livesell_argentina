@@ -102,8 +102,7 @@ class HorarioDeTienda {
   final bool? abiertaAhora;
   final String motivo;
 
-  HorarioDeTienda copiaCon({ModoDeApertura? modo, List<FranjaHoraria>? franjas}) =>
-      HorarioDeTienda(
+  HorarioDeTienda copiaCon({ModoDeApertura? modo, List<FranjaHoraria>? franjas}) => HorarioDeTienda(
         modo: modo ?? this.modo,
         zona: zona,
         franjas: franjas ?? this.franjas,

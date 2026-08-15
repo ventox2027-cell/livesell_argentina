@@ -544,6 +544,7 @@ describe('Catálogo del comprador', () => {
         slug: `producto-catalogo-${n}-${Date.now().toString(36)}`,
         basePriceCents: 4_500_000,
         status: 'ACTIVE',
+        categoryId: 'cat_otros',
       },
     });
     expect(p.status, JSON.stringify(p.body)).toBe(201);
@@ -658,6 +659,7 @@ describe('Intención de compra', () => {
         slug: `producto-intencion-${n}-${Date.now().toString(36)}`,
         basePriceCents: 500000,
         status: 'ACTIVE',
+        categoryId: 'cat_otros',
       },
     });
     const detalle = await call('GET', `/api/v1/products/${p.body.id}`, { token: vendedor.token });
@@ -693,6 +695,7 @@ describe('Intención de compra', () => {
         slug: `prod-int-dup-${n}-${Date.now().toString(36)}`,
         basePriceCents: 500000,
         status: 'ACTIVE',
+        categoryId: 'cat_otros',
       },
     });
     const detalle = await call('GET', `/api/v1/products/${p.body.id}`, { token: vendedor.token });
@@ -737,6 +740,7 @@ describe('Interesados y reapertura', () => {
         slug: `buzo-interesados-${n}-${Date.now().toString(36)}`,
         basePriceCents: 890_000,
         status: 'ACTIVE',
+        categoryId: 'cat_otros',
       },
     });
     expect(p.status, JSON.stringify(p.body)).toBe(201);
@@ -1134,6 +1138,7 @@ describe('Me gusta', () => {
         slug: `producto-like-${n}-${Date.now().toString(36)}`,
         basePriceCents: 890_000,
         status: 'ACTIVE',
+        categoryId: 'cat_otros',
       },
     });
     expect(p.status, JSON.stringify(p.body)).toBe(201);
@@ -1280,6 +1285,7 @@ describe('Compartir', () => {
         slug: `buzo-compartir-${n}-${Date.now().toString(36)}`,
         basePriceCents: 890_000,
         status: 'ACTIVE',
+        categoryId: 'cat_otros',
       },
     });
 

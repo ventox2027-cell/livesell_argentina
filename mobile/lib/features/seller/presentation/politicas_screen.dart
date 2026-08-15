@@ -112,7 +112,6 @@ class _PoliticasScreenState extends ConsumerState<PoliticasScreen> {
             ),
             const SizedBox(height: Gap.sm),
           ],
-
           if (_envio.modo.necesitaMonto) ...[
             const SizedBox(height: Gap.md),
             TextField(
@@ -127,7 +126,6 @@ class _PoliticasScreenState extends ConsumerState<PoliticasScreen> {
               ),
             ),
           ],
-
           const SizedBox(height: Gap.md),
           TextField(
             controller: _notaEnvio,
@@ -139,7 +137,6 @@ class _PoliticasScreenState extends ConsumerState<PoliticasScreen> {
               hintText: 'Envíos los martes y jueves. Retiro por Palermo.',
             ),
           ),
-
           const SizedBox(height: Gap.xl),
           const _Seccion('Costo de Mercado Pago'),
           if (_envio.recargoDisponible)
@@ -162,10 +159,8 @@ class _PoliticasScreenState extends ConsumerState<PoliticasScreen> {
               'total, y eso depende del medio de pago que elija quien compra. '
               'Lo vamos a habilitar cuando podamos hacerlo bien.',
             ),
-
           const SizedBox(height: Gap.lg),
           _Ejemplo(envio: _envio, precio: _ejemplo),
-
           const SizedBox(height: Gap.xxl),
           const _Seccion('Cambios y devoluciones'),
           for (final modo in ModoDeCambios.values) ...[
@@ -177,7 +172,6 @@ class _PoliticasScreenState extends ConsumerState<PoliticasScreen> {
             ),
             const SizedBox(height: Gap.sm),
           ],
-
           const SizedBox(height: Gap.md),
           TextField(
             controller: _dias,
@@ -196,7 +190,6 @@ class _PoliticasScreenState extends ConsumerState<PoliticasScreen> {
                       'como mínimo. No se puede ofrecer menos.',
             ),
           ),
-
           if (_cambios.puedeElegirQuienPagaElEnvio) ...[
             const SizedBox(height: Gap.md),
             _Interruptor(
@@ -211,7 +204,6 @@ class _PoliticasScreenState extends ConsumerState<PoliticasScreen> {
               ),
             ),
           ],
-
           const SizedBox(height: Gap.md),
           TextField(
             controller: _notaCambios,
@@ -223,7 +215,6 @@ class _PoliticasScreenState extends ConsumerState<PoliticasScreen> {
               hintText: 'Con la etiqueta puesta y sin uso.',
             ),
           ),
-
           const SizedBox(height: Gap.lg),
           const _AvisoLegal(),
         ],

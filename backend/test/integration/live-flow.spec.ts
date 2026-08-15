@@ -156,6 +156,7 @@ async function nuevoVendedorConProducto() {
       description: 'Para el vivo',
       basePriceCents: 890000,
       status: 'ACTIVE',
+      categoryId: 'cat_otros',
     },
   });
   expect(p.status, JSON.stringify(p.body)).toBe(201);
@@ -694,7 +695,7 @@ describe('Vivo — panel del vendedor', () => {
 
     const segundo = await call('POST', '/api/v1/products', {
       token: v.token,
-      body: { name: `Segundo ${Date.now()}`, basePriceCents: 100000, status: 'ACTIVE' },
+      body: { name: `Segundo ${Date.now()}`, basePriceCents: 100000, status: 'ACTIVE', categoryId: 'cat_otros' },
     });
 
     const r = await call('PUT', `/api/v1/live/${v.liveId}/products`, {

@@ -345,7 +345,8 @@ class _SpikeHomeScreenState extends State<SpikeHomeScreen> {
                 Expanded(
                   child: DropdownButtonFormField<NetworkType>(
                     initialValue: _network,
-                    decoration: const InputDecoration(labelText: 'Red', border: OutlineInputBorder()),
+                    decoration:
+                        const InputDecoration(labelText: 'Red', border: OutlineInputBorder()),
                     items: NetworkType.values
                         .map((n) => DropdownMenuItem(value: n, child: Text(n.label)))
                         .toList(),

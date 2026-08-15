@@ -163,13 +163,11 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
             children: [
               if (b.abiertaAhora != null) _EstadoActual(horario: b),
               const SizedBox(height: Gap.xl),
-
               const Text(
                 '¿Cuándo se puede comprar?',
                 style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: Gap.md),
-
               _OpcionDeModo(
                 modo: ModoDeApertura.alwaysOpen,
                 elegido: b.modo,
@@ -191,7 +189,6 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
                 detalle: 'Se abre al salir al aire y se cierra al terminar.',
                 onElegir: (m) => setState(() => _borrador = b.copiaCon(modo: m)),
               ),
-
               if (b.modo == ModoDeApertura.scheduled) ...[
                 const SizedBox(height: Gap.xl),
                 const Text(
@@ -205,7 +202,6 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
                   style: const TextStyle(fontSize: 12.5, color: AppColor.textoSuave, height: 1.4),
                 ),
                 const SizedBox(height: Gap.md),
-
                 for (var dia = 0; dia < 7; dia++)
                   _Dia(
                     dia: dia,
@@ -215,7 +211,6 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
                     onEditar: _editarHora,
                   ),
               ],
-
               const SizedBox(height: Gap.xl),
               FilledButton(
                 onPressed: _guardando ? null : () => unawaited(_guardar()),
@@ -228,7 +223,6 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
                       )
                     : const Text('Guardar horario'),
               ),
-
               const SizedBox(height: Gap.md),
               const Text(
                 'Con la tienda cerrada, el catálogo se sigue viendo y la gente '

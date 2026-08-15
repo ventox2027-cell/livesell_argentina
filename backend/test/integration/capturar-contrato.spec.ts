@@ -171,6 +171,7 @@ describe('Captura de contratos', () => {
         description: 'Tejido a mano, algodón peinado.',
         basePriceCents: 890_000,
         status: 'ACTIVE',
+        categoryId: 'cat_otros',
         options: [
           { name: 'Talle', values: ['S', 'M'] },
           { name: 'Color', values: ['Negro'] },

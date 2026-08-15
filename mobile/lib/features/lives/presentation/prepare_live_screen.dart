@@ -195,7 +195,6 @@ class _PrepareLiveScreenState extends ConsumerState<PrepareLiveScreen> {
                           onChanged: (_) => setState(() {}),
                         ),
                         const SizedBox(height: Gap.lg),
-
                         Row(
                           children: [
                             const Text(
@@ -216,7 +215,6 @@ class _PrepareLiveScreenState extends ConsumerState<PrepareLiveScreen> {
                           style: TextStyle(fontSize: 12.5, color: AppColor.textoSuave, height: 1.4),
                         ),
                         const SizedBox(height: Gap.md),
-
                         productos.when(
                           loading: () => const Center(child: CircularProgressIndicator()),
                           error: (_, __) => const Text(
@@ -246,7 +244,6 @@ class _PrepareLiveScreenState extends ConsumerState<PrepareLiveScreen> {
                             );
                           },
                         ),
-
                         const SizedBox(height: Gap.xl),
                         SizedBox(
                           width: double.infinity,

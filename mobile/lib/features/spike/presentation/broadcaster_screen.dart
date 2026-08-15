@@ -148,7 +148,8 @@ class _BroadcasterScreenState extends State<BroadcasterScreen> {
                       onTap: () {
                         Clipboard.setData(ClipboardData(text: widget.sessionId));
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('sessionId copiado'), duration: Duration(seconds: 1)),
+                          const SnackBar(
+                              content: Text('sessionId copiado'), duration: Duration(seconds: 1)),
                         );
                       },
                       child: Row(
@@ -238,7 +239,8 @@ class _BroadcasterScreenState extends State<BroadcasterScreen> {
                       const Text('No se pudo conectar a LiveKit',
                           style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                       const SizedBox(height: 8),
-                      Text(_fatalError!, textAlign: TextAlign.center,
+                      Text(_fatalError!,
+                          textAlign: TextAlign.center,
                           style: const TextStyle(color: Colors.white70, fontSize: 12)),
                       const SizedBox(height: 24),
                       FilledButton(onPressed: _finish, child: const Text('Volver')),
@@ -288,7 +290,8 @@ class _StatusPill extends StatelessWidget {
       decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(4)),
       child: Text(
         label,
-        style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8),
+        style: const TextStyle(
+            color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.8),
       ),
     );
   }

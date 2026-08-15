@@ -77,9 +77,7 @@ class _CardFormScreenState extends State<CardFormScreen> {
             final url = Uri.tryParse(req.url);
             final esNuestro = url?.host == widget.api.checkoutUrl(widget.order).host;
             final esMp = url?.host.endsWith('mercadopago.com') ?? false;
-            return (esNuestro || esMp)
-                ? NavigationDecision.navigate
-                : NavigationDecision.prevent;
+            return (esNuestro || esMp) ? NavigationDecision.navigate : NavigationDecision.prevent;
           },
         ),
       )

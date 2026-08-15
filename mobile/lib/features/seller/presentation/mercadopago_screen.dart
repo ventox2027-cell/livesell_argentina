@@ -37,8 +37,7 @@ class MercadoPagoScreen extends ConsumerStatefulWidget {
   ConsumerState<MercadoPagoScreen> createState() => _MercadoPagoScreenState();
 }
 
-class _MercadoPagoScreenState extends ConsumerState<MercadoPagoScreen>
-    with WidgetsBindingObserver {
+class _MercadoPagoScreenState extends ConsumerState<MercadoPagoScreen> with WidgetsBindingObserver {
   Map<String, dynamic>? _estado;
   bool _cargando = true;
   bool _abriendo = false;
@@ -152,9 +151,7 @@ class _MercadoPagoScreenState extends ConsumerState<MercadoPagoScreen>
     if (confirmado != true) return;
 
     try {
-      await ref
-          .read(apiClientProvider)
-          .delete<Map<String, dynamic>>('/sellers/me/payment-account');
+      await ref.read(apiClientProvider).delete<Map<String, dynamic>>('/sellers/me/payment-account');
       if (!mounted) return;
       AppSnack.info(context, 'Cuenta desconectada.');
       await _cargar();
@@ -201,7 +198,6 @@ class _MercadoPagoScreenState extends ConsumerState<MercadoPagoScreen>
         const SizedBox(height: Gap.xl),
         _ComoFunciona(comisionBps: comisionBps),
         const SizedBox(height: Gap.xl),
-
         if (!disponible)
           const _Aviso(
             /**

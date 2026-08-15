@@ -136,13 +136,11 @@ class _AddressSheetState extends ConsumerState<AddressSheet> {
                 ),
               ),
               const SizedBox(height: Gap.lg),
-
               Text(
                 widget.existente == null ? '¿A dónde te lo mandamos?' : 'Editar dirección',
                 style: Theme.of(context).textTheme.titleLarge,
               ),
               const SizedBox(height: Gap.xl),
-
               _Campo(
                 controlador: _destinatario,
                 etiqueta: 'Quién recibe',
@@ -150,7 +148,6 @@ class _AddressSheetState extends ConsumerState<AddressSheet> {
                 capitalizacion: TextCapitalization.words,
                 validar: (v) => (v ?? '').trim().length < 3 ? 'Poné el nombre completo' : null,
               ),
-
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -186,7 +183,6 @@ class _AddressSheetState extends ConsumerState<AddressSheet> {
                   ),
                 ],
               ),
-
               _Campo(
                 controlador: _telefono,
                 etiqueta: 'Teléfono',
@@ -198,10 +194,8 @@ class _AddressSheetState extends ConsumerState<AddressSheet> {
                     ? null
                     : 'Va con código de país: +5491122334455',
               ),
-
               const SizedBox(height: Gap.sm),
               const _Separador('Dirección'),
-
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -225,7 +219,6 @@ class _AddressSheetState extends ConsumerState<AddressSheet> {
                   ),
                 ],
               ),
-
               Row(
                 children: [
                   Expanded(child: _Campo(controlador: _piso, etiqueta: 'Piso (opcional)')),
@@ -233,7 +226,6 @@ class _AddressSheetState extends ConsumerState<AddressSheet> {
                   Expanded(child: _Campo(controlador: _depto, etiqueta: 'Depto (opcional)')),
                 ],
               ),
-
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -261,7 +253,6 @@ class _AddressSheetState extends ConsumerState<AddressSheet> {
                   ),
                 ],
               ),
-
               DropdownButtonFormField<String>(
                 initialValue: _provincia,
                 decoration: const InputDecoration(labelText: 'Provincia'),
@@ -273,14 +264,12 @@ class _AddressSheetState extends ConsumerState<AddressSheet> {
                 onChanged: (v) => setState(() => _provincia = v ?? _provincias.first),
               ),
               const SizedBox(height: Gap.lg),
-
               _Campo(
                 controlador: _referencias,
                 etiqueta: 'Referencias (opcional)',
                 pista: 'Portón negro, timbre 3',
                 // Es el campo que evita que el pedido vuelva al depósito.
               ),
-
               const SizedBox(height: Gap.lg),
               FilledButton(
                 onPressed: _guardando ? null : _guardar,

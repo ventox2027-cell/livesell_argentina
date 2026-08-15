@@ -54,8 +54,7 @@ enum ModoDeEnvio {
         ModoDeEnvio.fixedOrPickup => 'Quien compra elige, y ve el precio de cada opción.',
       };
 
-  bool get necesitaMonto =>
-      this == ModoDeEnvio.fixedPrice || this == ModoDeEnvio.fixedOrPickup;
+  bool get necesitaMonto => this == ModoDeEnvio.fixedPrice || this == ModoDeEnvio.fixedOrPickup;
 }
 
 class PoliticaDeEnvioEditable {
@@ -108,8 +107,7 @@ class PoliticaDeEnvioEditable {
         // dejar que el formulario llegue a mandarla.
         montoFijo: (modo ?? this.modo).necesitaMonto ? (montoFijo ?? this.montoFijo) : 0,
         nota: nota ?? this.nota,
-        trasladaCostoDelProcesador:
-            trasladaCostoDelProcesador ?? this.trasladaCostoDelProcesador,
+        trasladaCostoDelProcesador: trasladaCostoDelProcesador ?? this.trasladaCostoDelProcesador,
         recargoDisponible: recargoDisponible,
       );
 
@@ -166,8 +164,7 @@ class PoliticaDeCambiosEditable {
     this.nota,
   });
 
-  factory PoliticaDeCambiosEditable.fromJson(Map<String, dynamic> j) =>
-      PoliticaDeCambiosEditable(
+  factory PoliticaDeCambiosEditable.fromJson(Map<String, dynamic> j) => PoliticaDeCambiosEditable(
         modo: ModoDeCambios.desde(j['exchangeMode'] as String?),
         dias: (j['exchangeWindowDays'] as num?)?.toInt() ?? diasMinimosLegales,
         envioDeVueltaLoPagaElVendedor: j['returnShippingPaidBy'] != 'COMPRADOR',

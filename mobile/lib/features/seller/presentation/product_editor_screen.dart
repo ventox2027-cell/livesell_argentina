@@ -8,6 +8,7 @@ import '../../../core/design/tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../inventory/data/inventory_repository.dart';
 import '../../inventory/presentation/stock_screen.dart';
+import '../data/categorias_api.dart';
 import '../data/seller_repository.dart';
 import 'widgets/conectar_mp_sheet.dart';
 import '../domain/seller_models.dart';
@@ -18,12 +19,18 @@ import '../domain/seller_models.dart';
 ///
 ///   1. Qué vendo        → nombre
 ///   2. Cuánto sale      → precio
-///   3. Cómo se ve       → fotos
-///   4. ¿Viene en varios? → variantes
+///   3. En qué rubro     → categoría
+///   4. Cómo se ve       → fotos
+///   5. ¿Viene en varios? → variantes
 ///
 /// Ese orden no es casual: es el orden en que alguien describe lo que tiene en
-/// la mano. Pedir primero "categoría" o "SKU" hace que abandone antes de
-/// llegar al precio.
+/// la mano. El rubro va TERCERO y no primero por la misma razón: "categoría"
+/// como primera pregunta de un formulario suena a trámite, y quien abandona lo
+/// hace antes de llegar al precio.
+///
+/// Que igual esté arriba de las fotos es a propósito: hace falta para publicar,
+/// y un requisito escondido al final de una pantalla larga se descubre cuando
+/// ya se cargó todo.
 ///
 /// ─── Las variantes son opcionales y lo parecen ───
 ///
@@ -49,6 +56,14 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
   /// Ejes de variación: `{ "Color": ["Negro","Blanco"] }`.
   final Map<String, List<String>> _opciones = {};
   bool _tieneVariantes = false;
+
+  /// El rubro elegido. `null` mientras no eligió ninguno.
+  ///
+  /// Sin esto no se puede publicar: un producto activo sin categoría no sale en
+  /// ninguna navegación por rubro, así que está publicado y no lo encuentra
+  /// nadie — que para quien vende es peor que no haberlo publicado, porque cree
+  /// que está a la venta.
+  String? _categoriaId;
 
   Producto? _producto;
   bool _cargando = false;
@@ -81,6 +96,7 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
         _nombre.text = p.name;
         _precio.text = formatearPesos(p.basePriceCents).replaceAll('\$ ', '');
         _descripcion.text = p.description ?? '';
+        _categoriaId = p.categoryId;
         _tieneVariantes = p.tieneVariantes;
         for (final o in p.options) {
           _opciones[o.name] = o.values.map((v) => v.value).toList();
@@ -121,6 +137,7 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
           basePriceCents: centavos,
           description: _descripcion.text.trim(),
           opciones: _tieneVariantes ? _opciones : const {},
+          categoryId: _categoriaId,
         );
         if (!mounted) return;
         setState(() {
@@ -134,6 +151,7 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
           name: nombre,
           basePriceCents: centavos,
           description: _descripcion.text.trim(),
+          categoryId: _categoriaId,
         );
 
         /**
@@ -215,11 +233,24 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
     final p = _producto;
     if (p == null) return;
 
+    /**
+     * Publicar sin rubro se frena acá antes de viajar.
+     *
+     * El backend lo rechaza igual —es donde vive la regla de verdad— pero
+     * hacerlo viajar para volver con un error es un segundo de espera para
+     * decirle algo que la app ya sabe. Y el mensaje de acá puede señalar el
+     * campo, que es lo que hace falta para resolverlo.
+     */
+    if (nuevo == 'ACTIVE' && (_categoriaId ?? '').isEmpty) {
+      AppSnack.error(context, 'Elegí un rubro antes de publicar. Es como te encuentran.');
+      return;
+    }
+
     setState(() => _guardando = true);
     try {
       final r = await ref
           .read(sellerRepositoryProvider)
-          .actualizarProducto(p.id, status: nuevo);
+          .actualizarProducto(p.id, status: nuevo, categoryId: _categoriaId);
       if (!mounted) return;
       setState(() {
         _producto = r;
@@ -227,7 +258,9 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
       });
       AppSnack.exito(
         context,
-        nuevo == 'ACTIVE' ? 'Publicado. Ya lo pueden comprar.' : 'Producto ${r.etiquetaEstado.toLowerCase()}',
+        nuevo == 'ACTIVE'
+            ? 'Publicado. Ya lo pueden comprar.'
+            : 'Producto ${r.etiquetaEstado.toLowerCase()}',
       );
     } catch (e) {
       if (mounted) await _mostrarError(e);
@@ -363,6 +396,13 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
                       prefixText: '\$ ',
                       hintText: '12.500',
                     ),
+                  ),
+                  const SizedBox(height: Gap.lg),
+
+                  // ── 2b. En qué rubro entra ──
+                  _SelectorDeCategoria(
+                    elegida: _categoriaId,
+                    onElegir: (id) => setState(() => _categoriaId = id),
                   ),
                   const SizedBox(height: Gap.lg),
 
@@ -611,9 +651,8 @@ class _EditorOpciones extends StatelessWidget {
   Widget build(BuildContext context) {
     // Cuántas variantes van a salir. Mostrarlo evita la sorpresa de crear 60
     // combinaciones sin querer.
-    final total = opciones.values
-        .where((v) => v.isNotEmpty)
-        .fold<int>(1, (acc, v) => acc * v.length);
+    final total =
+        opciones.values.where((v) => v.isNotEmpty).fold<int>(1, (acc, v) => acc * v.length);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -802,11 +841,8 @@ class _HojaNuevaOpcionState extends State<_HojaNuevaOpcion> {
           FilledButton(
             onPressed: () {
               final nombre = _nombre.text.trim();
-              final valores = _valores.text
-                  .split(',')
-                  .map((v) => v.trim())
-                  .where((v) => v.isNotEmpty)
-                  .toList();
+              final valores =
+                  _valores.text.split(',').map((v) => v.trim()).where((v) => v.isNotEmpty).toList();
               if (nombre.isEmpty || valores.isEmpty) {
                 AppSnack.error(context, 'Completá el nombre y al menos un valor');
                 return;
@@ -948,6 +984,87 @@ class _AccesoStock extends ConsumerWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// El selector de rubro.
+///
+/// ═══════════════════════════════════════════════════════════════════════════
+/// UN DESPLEGABLE Y NO UNA PANTALLA APARTE
+/// ═══════════════════════════════════════════════════════════════════════════
+///
+/// Catorce opciones entran en una lista que se lee de un vistazo. Mandarlo a
+/// otra pantalla para elegir una de catorce agrega dos toques y una navegación
+/// a un formulario que ya tiene cuatro campos.
+///
+/// ─── Si la lista no carga, no se traba el formulario ───
+///
+/// El catálogo viene del servidor y puede fallar. Cuando falla, el campo
+/// muestra el motivo y un botón para reintentar, y el resto del editor sigue
+/// funcionando: alguien con mala señal tiene que poder guardar el borrador
+/// igual. Lo único que no va a poder es publicar, y eso ya se lo dice el botón
+/// de publicar.
+class _SelectorDeCategoria extends ConsumerWidget {
+  const _SelectorDeCategoria({required this.elegida, required this.onElegir});
+
+  final String? elegida;
+  final ValueChanged<String?> onElegir;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final categorias = ref.watch(categoriasProvider);
+
+    return categorias.when(
+      loading: () => const InputDecorator(
+        decoration: InputDecoration(labelText: 'Rubro'),
+        child: Text('Cargando…'),
+      ),
+      error: (_, __) => InputDecorator(
+        decoration: const InputDecoration(
+          labelText: 'Rubro',
+          helperText: 'No se pudo cargar la lista. Podés guardar el borrador igual.',
+        ),
+        child: Row(
+          children: [
+            const Expanded(child: Text('Sin conexión con el servidor')),
+            TextButton(
+              onPressed: () => ref.invalidate(categoriasProvider),
+              child: const Text('Reintentar'),
+            ),
+          ],
+        ),
+      ),
+      data: (lista) {
+        /**
+         * ⚠️ El valor sólo se pasa si está en la lista.
+         *
+         * `DropdownButtonFormField` revienta con una excepción si el `value` no
+         * corresponde a ninguno de sus items. Pasa de verdad: un producto viejo
+         * con una categoría que después se apagó abriría el editor en rojo.
+         *
+         * Mostrarlo vacío es lo correcto además de lo seguro — esa categoría ya
+         * no se puede elegir, y quien edite el producto tiene que elegir otra.
+         */
+        final valor = lista.any((c) => c.id == elegida) ? elegida : null;
+
+        return DropdownButtonFormField<String>(
+          initialValue: valor,
+          isExpanded: true,
+          decoration: const InputDecoration(
+            labelText: 'Rubro',
+            helperText: 'Hace falta para publicar. Es como te encuentran.',
+          ),
+          items: [
+            for (final c in lista)
+              DropdownMenuItem(
+                value: c.id,
+                child: Text(c.nombre, overflow: TextOverflow.ellipsis),
+              ),
+          ],
+          onChanged: onElegir,
+        );
+      },
     );
   }
 }

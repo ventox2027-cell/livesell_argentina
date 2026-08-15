@@ -230,7 +230,6 @@ class _ShopSheetState extends ConsumerState<ShopSheet> {
               ],
             ),
           ),
-
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: Gap.lg),
             child: TextField(
@@ -252,7 +251,6 @@ class _ShopSheetState extends ConsumerState<ShopSheet> {
             ),
           ),
           const SizedBox(height: Gap.md),
-
           Expanded(child: _cuerpo()),
         ],
       ),

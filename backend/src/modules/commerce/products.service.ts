@@ -18,6 +18,8 @@ import type {
   UpdateProductDto,
   UpdateVariantDto,
 } from './dto/commerce.dto';
+import { categoriaResultante, exigirCategoriaParaPublicar } from './categorias';
+import { CategoriasService } from './categorias.service';
 import { OwnershipService } from './ownership.service';
 import { ordenarPorPuntaje } from './ranking';
 import { SearchService } from './search.service';
@@ -133,6 +135,7 @@ export class ProductsService {
     private readonly events: DomainEventBus,
     private readonly search: SearchService,
     private readonly sellerOAuth: SellerOAuthService,
+    private readonly categorias: CategoriasService,
   ) {}
 
   /**
@@ -156,6 +159,11 @@ export class ProductsService {
     if (dto.status === 'ACTIVE') {
       await this.sellerOAuth.exigirParaVender(store.sellerId, 'publicar');
     }
+
+    // La categoría se exige al publicar, no al crear el borrador: mismo
+    // criterio que Mercado Pago, por el mismo motivo. Ver `categorias.ts`.
+    exigirCategoriaParaPublicar({ estadoDestino: dto.status, categoriaId: dto.categoryId });
+    if (dto.categoryId) await this.categorias.exigirQueExista(dto.categoryId);
 
     if (!esComparativoValido(dto.basePriceCents, dto.compareAtPriceCents)) {
       throw new InvalidPriceError('El precio tachado tiene que ser mayor que el de venta');
@@ -300,6 +308,26 @@ export class ProductsService {
       });
       await this.sellerOAuth.exigirParaVender(tienda.sellerId, 'publicar');
     }
+
+    /**
+     * La categoría, contra el estado que va a QUEDAR, no contra el que llega.
+     *
+     * Son dos casos distintos y los dos tienen que fallar:
+     *
+     *   · publicar un borrador sin categoría (`status: 'ACTIVE'`);
+     *   · sacarle la categoría a un producto YA publicado
+     *     (`categoryId: null` sin tocar el estado).
+     *
+     * El segundo es el que se escapa si uno mira sólo `dto.status`: dejaría un
+     * producto activo fuera de toda navegación por rubro, y su dueño lo vería
+     * publicado.
+     */
+    const categoriaFinal = categoriaResultante(product.categoryId, dto.categoryId);
+    exigirCategoriaParaPublicar({
+      estadoDestino: dto.status ?? product.status,
+      categoriaId: categoriaFinal,
+    });
+    if (dto.categoryId) await this.categorias.exigirQueExista(dto.categoryId);
 
     const base = dto.basePriceCents ?? product.basePriceCents;
     const comparativo =
@@ -482,7 +510,7 @@ export class ProductsService {
    * cambio es materializar el puntaje en una columna y ordenar por ahí. La
    * fórmula ya está aparte, así que no habría que reescribirla.
    */
-  async listDiscover(query: PageQueryDto & { q?: string }) {
+  async listDiscover(query: PageQueryDto & { q?: string; categoria?: string }) {
     /**
      * Con texto, la búsqueda manda.
      *
@@ -499,6 +527,9 @@ export class ProductsService {
         ...PRODUCTO_COMPRABLE,
         ...(idsBuscados ? { id: { in: idsBuscados } } : {}),
         ...(query.cursor && !idsBuscados ? { id: { lt: query.cursor } } : {}),
+        // El rubro se combina con el texto en vez de reemplazarlo: "botines"
+        // dentro de Calzado es una búsqueda legítima.
+        ...(query.categoria ? { categoryId: query.categoria } : {}),
       },
       select: {
         ...PRODUCT_SELECT,

@@ -6,8 +6,11 @@ library;
 
 import 'politicas_models.dart';
 
-int _int(Object? v, [int fallback = 0]) =>
-    v is int ? v : v is num ? v.toInt() : fallback;
+int _int(Object? v, [int fallback = 0]) => v is int
+    ? v
+    : v is num
+        ? v.toInt()
+        : fallback;
 
 class Seller {
   const Seller({
@@ -169,9 +172,7 @@ class Variante {
         status: j['status'] as String? ?? 'ACTIVE',
         isDefault: j['isDefault'] as bool? ?? false,
         sku: j['sku'] as String?,
-        priceOverrideCents: j['priceOverrideCents'] == null
-            ? null
-            : _int(j['priceOverrideCents']),
+        priceOverrideCents: j['priceOverrideCents'] == null ? null : _int(j['priceOverrideCents']),
         optionValueIds:
             (j['optionValueIds'] as List<dynamic>? ?? []).map((e) => e as String).toList(),
       );
@@ -225,6 +226,7 @@ class Producto {
     required this.slug,
     required this.status,
     required this.basePriceCents,
+    this.categoryId,
     this.description,
     this.compareAtPriceCents,
     this.options = const [],
@@ -245,9 +247,9 @@ class Producto {
       slug: j['slug'] as String? ?? '',
       status: j['status'] as String? ?? 'DRAFT',
       basePriceCents: _int(j['basePriceCents']),
+      categoryId: j['categoryId'] as String?,
       description: j['description'] as String?,
-      compareAtPriceCents:
-          j['compareAtPriceCents'] == null ? null : _int(j['compareAtPriceCents']),
+      compareAtPriceCents: j['compareAtPriceCents'] == null ? null : _int(j['compareAtPriceCents']),
       options: (j['options'] as List<dynamic>? ?? [])
           .map((e) => OpcionProducto.fromJson(e as Map<String, dynamic>))
           .toList(),
@@ -265,6 +267,13 @@ class Producto {
   final String slug;
   final String status;
   final int basePriceCents;
+
+  /// El rubro. `null` en los borradores que todavía no lo eligieron.
+  ///
+  /// No se puede publicar sin esto: el backend rechaza el alta o el paso a
+  /// publicado con `CATEGORY_REQUIRED`.
+  final String? categoryId;
+
   final String? description;
   final int? compareAtPriceCents;
   final List<OpcionProducto> options;

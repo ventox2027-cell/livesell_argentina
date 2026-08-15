@@ -18,9 +18,7 @@ class LiveApi {
   /// Los vivos al aire.
   Future<List<ResumenDeLive>> activos() async {
     final r = await _api.get<List<dynamic>>('/live');
-    return (r.data ?? [])
-        .map((j) => ResumenDeLive.fromJson(j as Map<String, dynamic>))
-        .toList();
+    return (r.data ?? []).map((j) => ResumenDeLive.fromJson(j as Map<String, dynamic>)).toList();
   }
 
   /// Entrar a un vivo: trae el contexto comercial y, si está al aire, el token

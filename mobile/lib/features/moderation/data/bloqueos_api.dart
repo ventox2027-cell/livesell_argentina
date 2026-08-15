@@ -28,32 +28,26 @@ class BloqueosApi {
   /// Se consulta por `sellerId` y no por el id de la persona: el perfil público
   /// de un vendedor no devuelve el id de la cuenta detrás, a propósito.
   Future<bool> bloqueeAlVendedor(String sellerId) async {
-    final r = await _ref
-        .read(apiClientProvider)
-        .get<Map<String, dynamic>>('/blocks/seller/$sellerId');
+    final r =
+        await _ref.read(apiClientProvider).get<Map<String, dynamic>>('/blocks/seller/$sellerId');
     return r.data?['bloqueado'] as bool? ?? false;
   }
 
   Future<void> bloquearVendedor(String sellerId, {String? motivo}) async {
     await _ref.read(apiClientProvider).post<Map<String, dynamic>>(
-          '/blocks/seller/$sellerId',
-          data: {if (motivo != null && motivo.trim().isNotEmpty) 'reason': motivo.trim()},
-        );
+      '/blocks/seller/$sellerId',
+      data: {if (motivo != null && motivo.trim().isNotEmpty) 'reason': motivo.trim()},
+    );
   }
 
   Future<void> desbloquearVendedor(String sellerId) async {
-    await _ref
-        .read(apiClientProvider)
-        .delete<Map<String, dynamic>>('/blocks/seller/$sellerId');
+    await _ref.read(apiClientProvider).delete<Map<String, dynamic>>('/blocks/seller/$sellerId');
   }
 
   /// A quiénes bloqueé. Para la pantalla del perfil.
   Future<List<PersonaBloqueada>> lista() async {
     final r = await _ref.read(apiClientProvider).get<List<dynamic>>('/blocks');
-    return (r.data ?? [])
-        .whereType<Map<String, dynamic>>()
-        .map(PersonaBloqueada.fromJson)
-        .toList();
+    return (r.data ?? []).whereType<Map<String, dynamic>>().map(PersonaBloqueada.fromJson).toList();
   }
 
   /// Desbloquear desde la lista, donde sí se conoce el id de la persona.

@@ -185,7 +185,7 @@ async function nuevaVarianteConStock(onHand: number) {
 
   const producto = await call('POST', '/api/v1/products', {
     token,
-    body: { name: `Producto inv ${n}`, basePriceCents: 1_000_000, status: 'ACTIVE' },
+    body: { name: `Producto inv ${n}`, basePriceCents: 1_000_000, status: 'ACTIVE', categoryId: 'cat_otros' },
   });
   expect(producto.status, JSON.stringify(producto.body)).toBe(201);
 

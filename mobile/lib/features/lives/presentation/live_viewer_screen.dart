@@ -324,6 +324,7 @@ class _LiveViewerScreenState extends ConsumerState<LiveViewerScreen> {
       // acá interrumpiría lo que la persona vino a mirar.
     }
   }
+
   @override
   Widget build(BuildContext context) {
     final teclado = MediaQuery.viewInsetsOf(context).bottom;
@@ -483,7 +484,6 @@ class _LiveViewerScreenState extends ConsumerState<LiveViewerScreen> {
                 ),
     );
   }
-
 }
 
 class _Encabezado extends StatelessWidget {
@@ -754,9 +754,7 @@ class _LiveTerminado extends ConsumerWidget {
               ),
               const SizedBox(height: 4),
               Text(
-                abierta
-                    ? 'La tienda sigue abierta'
-                    : tienda?.motivo ?? 'La tienda está cerrada',
+                abierta ? 'La tienda sigue abierta' : tienda?.motivo ?? 'La tienda está cerrada',
                 textAlign: TextAlign.center,
                 style: const TextStyle(color: AppColor.textoSuave, fontSize: 14),
               ),

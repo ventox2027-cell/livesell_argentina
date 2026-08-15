@@ -6,6 +6,7 @@ import { AuditService } from '@/shared/audit/audit.service';
 import { DomainEventBus } from '@/shared/events/domain-events';
 
 import { CommerceController } from './commerce.controller';
+import { CategoriasService } from './categorias.service';
 import { ImagesService } from './images.service';
 import { OwnershipService } from './ownership.service';
 import { ProductsService } from './products.service';
@@ -34,12 +35,13 @@ import { SellersService } from './sellers.service';
   providers: [
     SellersService,
     ProductsService,
+    CategoriasService,
     SearchService,
     ImagesService,
     OwnershipService,
     AuditService,
     DomainEventBus,
   ],
-  exports: [OwnershipService, ProductsService, SellersService],
+  exports: [OwnershipService, ProductsService, SellersService, CategoriasService],
 })
 export class CommerceModule {}

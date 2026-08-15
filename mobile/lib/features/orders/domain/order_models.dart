@@ -9,8 +9,11 @@ library;
 
 import '../../seller/domain/seller_models.dart';
 
-int _int(Object? v, [int fallback = 0]) =>
-    v is int ? v : v is num ? v.toInt() : fallback;
+int _int(Object? v, [int fallback = 0]) => v is int
+    ? v
+    : v is num
+        ? v.toInt()
+        : fallback;
 
 /// Una línea del pedido, con todo copiado al momento de comprar.
 class LineaDePedido {
@@ -132,9 +135,7 @@ class IntentoDePago {
   /// **No es un fallo.** La app nunca debe decir "el pago falló" ante esto:
   /// puede haberse procesado, y hacer pagar de nuevo cobraría dos veces.
   bool get incierto =>
-      status == 'PROCESSING' ||
-      status == 'CREATED' ||
-      status == 'UNKNOWN_PENDING_RECONCILIATION';
+      status == 'PROCESSING' || status == 'CREATED' || status == 'UNKNOWN_PENDING_RECONCILIATION';
 
   /// `visa •••• 3704`
   String? get tarjeta {

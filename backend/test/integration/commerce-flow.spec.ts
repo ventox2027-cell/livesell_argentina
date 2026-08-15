@@ -3,6 +3,7 @@ import { type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { CategoriasService } from '@/modules/commerce/categorias.service';
 import type { PrismaService } from '@/shared/prisma/prisma.service';
 import type { RedisService } from '@/shared/redis/redis.service';
 
@@ -206,9 +207,20 @@ function pngDePrueba(): Buffer {
 
 async function crearProducto(token: string, extra: Record<string, unknown> = {}) {
   n += 1;
+
+  /**
+   * Publicar exige rubro, así que el helper le pone uno.
+   *
+   * Sólo al publicar, y sólo si quien llama no eligió otro. Si lo pusiera
+   * siempre, el test de "un borrador sin rubro no se puede publicar" quedaría
+   * sin sentido: su borrador ya tendría categoría.
+   */
+  const publica = extra.status === 'ACTIVE';
+  const rubro = publica && !('categoryId' in extra) ? { categoryId: 'cat_otros' } : {};
+
   const r = await call('POST', '/api/v1/products', {
     token,
-    body: { name: `Producto ${n}`, basePriceCents: 1_549_900, ...extra },
+    body: { name: `Producto ${n}`, basePriceCents: 1_549_900, ...rubro, ...extra },
   });
   expect(r.status, JSON.stringify(r.body)).toBe(201);
   return r.body;
@@ -1110,7 +1122,7 @@ describe('Ejes de variación', () => {
     const v = await nuevoVendedor();
     const p = await call('POST', '/api/v1/products', {
       token: v.token,
-      body: { name: `${nombre} ${Date.now()}`, basePriceCents: 1_500_000, status: 'ACTIVE' },
+      body: { name: `${nombre} ${Date.now()}`, basePriceCents: 1_500_000, status: 'ACTIVE', categoryId: 'cat_otros' },
     });
     expect(p.status, JSON.stringify(p.body)).toBe(201);
     return { ...v, productId: p.body.id as string };
@@ -1353,6 +1365,7 @@ describe('Búsqueda en el catálogo', () => {
         description: descripcion,
         basePriceCents: 500_000,
         status: 'ACTIVE',
+        categoryId: 'cat_otros',
       },
     });
     expect(r.status, JSON.stringify(r.body)).toBe(201);
@@ -1472,6 +1485,7 @@ describe('Ranking del feed', () => {
         slug: `rank-vivo-${n}-${Date.now().toString(36)}`,
         basePriceCents: 500_000,
         status: 'ACTIVE',
+        categoryId: 'cat_otros',
       },
     });
 
@@ -1484,6 +1498,7 @@ describe('Ranking del feed', () => {
         slug: `rank-sin-${n}-${Date.now().toString(36)}`,
         basePriceCents: 500_000,
         status: 'ACTIVE',
+        categoryId: 'cat_otros',
       },
     });
 
@@ -1541,6 +1556,7 @@ describe('Moderación: ocultar', () => {
         slug: `mod-${n}-${Date.now().toString(36)}`,
         basePriceCents: 500_000,
         status: 'ACTIVE',
+        categoryId: 'cat_otros',
       },
     });
     expect(r.status, JSON.stringify(r.body)).toBe(201);
@@ -1658,6 +1674,7 @@ describe('Reportar', () => {
         slug: `rep-${n}-${Date.now().toString(36)}`,
         basePriceCents: 500_000,
         status: 'ACTIVE',
+        categoryId: 'cat_otros',
       },
     });
     return r.body.id as string;
@@ -1817,6 +1834,7 @@ describe('La cola de moderación', () => {
         slug: `cola-${n}-${Date.now().toString(36)}`,
         basePriceCents: 500_000,
         status: 'ACTIVE',
+        categoryId: 'cat_otros',
       },
     });
     const productId = p.body.id as string;
@@ -1853,6 +1871,7 @@ describe('La cola de moderación', () => {
         slug: `resolver-${n}-${Date.now().toString(36)}`,
         basePriceCents: 500_000,
         status: 'ACTIVE',
+        categoryId: 'cat_otros',
       },
     });
     const productId = p.body.id as string;
@@ -1918,6 +1937,7 @@ describe('La cola de moderación', () => {
         slug: `restaurar-${n}-${Date.now().toString(36)}`,
         basePriceCents: 500_000,
         status: 'ACTIVE',
+        categoryId: 'cat_otros',
       },
     });
     const productId = p.body.id as string;
@@ -2071,6 +2091,7 @@ describe('Sin Mercado Pago no se vende', () => {
             slug: `publicado-sin-mp-${n}-${Date.now().toString(36)}`,
             basePriceCents: 500_000,
             status: 'ACTIVE',
+            categoryId: 'cat_otros',
           },
         });
 
@@ -2099,7 +2120,7 @@ describe('Sin Mercado Pago no se vende', () => {
 
         const r = await call('PATCH', `/api/v1/products/${creado.body.id}`, {
           token: v.token,
-          body: { status: 'ACTIVE' },
+          body: { status: 'ACTIVE', categoryId: 'cat_otros' },
         });
 
         expect(r.status, JSON.stringify(r.body)).toBe(422);
@@ -2120,6 +2141,7 @@ describe('Sin Mercado Pago no se vende', () => {
             slug: `mensaje-${n}-${Date.now().toString(36)}`,
             basePriceCents: 500_000,
             status: 'ACTIVE',
+            categoryId: 'cat_otros',
           },
         });
 
@@ -2157,6 +2179,7 @@ describe('Sin Mercado Pago no se vende', () => {
             slug: `pub-con-mp-${n}-${Date.now().toString(36)}`,
             basePriceCents: 500_000,
             status: 'ACTIVE',
+            categoryId: 'cat_otros',
           },
         });
 
@@ -2185,6 +2208,7 @@ describe('Sin Mercado Pago no se vende', () => {
             slug: `revocado-${n}-${Date.now().toString(36)}`,
             basePriceCents: 500_000,
             status: 'ACTIVE',
+            categoryId: 'cat_otros',
           },
         });
 
@@ -2210,6 +2234,7 @@ describe('Sin Mercado Pago no se vende', () => {
             slug: `editable-${n}-${Date.now().toString(36)}`,
             basePriceCents: 500_000,
             status: 'ACTIVE',
+            categoryId: 'cat_otros',
           },
         });
 
@@ -2263,6 +2288,7 @@ describe('Codificación', () => {
         slug: `enc-${n}-${Date.now().toString(36)}`,
         basePriceCents: 500_000,
         status: 'ACTIVE',
+        categoryId: 'cat_otros',
       },
     });
   }
@@ -2433,5 +2459,225 @@ describe('Abrir tienda es 18+', () => {
     });
 
     expect(r.status, JSON.stringify(r.body)).toBe(201);
+  });
+});
+
+describe('Categorías de producto', () => {
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * LA TABLA EXISTÍA VACÍA
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * `categories` y `products.category_id` estaban en el esquema desde el
+   * principio, el DTO aceptaba `categoryId`, y no había ni una fila ni un
+   * endpoint que las listara: un campo opcional que nadie podía completar.
+   */
+
+  it('el catálogo se lista sin sesión', async () => {
+    // Quien está por publicar su primer producto necesita la lista antes de
+    // tener tienda, y navegar por rubro es mirar la vidriera.
+    const r = await call('GET', '/api/v1/categories');
+
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.body.length).toBeGreaterThanOrEqual(14);
+
+    const primera = r.body[0];
+    expect(primera).toHaveProperty('id');
+    expect(primera).toHaveProperty('slug');
+    expect(primera).toHaveProperty('nombre');
+  });
+
+  it('vienen en orden de presentación, no alfabético', async () => {
+    // Arriba va lo que más se vende en vivo. Alfabético pondría "Accesorios"
+    // primero y "Otros" en el medio.
+    const r = await call('GET', '/api/v1/categories');
+    const ids = (r.body as { id: string }[]).map((c) => c.id);
+
+    expect(ids[0]).toBe('cat_indumentaria');
+    expect(ids[ids.length - 1]).toBe('cat_otros');
+  });
+
+  it('⛔ publicar sin categoría se rechaza', async () => {
+    /**
+     * Un producto activo sin categoría no sale en ninguna navegación por rubro.
+     * Está publicado y no lo encuentra nadie — que para quien vende es peor que
+     * no haberlo publicado, porque cree que está a la venta.
+     */
+    const { token } = await nuevoVendedor();
+    n += 1;
+
+    const r = await call('POST', '/api/v1/products', {
+      token,
+      body: { name: `Sin rubro ${n}`, basePriceCents: 100_000, status: 'ACTIVE' },
+    });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(422);
+    expect(r.body.error.code).toBe('CATEGORY_REQUIRED');
+  });
+
+  it('⛔ pero el BORRADOR sin categoría se guarda igual', async () => {
+    // Mismo criterio que Mercado Pago: quien carga cuarenta productos los
+    // carga, y recién al publicar completa lo que falta.
+    const { token } = await nuevoVendedor();
+    n += 1;
+
+    const r = await call('POST', '/api/v1/products', {
+      token,
+      body: { name: `Borrador sin rubro ${n}`, basePriceCents: 100_000, status: 'DRAFT' },
+    });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(r.body.categoryId).toBeNull();
+  });
+
+  it('⛔ pasar un borrador a publicado sin categoría también se rechaza', async () => {
+    // El segundo camino a publicado. La primera versión de la regla sólo
+    // cubría el primero.
+    const { token } = await nuevoVendedor();
+    const p = await crearProducto(token, { status: 'DRAFT' });
+
+    const r = await call('PATCH', `/api/v1/products/${p.id}`, {
+      token,
+      body: { status: 'ACTIVE' },
+    });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(422);
+    expect(r.body.error.code).toBe('CATEGORY_REQUIRED');
+  });
+
+  it('⛔ y a un producto YA publicado no se le puede sacar la categoría', async () => {
+    /**
+     * El caso que se escapa si uno mira sólo `dto.status`: el PATCH no toca el
+     * estado, así que "no está publicando" — y sin embargo deja un producto
+     * activo fuera de toda navegación por rubro.
+     */
+    const { token } = await nuevoVendedor();
+    const p = await crearProducto(token, { status: 'ACTIVE', categoryId: 'cat_calzado' });
+    expect(p.status).toBe('ACTIVE');
+
+    const r = await call('PATCH', `/api/v1/products/${p.id}`, {
+      token,
+      body: { categoryId: null },
+    });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(422);
+    expect(r.body.error.code).toBe('CATEGORY_REQUIRED');
+  });
+
+  it('con categoría, se publica', async () => {
+    const { token } = await nuevoVendedor();
+    const p = await crearProducto(token, { status: 'ACTIVE', categoryId: 'cat_hogar' });
+
+    expect(p.status).toBe('ACTIVE');
+    expect(p.categoryId).toBe('cat_hogar');
+  });
+
+  it('⛔ una categoría inventada se rechaza con 404, no con un 500 de Prisma', async () => {
+    /**
+     * Antes `categoryId` era texto libre de hasta 40 caracteres que se escribía
+     * tal cual en la columna: la clave foránea lo rebotaba con un P2003, o sea
+     * un 500 con traza de Prisma en la respuesta.
+     */
+    const { token } = await nuevoVendedor();
+    n += 1;
+
+    const r = await call('POST', '/api/v1/products', {
+      token,
+      body: {
+        name: `Rubro inventado ${n}`,
+        basePriceCents: 100_000,
+        status: 'ACTIVE',
+        categoryId: 'cat_no_existe',
+      },
+    });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(404);
+    expect(r.body.error.code).toBe('CATEGORY_NOT_FOUND');
+  });
+
+  it('⛔ una categoría APAGADA se rechaza igual', async () => {
+    /**
+     * No hay clave foránea que detecte esto: la fila existe. Apagar una
+     * categoría la saca del selector, y sin esta validación alguien con el id
+     * viejo la seguiría usando desde una app sin actualizar.
+     */
+    const { token } = await nuevoVendedor();
+    n += 1;
+
+    await prisma.category.update({ where: { id: 'cat_otros' }, data: { active: false } });
+    // El servicio cachea el catálogo en memoria: sin esto leería la lista vieja.
+    app.get(CategoriasService).olvidar();
+
+    try {
+      const r = await call('POST', '/api/v1/products', {
+        token,
+        body: {
+          name: `Rubro apagado ${n}`,
+          basePriceCents: 100_000,
+          status: 'ACTIVE',
+          categoryId: 'cat_otros',
+        },
+      });
+
+      expect(r.status, JSON.stringify(r.body)).toBe(404);
+      expect(r.body.error.code).toBe('CATEGORY_NOT_FOUND');
+
+      // Y desaparece del catálogo público.
+      const lista = await call('GET', '/api/v1/categories');
+      expect((lista.body as { id: string }[]).some((c) => c.id === 'cat_otros')).toBe(false);
+    } finally {
+      await prisma.category.update({ where: { id: 'cat_otros' }, data: { active: true } });
+      app.get(CategoriasService).olvidar();
+    }
+  });
+
+  it('⛔ apagar una categoría NO toca los productos que ya la tienen', async () => {
+    /**
+     * Borrarla los dejaría en `category_id NULL`: publicados y fuera de toda
+     * navegación por rubro, sin que su dueño se entere. Por eso `active` y no
+     * un DELETE.
+     */
+    const { token } = await nuevoVendedor();
+    const p = await crearProducto(token, { status: 'ACTIVE', categoryId: 'cat_mascotas' });
+
+    await prisma.category.update({ where: { id: 'cat_mascotas' }, data: { active: false } });
+    app.get(CategoriasService).olvidar();
+
+    try {
+      const enBase = await prisma.product.findUniqueOrThrow({ where: { id: p.id as string } });
+      expect(enBase.categoryId).toBe('cat_mascotas');
+      expect(enBase.status).toBe('ACTIVE');
+    } finally {
+      await prisma.category.update({ where: { id: 'cat_mascotas' }, data: { active: true } });
+      app.get(CategoriasService).olvidar();
+    }
+  });
+
+  it('el feed se puede filtrar por rubro', async () => {
+    const { token } = await nuevoVendedor();
+    const dentro = await crearProducto(token, {
+      status: 'ACTIVE',
+      categoryId: 'cat_libreria',
+    });
+    const fuera = await crearProducto(token, {
+      status: 'ACTIVE',
+      categoryId: 'cat_deportes',
+    });
+
+    const r = await call('GET', '/api/v1/discover/products?categoria=cat_libreria&limit=50');
+    expect(r.status).toBe(200);
+
+    const ids = (r.body.items as { id: string }[]).map((p) => p.id);
+    expect(ids).toContain(dentro.id);
+    expect(ids).not.toContain(fuera.id);
+  });
+
+  it('un rubro que no existe devuelve vacío, no un error', async () => {
+    // Un filtro es una vista, no una operación: un enlace viejo a una categoría
+    // apagada tiene que mostrar "no hay nada acá".
+    const r = await call('GET', '/api/v1/discover/products?categoria=cat_no_existe');
+
+    expect(r.status).toBe(200);
+    expect(r.body.items).toEqual([]);
   });
 });

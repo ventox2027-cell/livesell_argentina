@@ -85,8 +85,7 @@ class _FechaDeNacimientoSheetState extends ConsumerState<FechaDeNacimientoSheet>
     super.dispose();
   }
 
-  bool get _completo =>
-      _dia.text.isNotEmpty && _mes.text.isNotEmpty && _anio.text.length == 4;
+  bool get _completo => _dia.text.isNotEmpty && _mes.text.isNotEmpty && _anio.text.length == 4;
 
   /// `AAAA-MM-DD`, que es lo único que el backend acepta.
   ///
@@ -162,7 +161,6 @@ class _FechaDeNacimientoSheetState extends ConsumerState<FechaDeNacimientoSheet>
           style: TextStyle(fontSize: 14, color: AppColor.textoSuave, height: 1.45),
         ),
         const SizedBox(height: Gap.lg),
-
         Row(
           children: [
             Expanded(
@@ -194,7 +192,6 @@ class _FechaDeNacimientoSheetState extends ConsumerState<FechaDeNacimientoSheet>
             ),
           ],
         ),
-
         if (_error != null) ...[
           const SizedBox(height: Gap.md),
           Text(
@@ -202,7 +199,6 @@ class _FechaDeNacimientoSheetState extends ConsumerState<FechaDeNacimientoSheet>
             style: const TextStyle(fontSize: 13, color: AppColor.error, height: 1.4),
           ),
         ],
-
         const SizedBox(height: Gap.lg),
         FilledButton(
           onPressed: _enviando || !_completo ? null : () => _confirmar(),

@@ -158,8 +158,7 @@ class StatsAdapter {
   }
 
   /// WebRTC reporta los tiempos en segundos con decimales.
-  static int? _msFromSeconds(num? seconds) =>
-      seconds == null ? null : (seconds * 1000).round();
+  static int? _msFromSeconds(num? seconds) => seconds == null ? null : (seconds * 1000).round();
 
   /// Etiqueta de la capa de simulcast según la altura.
   ///

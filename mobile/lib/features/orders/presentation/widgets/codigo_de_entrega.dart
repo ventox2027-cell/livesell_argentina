@@ -53,7 +53,6 @@ class _CodigoDeEntregaState extends State<CodigoDeEntrega> {
             ],
           ),
           const SizedBox(height: Gap.md),
-
           Semantics(
             // Sin esto, quien usa lector de pantalla escucha los seis dígitos
             // sueltos y sin contexto.
@@ -86,7 +85,6 @@ class _CodigoDeEntregaState extends State<CodigoDeEntrega> {
               ),
             ),
           ),
-
           if (_visible) ...[
             const SizedBox(height: Gap.sm),
             TextButton.icon(
@@ -103,7 +101,6 @@ class _CodigoDeEntregaState extends State<CodigoDeEntrega> {
               ),
             ),
           ],
-
           const SizedBox(height: Gap.sm),
           const Text(
             // El único texto que importa de toda la tarjeta.

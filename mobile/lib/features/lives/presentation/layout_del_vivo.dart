@@ -132,9 +132,7 @@ MedidasDelVivo medirZonaInferior({
   // Todo lo que va debajo del chat. Se calcula en un solo lugar para que ningún
   // bloque elija su posición por su cuenta: si cada uno lo hiciera, cualquier
   // cambio de altura los pisaría entre sí.
-  final techoDeLaZonaFija = producto != null
-      ? producto + altoProducto
-      : composer + altoComposer;
+  final techoDeLaZonaFija = producto != null ? producto + altoProducto : composer + altoComposer;
 
   final baseDelChat = techoDeLaZonaFija + aire;
 
@@ -150,9 +148,8 @@ MedidasDelVivo medirZonaInferior({
    * comportamiento de siempre; la pantalla sí lo pasa.
    */
   final deseado = tecladoAbierto ? altoChatEscribiendo : altoChatEnReposo;
-  final disponible = altoPantalla.isFinite
-      ? altoPantalla - arriba - _respiroSuperior - baseDelChat
-      : deseado;
+  final disponible =
+      altoPantalla.isFinite ? altoPantalla - arriba - _respiroSuperior - baseDelChat : deseado;
 
   return MedidasDelVivo(
     chat: baseDelChat,

@@ -62,8 +62,7 @@ class ProductoDestacadoCard extends StatelessWidget {
                         color: AppColor.superficieAlta,
                         child: Icon(Icons.image_rounded, color: AppColor.textoDebil, size: 22),
                       ),
-                      placeholder: (_, __) =>
-                          const ColoredBox(color: AppColor.superficieAlta),
+                      placeholder: (_, __) => const ColoredBox(color: AppColor.superficieAlta),
                     ),
             ),
           ),

@@ -50,8 +50,7 @@ class BotonMeGusta extends ConsumerStatefulWidget {
   ConsumerState<BotonMeGusta> createState() => _BotonMeGustaState();
 }
 
-class _BotonMeGustaState extends ConsumerState<BotonMeGusta>
-    with SingleTickerProviderStateMixin {
+class _BotonMeGustaState extends ConsumerState<BotonMeGusta> with SingleTickerProviderStateMixin {
   late EstadoDeMeGusta _estado = widget.inicial ?? const EstadoDeMeGusta.vacio();
 
   /// Lo que había antes de que la persona empezara a tocar, para poder volver.

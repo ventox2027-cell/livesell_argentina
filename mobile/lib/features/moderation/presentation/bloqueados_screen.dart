@@ -83,8 +83,7 @@ class _FilaState extends ConsumerState<_Fila> {
       leading: CircleAvatar(
         radius: 22,
         backgroundColor: AppColor.superficieAlta,
-        backgroundImage:
-            p.avatarUrl != null ? CachedNetworkImageProvider(p.avatarUrl!) : null,
+        backgroundImage: p.avatarUrl != null ? CachedNetworkImageProvider(p.avatarUrl!) : null,
         child: p.avatarUrl == null
             ? const Icon(Icons.person_outline_rounded, color: AppColor.textoDebil)
             : null,

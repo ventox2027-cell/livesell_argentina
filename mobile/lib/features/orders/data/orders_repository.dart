@@ -17,9 +17,7 @@ class OrdersRepository {
   Future<List<Direccion>> direcciones() async {
     final res = await _api.get<List<dynamic>>('/addresses');
     if (res.statusCode != 200) throw _error(res);
-    return (res.data ?? [])
-        .map((e) => Direccion.fromJson(e as Map<String, dynamic>))
-        .toList();
+    return (res.data ?? []).map((e) => Direccion.fromJson(e as Map<String, dynamic>)).toList();
   }
 
   Future<Direccion> guardarDireccion(Map<String, dynamic> datos, {String? id}) async {
@@ -279,14 +277,12 @@ final ordersRepositoryProvider = Provider<OrdersRepository>(
   (ref) => OrdersRepository(ref.watch(apiClientProvider)),
 );
 
-final misPedidosProvider =
-    FutureProvider<({List<Pedido> items, String? nextCursor})>((ref) async {
+final misPedidosProvider = FutureProvider<({List<Pedido> items, String? nextCursor})>((ref) async {
   ref.watch(sesionProvider);
   return ref.watch(ordersRepositoryProvider).misPedidos();
 });
 
-final misVentasProvider =
-    FutureProvider<({List<Venta> items, String? nextCursor})>((ref) async {
+final misVentasProvider = FutureProvider<({List<Venta> items, String? nextCursor})>((ref) async {
   ref.watch(sesionProvider);
   return ref.watch(ordersRepositoryProvider).misVentas();
 });

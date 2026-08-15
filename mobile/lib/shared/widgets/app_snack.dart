@@ -37,9 +37,8 @@ abstract final class AppSnack {
           ),
           // Los errores duran más: suelen pedir una acción, y cuatro segundos
           // no alcanzan para leer y decidir.
-          duration: color == AppColor.error
-              ? const Duration(seconds: 6)
-              : const Duration(seconds: 4),
+          duration:
+              color == AppColor.error ? const Duration(seconds: 6) : const Duration(seconds: 4),
           margin: const EdgeInsets.all(Gap.lg),
         ),
       );

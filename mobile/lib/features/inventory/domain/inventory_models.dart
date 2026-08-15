@@ -8,8 +8,11 @@
 /// importa: cuando hay dos personas peleando por la última unidad.
 library;
 
-int _int(Object? v, [int fallback = 0]) =>
-    v is int ? v : v is num ? v.toInt() : fallback;
+int _int(Object? v, [int fallback = 0]) => v is int
+    ? v
+    : v is num
+        ? v.toInt()
+        : fallback;
 
 /// Existencias de una variante, como las ve su vendedor.
 class StockVariante {
@@ -34,8 +37,7 @@ class StockVariante {
         inventoryId: j['inventoryId'] as String?,
         status: j['status'] as String? ?? 'ACTIVE',
         isDefault: j['isDefault'] as bool? ?? false,
-        lowStockThreshold:
-            j['lowStockThreshold'] == null ? null : _int(j['lowStockThreshold']),
+        lowStockThreshold: j['lowStockThreshold'] == null ? null : _int(j['lowStockThreshold']),
       );
 
   final String variantId;
@@ -101,9 +103,7 @@ class Disponibilidad {
 
   String get etiqueta => switch (availability) {
         'IN_STOCK' => 'Disponible',
-        'LOW_STOCK' => remaining == null
-            ? 'Quedan pocas'
-            : 'Últimas $remaining',
+        'LOW_STOCK' => remaining == null ? 'Quedan pocas' : 'Últimas $remaining',
         _ => 'Agotado',
       };
 }

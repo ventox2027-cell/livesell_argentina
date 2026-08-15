@@ -168,20 +168,16 @@ class _SellerProfileScreenState extends ConsumerState<SellerProfileScreen> {
                     children: [
                       _Encabezado(perfil: perfil),
                       const SizedBox(height: Gap.lg),
-
                       if (perfil.loSigo != null)
                         _BotonSeguir(
                           siguiendo: perfil.loSigo!,
                           trabajando: _alternandoFollow,
                           onTap: _alternarFollow,
                         ),
-
                       const SizedBox(height: Gap.xl),
                       _Numeros(perfil: perfil),
                       const SizedBox(height: Gap.xl),
-
                       _Insignias(perfil: perfil),
-
                       if (perfil.bio != null && perfil.bio!.trim().isNotEmpty) ...[
                         const SizedBox(height: Gap.xl),
                         Text(
@@ -193,12 +189,10 @@ class _SellerProfileScreenState extends ConsumerState<SellerProfileScreen> {
                           ),
                         ),
                       ],
-
                       if (perfil.horario != null) ...[
                         const SizedBox(height: Gap.xl),
                         _Horario(estado: perfil.horario!),
                       ],
-
                       if (perfil.storeId != null) ...[
                         const SizedBox(height: Gap.xl),
                         SizedBox(
@@ -344,9 +338,7 @@ class _Encabezado extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final nombre = perfil.tiendaNombre?.isNotEmpty ?? false
-        ? perfil.tiendaNombre!
-        : perfil.nombre;
+    final nombre = perfil.tiendaNombre?.isNotEmpty ?? false ? perfil.tiendaNombre! : perfil.nombre;
 
     return Row(
       children: [
@@ -478,7 +470,8 @@ class _Numeros extends StatelessWidget {
                     '${_numero(perfil.seguidores)} '
                     '${perfil.seguidores == 1 ? "seguidor" : "seguidores"} · '
                     'todavía no tiene ventas ni reseñas',
-                    style: const TextStyle(fontSize: 12.5, color: AppColor.textoSuave, height: 1.35),
+                    style:
+                        const TextStyle(fontSize: 12.5, color: AppColor.textoSuave, height: 1.35),
                   ),
                 ],
               ),
@@ -589,8 +582,7 @@ class _Insignias extends StatelessWidget {
             titulo: 'Identidad verificada',
             detalle: 'Validamos su documento. Sabemos quién es.',
           ),
-        if (perfil.identidadVerificada && perfil.vendedorConfiable)
-          const SizedBox(height: Gap.sm),
+        if (perfil.identidadVerificada && perfil.vendedorConfiable) const SizedBox(height: Gap.sm),
         if (perfil.vendedorConfiable)
           const _Insignia(
             icono: Icons.workspace_premium_outlined,

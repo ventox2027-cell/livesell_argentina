@@ -24,14 +24,14 @@ class FeedRepository {
     String? q,
   }) async {
     final res = await _ref.read(apiClientProvider).get<Map<String, dynamic>>(
-      '/discover/products',
-      query: {
-        'limit': limit,
-        if (cursor != null) 'cursor': cursor,
-        if (q != null && q.trim().length >= 2) 'q': q.trim(),
-      },
-      sinAuth: true,
-    );
+          '/discover/products',
+          query: {
+            'limit': limit,
+            if (cursor != null) 'cursor': cursor,
+            if (q != null && q.trim().length >= 2) 'q': q.trim(),
+          },
+          sinAuth: true,
+        );
 
     if (res.statusCode != 200 || res.data == null) {
       throw FeedException('No se pudo cargar el feed.');
@@ -105,5 +105,4 @@ class FeedNotifier extends AsyncNotifier<List<PublicacionFeed>> {
   }
 }
 
-final feedProvider =
-    AsyncNotifierProvider<FeedNotifier, List<PublicacionFeed>>(FeedNotifier.new);
+final feedProvider = AsyncNotifierProvider<FeedNotifier, List<PublicacionFeed>>(FeedNotifier.new);

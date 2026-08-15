@@ -238,6 +238,7 @@ class PerfilDeVendedor {
       identidadVerificada: j['identidadVerificada'] as bool? ?? false,
       vendedorConfiable: j['vendedorConfiable'] as bool? ?? false,
       seguidores: (j['seguidores'] as num?)?.toInt() ?? 0,
+
       /// `null` cuando no hay reseñas. Distinto de 0: "sin reseñas" no es
       /// "promedio cero", y mostrar 0,0 ⭐ haría parecer pésimo a un vendedor
       /// que simplemente es nuevo.
@@ -352,6 +353,7 @@ class EjeDeVariacion {
   const EjeDeVariacion({required this.nombre, required this.valores});
 
   final String nombre;
+
   /// Los valores posibles, con su id: `{ id: 'opv_1', valor: 'M' }`.
   final List<({String id, String valor})> valores;
 }
@@ -434,12 +436,10 @@ class DetalleDeProducto {
   factory DetalleDeProducto.fromJson(Map<String, dynamic> j) {
     final ejes = (j['ejes'] as List<dynamic>? ?? const []).map((o) {
       final op = o as Map<String, dynamic>;
-      final valores = (op['valores'] as List<dynamic>? ?? const [])
-          .map((v) {
-            final vv = v as Map<String, dynamic>;
-            return (id: vv['id'] as String? ?? '', valor: vv['valor'] as String? ?? '');
-          })
-          .toList();
+      final valores = (op['valores'] as List<dynamic>? ?? const []).map((v) {
+        final vv = v as Map<String, dynamic>;
+        return (id: vv['id'] as String? ?? '', valor: vv['valor'] as String? ?? '');
+      }).toList();
       return EjeDeVariacion(nombre: op['nombre'] as String? ?? '', valores: valores);
     }).toList();
 

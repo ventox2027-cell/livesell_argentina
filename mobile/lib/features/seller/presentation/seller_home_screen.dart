@@ -48,9 +48,11 @@ class SellerHomeScreen extends ConsumerWidget {
       ),
       body: perfil.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => _Error(mensaje: e.toString(), onReintentar: () {
-          ref.invalidate(miPerfilVendedorProvider);
-        }),
+        error: (e, _) => _Error(
+            mensaje: e.toString(),
+            onReintentar: () {
+              ref.invalidate(miPerfilVendedorProvider);
+            }),
         data: (p) {
           if (p == null) return const _SinVendedor();
           return _Panel(perfil: p);
@@ -161,7 +163,6 @@ class _SinVendedorState extends ConsumerState<_SinVendedor> {
             style: TextStyle(color: AppColor.textoSuave, fontSize: 15, height: 1.5),
           ),
           const SizedBox(height: Gap.xxl),
-
           TextField(
             controller: _nombre,
             textCapitalization: TextCapitalization.words,
@@ -173,7 +174,6 @@ class _SinVendedorState extends ConsumerState<_SinVendedor> {
             ),
           ),
           const SizedBox(height: Gap.xl),
-
           FilledButton(
             onPressed: _creando ? null : _crear,
             child: _creando

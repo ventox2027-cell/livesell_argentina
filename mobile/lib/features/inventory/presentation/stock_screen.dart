@@ -69,12 +69,10 @@ class StockScreen extends ConsumerWidget {
             children: [
               _Resumen(stock: s),
               const SizedBox(height: Gap.xl),
-
               if (!s.esSimple) ...[
                 const _Titulo('Por variante'),
                 const SizedBox(height: Gap.sm),
               ],
-
               for (final v in s.variants)
                 Padding(
                   padding: const EdgeInsets.only(bottom: Gap.md),
@@ -84,7 +82,6 @@ class StockScreen extends ConsumerWidget {
                     mostrarTitulo: !s.esSimple,
                   ),
                 ),
-
               const SizedBox(height: Gap.lg),
               const _NotaReservas(),
             ],

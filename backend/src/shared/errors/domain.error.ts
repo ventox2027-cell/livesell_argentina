@@ -145,6 +145,13 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<string, number>> = {
   PRODUCT_NOT_FOUND: 404,
   VARIANT_NOT_FOUND: 404,
   IMAGE_NOT_FOUND: 404,
+  CATEGORY_NOT_FOUND: 404,
+  /**
+   * 422 y no 400: el pedido está bien formado, lo que falla es una regla del
+   * negocio. La app lo distingue para llevar al selector de categoría en lugar
+   * de mostrar «error al guardar».
+   */
+  CATEGORY_REQUIRED: 422,
 
   SLUG_TAKEN: 409,
   SLUG_RESERVED: 422,

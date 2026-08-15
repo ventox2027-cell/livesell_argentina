@@ -1025,17 +1025,36 @@ model Store {
 }
 
 /// Categoría. Árbol simple, plano por ahora.
+/// Categoría de producto.
+///
+/// ─── El catálogo es fijo y los ids son legibles ───
+///
+/// A diferencia del resto del sistema, estas filas no las crea nadie: son una
+/// semilla que tiene que existir igual en todos los entornos, y por eso su id
+/// es `cat_indumentaria` y no `cat_<ulid>`. Ver la migración
+/// `20260815080000_categorias_de_producto` y `commerce/categorias.ts`.
+///
+/// `parentId` soporta un árbol y hoy es siempre `NULL`: catorce opciones planas
+/// se eligen de un toque, y un árbol obliga a navegar para publicar y a adivinar
+/// para buscar. La columna queda para el día que una categoría sea tan grande
+/// que haya que partirla.
 model Category {
-  id       String  @id // cat_<ulid>
+  id       String  @id // cat_<slug> — semilla, no ULID
   name     String
   slug     String  @unique
   parentId String? @map("parent_id")
   position Int     @default(0) @db.SmallInt
 
+  /// Apagar una categoría la saca del selector sin tocar los productos que ya
+  /// la tienen. Borrarla los dejaría publicados y fuera de toda navegación por
+  /// rubro, sin que su dueño se entere.
+  active Boolean @default(true)
+
   parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
   children Category[] @relation("CategoryTree")
   products Product[]
 
+  @@index([active, position])
   @@map("categories")
 }
 

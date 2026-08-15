@@ -875,7 +875,7 @@ describe('Sin Mercado Pago no se vende', () => {
     const r = await conRegla(() =>
       call('POST', '/api/v1/products', {
         token: v.token,
-        body: { name: 'Buzo de lana', basePriceCents: 500_000, status: 'ACTIVE' },
+        body: { name: 'Buzo de lana', basePriceCents: 500_000, status: 'ACTIVE', categoryId: 'cat_otros' },
       }),
     );
 
@@ -923,7 +923,7 @@ describe('Sin Mercado Pago no se vende', () => {
     const r = await conRegla(() =>
       call('PATCH', `/api/v1/products/${p.body!.id as string}`, {
         token: v.token,
-        body: { status: 'ACTIVE' },
+        body: { status: 'ACTIVE', categoryId: 'cat_otros' },
       }),
     );
 
@@ -974,7 +974,7 @@ describe('Sin Mercado Pago no se vende', () => {
     // Publicado con la regla APAGADA: así nacieron los productos históricos.
     const p = await call('POST', '/api/v1/products', {
       token: v.token,
-      body: { name: 'Producto histórico', basePriceCents: 1_000_000, status: 'ACTIVE' },
+      body: { name: 'Producto histórico', basePriceCents: 1_000_000, status: 'ACTIVE', categoryId: 'cat_otros' },
     });
     expect(p.status, p.texto).toBe(201);
     const variantId = (p.body!.variants as Array<{ id: string }>)[0]!.id;
@@ -1066,6 +1066,7 @@ describe('Sin Mercado Pago no se vende', () => {
           name: 'Producto de vendedor conectado',
           basePriceCents: 800_000,
           status: 'ACTIVE',
+          categoryId: 'cat_otros',
         },
       });
       expect(producto.status, producto.texto).toBe(201);

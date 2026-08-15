@@ -103,7 +103,6 @@ class _CompleteProfileSheetState extends ConsumerState<CompleteProfileSheet> {
               style: const TextStyle(color: AppColor.textoSuave, fontSize: 13.5, height: 1.45),
             ),
             const SizedBox(height: Gap.xl),
-
             Row(
               children: [
                 Expanded(
@@ -124,7 +123,6 @@ class _CompleteProfileSheetState extends ConsumerState<CompleteProfileSheet> {
               ],
             ),
             const SizedBox(height: Gap.md),
-
             TextField(
               controller: _telefono,
               keyboardType: TextInputType.phone,
@@ -139,7 +137,6 @@ class _CompleteProfileSheetState extends ConsumerState<CompleteProfileSheet> {
               ),
             ),
             const SizedBox(height: Gap.md),
-
             SwitchListTile.adaptive(
               value: _whatsapp,
               onChanged: (v) => setState(() => _whatsapp = v),
@@ -151,7 +148,6 @@ class _CompleteProfileSheetState extends ConsumerState<CompleteProfileSheet> {
                 style: TextStyle(fontSize: 12, color: AppColor.textoSuave),
               ),
             ),
-
             const SizedBox(height: Gap.lg),
             FilledButton(
               onPressed: _guardando ? null : _guardar,

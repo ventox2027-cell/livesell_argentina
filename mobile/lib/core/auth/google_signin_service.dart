@@ -98,8 +98,7 @@ class GoogleSignInService {
         'Falta configurar el proyecto de Google.',
       GoogleSignInExceptionCode.uiUnavailable =>
         'No se pudo abrir el selector de cuentas de Google.',
-      GoogleSignInExceptionCode.userMismatch =>
-        'La cuenta elegida no coincide con la esperada.',
+      GoogleSignInExceptionCode.userMismatch => 'La cuenta elegida no coincide con la esperada.',
       _ => 'No se pudo iniciar sesión con Google: ${e.description ?? e.code.name}',
     };
   }

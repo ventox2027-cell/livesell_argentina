@@ -18,12 +18,11 @@ class SocialApi {
   final ApiClient _api;
 
   Future<EstadoDeMeGusta> alternarProducto(String productId) =>
-    _alternar('/products/$productId/like');
+      _alternar('/products/$productId/like');
 
   Future<EstadoDeMeGusta> alternarLive(String liveId) => _alternar('/lives/$liveId/like');
 
-  Future<EstadoDeMeGusta> estadoDeProducto(String productId) =>
-      _leer('/products/$productId/like');
+  Future<EstadoDeMeGusta> estadoDeProducto(String productId) => _leer('/products/$productId/like');
 
   Future<EstadoDeMeGusta> estadoDeLive(String liveId) => _leer('/lives/$liveId/like');
 
@@ -68,7 +67,9 @@ class EstadoDeMeGusta {
         total: (j?['total'] as num?)?.toInt() ?? 0,
       );
 
-  const EstadoDeMeGusta.vacio() : meGusta = false, total = 0;
+  const EstadoDeMeGusta.vacio()
+      : meGusta = false,
+        total = 0;
 
   final bool meGusta;
   final int total;
@@ -88,5 +89,4 @@ class EstadoDeMeGusta {
   }
 }
 
-final socialApiProvider =
-    Provider<SocialApi>((ref) => SocialApi(ref.watch(apiClientProvider)));
+final socialApiProvider = Provider<SocialApi>((ref) => SocialApi(ref.watch(apiClientProvider)));

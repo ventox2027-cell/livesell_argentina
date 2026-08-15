@@ -63,7 +63,6 @@ class ConectarMpSheet extends StatelessWidget {
               ),
             ),
             const SizedBox(height: Gap.xl),
-
             Container(
               width: 48,
               height: 48,
@@ -78,7 +77,6 @@ class ConectarMpSheet extends StatelessWidget {
               ),
             ),
             const SizedBox(height: Gap.lg),
-
             Text(
               accion.titulo,
               style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w800, height: 1.25),
@@ -92,11 +90,9 @@ class ConectarMpSheet extends StatelessWidget {
               style: TextStyle(fontSize: 14.5, color: AppColor.textoSuave, height: 1.45),
             ),
             const SizedBox(height: Gap.lg),
-
             const _Punto('Tu contraseña la ponés en el sitio de Mercado Pago, no acá.'),
             const _Punto('El dinero entra directo a tu cuenta. VendoX no lo toca.'),
             const _Punto('Podés desconectarla cuando quieras.'),
-
             const SizedBox(height: Gap.xl),
             SizedBox(
               width: double.infinity,

@@ -48,6 +48,7 @@ import {
   DefinirOpcionesSchema,
   type DefinirOpcionesDto,
 } from './dto/commerce.dto';
+import { CategoriasService } from './categorias.service';
 import { ImagesService } from './images.service';
 import { ProductsService } from './products.service';
 import { SellersService } from './sellers.service';
@@ -70,6 +71,7 @@ export class CommerceController {
     private readonly sellers: SellersService,
     private readonly products: ProductsService,
     private readonly images: ImagesService,
+    private readonly categorias: CategoriasService,
   ) {}
 
   // ─── Vendedor ─────────────────────────────────────────────────────────────
@@ -194,6 +196,19 @@ export class CommerceController {
   @Get('discover/products')
   discover(@Query(new ZodValidationPipe(DiscoverQuerySchema)) query: DiscoverQueryDto) {
     return this.products.listDiscover(query);
+  }
+
+  /**
+   * El catálogo de categorías.
+   *
+   * Público por el mismo motivo que el feed: navegar por rubro es mirar la
+   * vidriera. Y quien está por publicar su primer producto necesita la lista
+   * antes de tener tienda.
+   */
+  @Public()
+  @Get('categories')
+  categories() {
+    return this.categorias.listar();
   }
 
   // ─── Productos ────────────────────────────────────────────────────────────

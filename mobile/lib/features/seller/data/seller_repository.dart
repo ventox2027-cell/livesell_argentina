@@ -41,7 +41,10 @@ class SellerRepository {
     });
     if (res.statusCode != 201 && res.statusCode != 200) throw _error(res);
     // Devuelve { seller, store }: se rearma con la forma del perfil.
-    return PerfilVendedor.fromJson({...res.data!, 'stats': {'productos': 0}});
+    return PerfilVendedor.fromJson({
+      ...res.data!,
+      'stats': {'productos': 0}
+    });
   }
 
   Future<Seller> actualizarVendedor({String? displayName, String? bio}) async {
@@ -102,12 +105,14 @@ class SellerRepository {
     int? compareAtPriceCents,
     Map<String, List<String>> opciones = const {},
     String status = 'DRAFT',
+    String? categoryId,
   }) async {
     final res = await _api.post<Map<String, dynamic>>('/products', data: {
       'name': name,
       'basePriceCents': basePriceCents,
       if (description != null && description.isNotEmpty) 'description': description,
       if (compareAtPriceCents != null) 'compareAtPriceCents': compareAtPriceCents,
+      if (categoryId != null) 'categoryId': categoryId,
       'status': status,
       'options': opciones.entries
           .where((e) => e.value.isNotEmpty)
@@ -125,12 +130,14 @@ class SellerRepository {
     int? basePriceCents,
     int? compareAtPriceCents,
     String? status,
+    String? categoryId,
   }) async {
     final res = await _api.patch<Map<String, dynamic>>('/products/$id', data: {
       if (name != null) 'name': name,
       if (description != null) 'description': description,
       if (basePriceCents != null) 'basePriceCents': basePriceCents,
       if (compareAtPriceCents != null) 'compareAtPriceCents': compareAtPriceCents,
+      if (categoryId != null) 'categoryId': categoryId,
       if (status != null) 'status': status,
     });
     if (res.statusCode != 200) throw _error(res);
@@ -212,7 +219,8 @@ class SellerRepository {
       data: form,
       // Subir una foto por una red móvil argentina puede tardar. Un timeout
       // corto acá se traduce en "no pude publicar mi producto".
-      options: Options(sendTimeout: const Duration(seconds: 90), receiveTimeout: const Duration(seconds: 90)),
+      options: Options(
+          sendTimeout: const Duration(seconds: 90), receiveTimeout: const Duration(seconds: 90)),
     );
     if (res.statusCode != 201 && res.statusCode != 200) throw _error(res);
     return ImagenProducto.fromJson(res.data!);
@@ -231,9 +239,7 @@ class SellerRepository {
       data: {'imageIds': ids},
     );
     if (res.statusCode != 200) throw _error(res);
-    return (res.data ?? [])
-        .map((e) => ImagenProducto.fromJson(e as Map<String, dynamic>))
-        .toList();
+    return (res.data ?? []).map((e) => ImagenProducto.fromJson(e as Map<String, dynamic>)).toList();
   }
 
   // ─── Vidriera pública ─────────────────────────────────────────────────────
@@ -306,6 +312,12 @@ class ComercioException implements Exception {
   /// ⚠️ Esto NO se resuelve completando nada, a diferencia de los dos de
   /// arriba. La app explica y cierra.
   bool get esMenorDeEdad => codigo == 'UNDERAGE';
+
+  /// Quiere publicar y no eligió categoría.
+  ///
+  /// Getter propio por lo mismo que los de arriba: la app tiene que llevar al
+  /// selector, no mostrar un cartel rojo que no dice dónde se arregla.
+  bool get faltaCategoria => codigo == 'CATEGORY_REQUIRED';
 
   @override
   String toString() => mensaje;

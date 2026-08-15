@@ -117,7 +117,6 @@ class _ConfirmarEntregaSheetState extends ConsumerState<ConfirmarEntregaSheet> {
             ),
           ),
           const SizedBox(height: Gap.lg),
-
           Text(
             'Confirmar entrega',
             style: Theme.of(context).textTheme.titleLarge,
@@ -128,13 +127,11 @@ class _ConfirmarEntregaSheetState extends ConsumerState<ConfirmarEntregaSheet> {
             style: const TextStyle(fontSize: 13, color: AppColor.textoSuave),
           ),
           const SizedBox(height: Gap.lg),
-
           const Text(
             'Pedile a quien recibe el pedido los seis números que ve en su app.',
             style: TextStyle(fontSize: 14, color: AppColor.textoSuave, height: 1.45),
           ),
           const SizedBox(height: Gap.lg),
-
           TextField(
             controller: _codigo,
             autofocus: true,
@@ -169,7 +166,6 @@ class _ConfirmarEntregaSheetState extends ConsumerState<ConfirmarEntregaSheet> {
             },
           ),
           const SizedBox(height: Gap.lg),
-
           FilledButton(
             // Deshabilitado hasta tener los seis dígitos. Dejarlo activo para
             // después responder "son seis números" es hacer que la persona

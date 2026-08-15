@@ -103,9 +103,7 @@ class PaymentsApi {
       '/payments/cards',
       queryParameters: {'email': email},
     );
-    return (res.data ?? [])
-        .map((e) => SavedCard.fromJson(e as Map<String, dynamic>))
-        .toList();
+    return (res.data ?? []).map((e) => SavedCard.fromJson(e as Map<String, dynamic>)).toList();
   }
 
   /// Dispara la conciliación a mano.

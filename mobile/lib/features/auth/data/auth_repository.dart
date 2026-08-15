@@ -177,6 +177,7 @@ class AuthRepository {
     String? lastName,
     String? phone,
     bool? whatsappOptIn,
+
     /// `AAAA-MM-DD`. VendoX es 18+ y sólo se puede declarar una vez.
     String? fechaDeNacimiento,
   }) async {

@@ -21,6 +21,7 @@ abstract final class AppColor {
   // ── Fondos ──
   /// Negro real, no gris oscuro. El video se recorta contra esto.
   static const fondo = Color(0xFF000000);
+
   /// Superficies elevadas: hojas, tarjetas, campos.
   static const superficie = Color(0xFF141417);
   static const superficieAlta = Color(0xFF1F1F24);
