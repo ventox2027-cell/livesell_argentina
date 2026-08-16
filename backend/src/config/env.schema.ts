@@ -38,6 +38,15 @@ loadDotenv({ override: false });
  * Dejar los placeholders vacíos en el `.env` es lo normal mientras se esperan
  * credenciales, así que la configuración tiene que tratarlos como ausentes.
  */
+/**
+ * Una huella SHA-256 de certificado, como la escriben Play Console y keytool.
+ *
+ * 32 bytes en hexadecimal MAYÚSCULA separados por dos puntos: 95 caracteres
+ * exactos. Es el formato que exige Android para `assetlinks.json`, y el único
+ * que acepta — con minúsculas o sin los dos puntos, lo rechaza sin avisar.
+ */
+const HUELLA_SHA256 = /^[0-9A-F]{2}(:[0-9A-F]{2}){31}$/;
+
 function optionalOrEmpty<T extends z.ZodTypeAny>(schema: T) {
   return z.preprocess((v) => (v === '' ? undefined : v), schema.optional());
 }
@@ -764,8 +773,46 @@ export const envSchema = z
      * ⚠️ Van DOS: la de la clave de subida y la de la clave de firma que
      * genera Google Play. Con una sola, los enlaces abren la app en el teléfono
      * de quien compiló y no en el de nadie más. Ver docs/MIGRACION-PACKAGE.md.
+     *
+     * ═══════════════════════════════════════════════════════════════════════
+     * EL FORMATO SE VALIDA ACÁ Y NO EN NINGÚN OTRO LADO
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * Una huella mal escrita —en minúsculas, sin los dos puntos, con un byte
+     * de menos porque se cortó al copiar— produce un `assetlinks.json`
+     * sintácticamente válido que Android **rechaza en silencio**. No hay error
+     * en ningún log: los enlaces simplemente abren el navegador, igual que
+     * cuando el archivo está vacío.
+     *
+     * Ese es el peor modo de falla posible: indistinguible de "todavía no lo
+     * configuramos", y se descubre probando en un teléfono. Por eso el servidor
+     * no arranca con una huella mal formada.
      */
-    ANDROID_CERT_SHA256: optionalOrEmpty(z.string().max(2000)),
+    ANDROID_CERT_SHA256: optionalOrEmpty(
+      z
+        .string()
+        .max(2000)
+        .superRefine((valor, ctx) => {
+          const huellas = valor
+            .split(',')
+            .map((h) => h.trim())
+            .filter(Boolean);
+
+          for (const huella of huellas) {
+            if (!HUELLA_SHA256.test(huella)) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message:
+                  'Cada huella son 32 bytes en hexadecimal MAYÚSCULA separados por dos puntos ' +
+                  '(AA:BB:…:FF, 95 caracteres). Copiala tal cual la muestra Play Console o ' +
+                  '`keytool -list -v`, sin espacios y sin comillas.',
+              });
+              // Un solo mensaje alcanza: si hay dos mal, la corrección es la misma.
+              return;
+            }
+          }
+        }),
+    ),
 
     // ─── Interruptores de emergencia ────────────────────────────────────────
     //

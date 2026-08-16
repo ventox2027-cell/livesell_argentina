@@ -3232,6 +3232,105 @@ describe('Enlaces compartidos', () => {
     expect(r.status).toBe(200);
     expect(r.body).toEqual([]);
   });
+  /**
+   * La huella real de Play App Signing. Es pública: el archivo que la publica
+   * lo es por diseño, y Google la muestra en la consola de cualquiera que
+   * tenga acceso a la ficha.
+   */
+  const HUELLA_DE_PLAY =
+    '66:03:89:1D:04:BB:9C:C1:9A:4D:84:89:31:1A:4E:3A:B3:D4:43:90:ED:11:B8:CE:DA:51:DB:00:21:48:8B:2F';
+
+  /** Corre algo con las huellas puestas y las devuelve a como estaban. */
+  async function conHuellas<T>(valor: string, fn: () => Promise<T>): Promise<T> {
+    const { env } = await import('@/config/env.schema');
+    const antes = env.ANDROID_CERT_SHA256;
+    (env as { ANDROID_CERT_SHA256?: string }).ANDROID_CERT_SHA256 = valor;
+    try {
+      return await fn();
+    } finally {
+      (env as { ANDROID_CERT_SHA256?: string }).ANDROID_CERT_SHA256 = antes;
+    }
+  }
+
+  it('con la huella de Play, el archivo tiene la forma que Android espera', async () => {
+    /**
+     * ═══════════════════════════════════════════════════════════════════════
+     * ANDROID NO PERDONA UNA COMA
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * Este JSON lo lee un verificador que no reporta nada: si la relación está
+     * mal escrita, si el namespace no es `android_app`, o si el package no
+     * coincide con el del manifiesto, la verificación falla y el enlace abre el
+     * navegador. Sin error en ningún lado.
+     *
+     * Por eso el test comprueba la forma entera y no sólo que la huella esté.
+     */
+    const r = await conHuellas(HUELLA_DE_PLAY, () =>
+      call('GET', '/.well-known/assetlinks.json'),
+    );
+
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual([
+      {
+        relation: ['delegate_permission/common.handle_all_urls'],
+        target: {
+          namespace: 'android_app',
+          package_name: 'com.vendox.app',
+          sha256_cert_fingerprints: [HUELLA_DE_PLAY],
+        },
+      },
+    ]);
+  });
+
+  it('⛔ el package del archivo es el del manifiesto', async () => {
+    /**
+     * Si no coinciden, Android descarta la entrada entera. Es un error de una
+     * sola letra que cuesta una tarde: el archivo se ve perfecto y no funciona.
+     */
+    const r = await conHuellas(HUELLA_DE_PLAY, () =>
+      call('GET', '/.well-known/assetlinks.json'),
+    );
+
+    const entrada = (r.body as Array<{ target: { package_name: string } }>)[0]!;
+    expect(entrada.target.package_name).toBe('com.vendox.app');
+  });
+
+  it('las DOS huellas conviven: la de Play y la de la clave de subida', async () => {
+    /**
+     * Es el estado final. Con una sola, los enlaces funcionan en un teléfono y
+     * en el resto no — y cuál de los dos depende de con qué clave se firmó lo
+     * que tenés instalado, que es lo más confuso posible de depurar.
+     *
+     * La segunda de este test es ficticia y se nota que lo es: sirve para
+     * probar que la lista admite dos, no para configurar nada.
+     */
+    const segunda = '11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:'
+      + '11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00';
+
+    const r = await conHuellas(`${HUELLA_DE_PLAY},${segunda}`, () =>
+      call('GET', '/.well-known/assetlinks.json'),
+    );
+
+    const entrada = (r.body as Array<{ target: { sha256_cert_fingerprints: string[] } }>)[0]!;
+    expect(entrada.target.sha256_cert_fingerprints).toEqual([HUELLA_DE_PLAY, segunda]);
+  });
+
+  it('⛔ una sola entrada, con las huellas adentro', async () => {
+    /**
+     * No dos objetos con un package repetido. Android acepta las dos formas,
+     * pero la duplicada hace que agregar una tercera huella sea copiar y pegar
+     * un bloque — y ahí es donde alguien cambia el package de uno solo.
+     */
+    const segunda = '11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:'
+      + '11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00';
+
+    const r = await conHuellas(`${HUELLA_DE_PLAY},${segunda}`, () =>
+      call('GET', '/.well-known/assetlinks.json'),
+    );
+
+    expect(r.body).toHaveLength(1);
+  });
+
 });
 
 describe('Promociones pagas', () => {

@@ -582,3 +582,91 @@ describe('envSchema', () => {
     });
   });
 });
+
+describe('Las huellas de firma de Android', () => {
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * UNA HUELLA MAL ESCRITA FALLA EN SILENCIO
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * Android baja `/.well-known/assetlinks.json`, compara la huella con la de la
+   * clave que firmó el binario, y si no coincide **abre el navegador**. No hay
+   * error, no hay aviso, no hay nada en el log del teléfono.
+   *
+   * O sea que el resultado de una huella en minúsculas es idéntico al de no
+   * haberla configurado nunca. Es el peor modo de falla que hay: se descubre
+   * probando en un dispositivo, y quien depure eso va a mirar el manifiesto
+   * durante horas antes de sospechar de un JSON.
+   *
+   * Por eso el servidor no arranca con una huella mal formada.
+   */
+
+  /** La real de Play App Signing. Es pública: el archivo que la publica lo es. */
+  const PLAY =
+    '66:03:89:1D:04:BB:9C:C1:9A:4D:84:89:31:1A:4E:3A:B3:D4:43:90:ED:11:B8:CE:DA:51:DB:00:21:48:8B:2F';
+
+  it('una huella bien formada se acepta', () => {
+    const r = envSchema.safeParse({ ...VALID, ANDROID_CERT_SHA256: PLAY });
+    expect(r.success, JSON.stringify(r.error?.issues)).toBe(true);
+  });
+
+  it('dos separadas por coma también', () => {
+    // Es el estado final: la de Play y la de la clave de subida.
+    const otra = PLAY.split(':').reverse().join(':');
+    const r = envSchema.safeParse({ ...VALID, ANDROID_CERT_SHA256: `${PLAY},${otra}` });
+    expect(r.success).toBe(true);
+  });
+
+  it('vacío se acepta: es el estado antes de tener la clave', () => {
+    // Con esto vacío los enlaces abren la web, que funciona. Está incompleto,
+    // no roto.
+    expect(envSchema.safeParse({ ...VALID, ANDROID_CERT_SHA256: '' }).success).toBe(true);
+  });
+
+  it('⛔ en minúsculas se rechaza', () => {
+    // Android compara el texto tal cual. `aa:bb` no es `AA:BB`.
+    const r = envSchema.safeParse({ ...VALID, ANDROID_CERT_SHA256: PLAY.toLowerCase() });
+    expect(r.success).toBe(false);
+  });
+
+  it('⛔ sin los dos puntos se rechaza', () => {
+    const r = envSchema.safeParse({
+      ...VALID,
+      ANDROID_CERT_SHA256: PLAY.replaceAll(':', ''),
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it('⛔ con un byte de menos se rechaza', () => {
+    /**
+     * El caso real: se copió desde una terminal que cortó la línea. Son 32
+     * bytes exactos, y 31 produce un JSON que parece correcto.
+     */
+    const cortada = PLAY.split(':').slice(0, 31).join(':');
+    expect(envSchema.safeParse({ ...VALID, ANDROID_CERT_SHA256: cortada }).success).toBe(false);
+  });
+
+  it('⛔ si la SEGUNDA está mal, también se rechaza', () => {
+    /**
+     * El error que más se escapa: se agrega la huella de la clave de subida al
+     * lado de la de Play y se pega mal. Validar sólo la primera dejaría pasar
+     * un archivo donde la mitad de los teléfonos no verifican.
+     */
+    const r = envSchema.safeParse({ ...VALID, ANDROID_CERT_SHA256: `${PLAY},no-es-una-huella` });
+    expect(r.success).toBe(false);
+  });
+
+  it('el mensaje dice cómo se saca la huella', () => {
+    // Un "formato inválido" a secas manda a buscar el formato a Google. El
+    // mensaje tiene que decir el comando.
+    const r = envSchema.safeParse({ ...VALID, ANDROID_CERT_SHA256: 'AA:BB' });
+    expect(JSON.stringify(r.error?.issues)).toMatch(/keytool/);
+  });
+
+  it('espacios alrededor de la coma no rompen nada', () => {
+    // Alguien va a escribir `A, B` al editar el .env a mano.
+    const otra = PLAY.split(':').reverse().join(':');
+    const r = envSchema.safeParse({ ...VALID, ANDROID_CERT_SHA256: `${PLAY} , ${otra}` });
+    expect(r.success).toBe(true);
+  });
+});

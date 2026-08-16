@@ -57,6 +57,43 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+
+            <!--
+              ══════════════════════════════════════════════════════════════════
+              ACÁ NO HAY UN intent-filter PARA vendox.com.ar, Y ES A PROPÓSITO
+              ══════════════════════════════════════════════════════════════════
+
+              El servidor ya sirve `/.well-known/assetlinks.json` con las huellas
+              cargadas, así que la mitad de Android está lista. Falta la otra
+              mitad: **la app no sabe qué hacer con un enlace entrante.**
+
+              No hay `app_links` ni `uni_links` en `pubspec.yaml`, ni nada que
+              lea el enlace con el que se abrió el proceso. Con el filtro puesto,
+              tocar `vendox.com.ar/p/prd_123` abriría la app en el feed en vez de
+              en ese producto — y hoy ese mismo enlace abre una landing que sí lo
+              muestra, con su foto y su precio.
+
+              O sea que activarlo ahora **empeora** el resultado. Un enlace
+              compartido por WhatsApp dejaría de llevar a donde lleva hoy.
+
+              ─── Qué falta, exactamente ───
+
+                1. Un paquete que entregue el enlace inicial y los siguientes.
+                2. Un enrutador que traduzca /p/, /v/, /t/ y /u/ a las pantallas.
+                3. Y que una ruta desconocida —/privacidad, por ejemplo— vuelva
+                   al navegador en vez de quedarse en una pantalla en blanco.
+
+              Recién con eso, este bloque va acá y toma el dominio entero (sin
+              `pathPrefix`, para que agregar una ruta en el backend no obligue a
+              publicar una versión nueva de la app):
+
+                  <intent-filter android:autoVerify="true">
+                      <action android:name="android.intent.action.VIEW"/>
+                      <category android:name="android.intent.category.DEFAULT"/>
+                      <category android:name="android.intent.category.BROWSABLE"/>
+                      <data android:scheme="https" android:host="vendox.com.ar"/>
+                  </intent-filter>
+            -->
         </activity>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
