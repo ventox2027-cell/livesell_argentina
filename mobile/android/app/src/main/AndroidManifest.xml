@@ -50,10 +50,39 @@
          Ahora depende del tipo de compilación: release sólo habla HTTPS,
          debug y profile permiten texto plano para la prueba de campo. Ver
          res/xml/network_security_config.xml. -->
+    <!--
+      ══════════════════════════════════════════════════════════════════════
+      SIN COPIA DE SEGURIDAD AUTOMÁTICA
+      ══════════════════════════════════════════════════════════════════════
+
+      `allowBackup` vale `true` por defecto. Sin esta línea, Android sube a la
+      cuenta de Google Drive de cada persona todo lo que la app guarda en
+      preferencias: el identificador de instalación, la URL del backend
+      configurada, y el blob cifrado de la sesión.
+
+      Dos problemas, y el segundo es el que se ve:
+
+        · Datos de sesión saliendo a un servicio de Google sin que la política
+          lo declare. El blob de `flutter_secure_storage` está cifrado con una
+          clave del Keystore que NO se respalda, así que restaurado es
+          ilegible — pero igual viajó.
+
+        · **Restaurar el backup en un teléfono nuevo clona el
+          `device.installId`.** Dos aparatos con el mismo identificador de
+          instalación rompen «cerrar la sesión de este dispositivo»: cerrar una
+          cierra la otra, y el token de avisos de una pisa el de la otra.
+
+      Se apaga entero en vez de escribir reglas de exclusión: lo único que
+      valdría la pena conservar entre teléfonos es la URL del backend, que se
+      vuelve a escribir sola al entrar.
+    -->
     <application
         android:label="VendoX"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/reglas_de_extraccion"
         android:networkSecurityConfig="@xml/network_security_config">
         <activity
             android:name=".MainActivity"

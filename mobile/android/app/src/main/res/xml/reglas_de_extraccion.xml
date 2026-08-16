@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Qué se puede copiar de esta app. Respuesta: nada.
+
+  ════════════════════════════════════════════════════════════════════════════
+  POR QUÉ EXISTE ESTE ARCHIVO SI YA ESTÁ allowBackup="false"
+  ════════════════════════════════════════════════════════════════════════════
+
+  Porque desde Android 12 son DOS mecanismos distintos y `allowBackup` sólo
+  apaga uno:
+
+    · `allowBackup` → la copia en la nube (Google Drive).
+    · `dataExtractionRules` → la transferencia directa de teléfono a teléfono,
+      esa que ofrece el asistente de configuración cuando alguien estrena
+      equipo.
+
+  Sin este archivo, el segundo sigue encendido: la app queda fuera de la copia
+  en la nube pero se clona igual al pasar de un teléfono a otro. Y el problema
+  que esto evita es justo el de clonar — dos aparatos con el mismo
+  `device.installId` rompen «cerrar la sesión de este dispositivo».
+
+  ════════════════════════════════════════════════════════════════════════════
+  QUÉ SE PIERDE
+  ════════════════════════════════════════════════════════════════════════════
+
+  Nada que importe. Al entrar en el teléfono nuevo, la sesión se crea de cero
+  con su propio identificador, y la URL del backend la trae la app. Lo único
+  que cuesta es volver a iniciar sesión, que es lo correcto cuando se cambia de
+  aparato.
+-->
+<data-extraction-rules>
+    <!-- La copia en la nube. Redundante con allowBackup="false", explícito
+         igual: dejarlo implícito obliga a la próxima persona que lea esto a ir
+         a buscar cuál es el valor por defecto. -->
+    <cloud-backup>
+        <exclude domain="root" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </cloud-backup>
+
+    <!-- La transferencia entre dispositivos. Es la que `allowBackup` no cubre. -->
+    <device-transfer>
+        <exclude domain="root" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </device-transfer>
+</data-extraction-rules>
