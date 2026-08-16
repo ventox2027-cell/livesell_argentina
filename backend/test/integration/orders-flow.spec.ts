@@ -5653,6 +5653,77 @@ it('⛔ un rechazo TARDÍO sobre un pedido ya pago no avisa nada', async () => {
     ).toBe(0);
   });
 
+  it('⛔ un rechazo TARDÍO no despaga el pedido', async () => {
+    /**
+     * ═══════════════════════════════════════════════════════════════════════
+     * LA GUARDA MÁS CARA DEL SISTEMA, Y NO TENÍA PRUEBA
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * El test de arriba mira los AVISOS. Este mira la plata.
+     *
+     * La rama de rechazo mueve la orden con un `updateMany` condicionado a
+     * `PROCESSING_PAYMENT`. Sin esa condición, el webhook rechazado del primer
+     * intento —el de la tarjeta que no funcionó— encuentra el pedido en `PAID`
+     * y lo pasa a `PAYMENT_FAILED`.
+     *
+     * Lo que eso significa: alguien pagó, el pedido figura como fallido, el
+     * stock se libera y el vendedor nunca despacha. La plata está cobrada.
+     *
+     * Se descubrió sacando la condición del WHERE: las 828 pruebas de
+     * integración seguían en verde. El comentario del código afirmaba que la
+     * guarda funcionaba y nada lo comprobaba.
+     *
+     * ─── Por qué el segundo intento se arma a mano ───
+     *
+     * La carrera real —dos tarjetas, la primera lenta, el webhook desordenado—
+     * necesita controlar los tiempos del proveedor. Lo que importa acá es el
+     * estado desde el que llega el rechazo, y ése es exacto: un intento vivo
+     * sobre una orden que YA está paga, que es justo la situación.
+     */
+    const { OrderPaymentsService } = await import('@/modules/orders/payments.service');
+    const pagos = app.get(OrderPaymentsService);
+
+    const v = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId));
+    const orderId = orden.body.id as string;
+
+    // Se paga con la segunda tarjeta. El pedido queda pago.
+    await pagar(comprador.token, orderId);
+    const pagada = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+    expect(['PAID', 'CONFIRMED'], 'el montaje del test').toContain(pagada.status);
+
+    // El primer intento, el de la tarjeta que no funcionó, todavía sin resolver.
+    const sufijo = Date.now().toString(36);
+    const primerIntento = await prisma.paymentAttempt.create({
+      data: {
+        id: `pat_lento${sufijo}`,
+        orderId,
+        status: 'PROCESSING',
+        amount: pagada.grossAmount,
+        idempotencyKey: `idem-lento-${sufijo}`,
+      },
+    });
+
+    // Y ahora llega su webhook, tarde y con el rechazo.
+    await pagos.aplicarResultado(
+      primerIntento.id,
+      {
+        id: `mp_lento_${sufijo}`,
+        status: 'rejected',
+        statusDetail: 'cc_rejected_insufficient_amount',
+        raw: {},
+      },
+      'webhook',
+    );
+
+    const despues = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+    expect(despues.status, 'un pedido pago no se despaga con un webhook viejo').toBe(
+      pagada.status,
+    );
+    expect(despues.status).not.toBe('PAYMENT_FAILED');
+  });
+
   it('PAYMENT_REJECTED · sí avisa cuando el rechazo es real', async () => {
     // La contraparte del anterior. Sin esto, el test de arriba pasaría igual
     // con un oyente que no avisa nunca.
