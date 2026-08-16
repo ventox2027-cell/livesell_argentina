@@ -528,6 +528,84 @@ describe('⛔ IDOR — el vendedor A no toca nada del vendedor B', () => {
     expect(r.status).toBe(404);
   });
 
+  /**
+   * El tercer salto: producto PROPIO, variante AJENA.
+   *
+   * ═════════════════════════════════════════════════════════════════════════
+   * POR QUÉ LOS TESTS DE ARRIBA NO ALCANZAN
+   * ═════════════════════════════════════════════════════════════════════════
+   *
+   * Todos mandan el producto de la víctima, así que los frena el PRIMER salto
+   * —`productOf`, que no encuentra un producto ajeno— y nunca se llega a
+   * comprobar el tercero.
+   *
+   * El ataque real es otro: el atacante manda un producto suyo, que existe y
+   * es suyo, y le cuelga el `variantId` de la víctima. Si la búsqueda de la
+   * variante no exigiera `productId`, la encontraría igual.
+   *
+   * Se descubrió sacando `productId: product.id` del WHERE de `variantOf`: las
+   * 817 pruebas de integración seguían en verde. Tres operaciones dependen de
+   * ese filtro, y las tres son graves.
+   */
+  it('⛔ con un producto propio no puede alcanzar la variante de otro', async () => {
+    const a = await nuevoVendedor();
+    const b = await nuevoVendedor();
+    const deA = await crearProducto(a.token);
+    const deB = await crearProducto(b.token);
+    const varianteDeB = deB.variants[0].id as string;
+
+    // Cambiarle el precio.
+    const precio = await call('PATCH', `/api/v1/products/${deA.id}/variants/${varianteDeB}`, {
+      token: a.token,
+      body: { priceOverrideCents: 100_000 },
+    });
+    expect(precio.status, JSON.stringify(precio.body)).toBe(404);
+
+    // Borrársela.
+    const borrado = await call('DELETE', `/api/v1/products/${deA.id}/variants/${varianteDeB}`, {
+      token: a.token,
+    });
+    expect(borrado.status, JSON.stringify(borrado.body)).toBe(404);
+
+    // Y la peor: moverle el stock. Poner en cero el stock de la competencia
+    // durante su vivo no le cuesta plata a nadie y le arruina la transmisión.
+    const stock = await call(
+      'PATCH',
+      `/api/v1/products/${deA.id}/variants/${varianteDeB}/inventory`,
+      { token: a.token, body: { onHand: 0 } },
+    );
+    expect(stock.status, JSON.stringify(stock.body)).toBe(404);
+  });
+
+  it('⛔ la variante ajena queda intacta después del intento', async () => {
+    // El 404 podría llegar DESPUÉS de haber escrito. Lo que importa no es el
+    // código de estado sino que el dato de la víctima no se haya movido.
+    const a = await nuevoVendedor();
+    const b = await nuevoVendedor();
+    const deA = await crearProducto(a.token);
+    const deB = await crearProducto(b.token);
+    const varianteDeB = deB.variants[0].id as string;
+
+    const antes = await prisma.productVariant.findUniqueOrThrow({
+      where: { id: varianteDeB },
+      select: { priceOverrideCents: true, deletedAt: true, status: true },
+    });
+
+    await call('PATCH', `/api/v1/products/${deA.id}/variants/${varianteDeB}`, {
+      token: a.token,
+      body: { priceOverrideCents: 100_000 },
+    });
+    await call('DELETE', `/api/v1/products/${deA.id}/variants/${varianteDeB}`, {
+      token: a.token,
+    });
+
+    const despues = await prisma.productVariant.findUniqueOrThrow({
+      where: { id: varianteDeB },
+      select: { priceOverrideCents: true, deletedAt: true, status: true },
+    });
+    expect(despues).toEqual(antes);
+  });
+
   it('no puede crear una variante en un producto ajeno', async () => {
     const a = await nuevoVendedor();
     const b = await nuevoVendedor();

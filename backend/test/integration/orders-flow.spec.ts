@@ -1368,6 +1368,98 @@ describe('Devoluciones', () => {
 });
 
 describe('⛔ IDOR', () => {
+  /**
+   * La dirección de la casa de alguien, con su DNI y su teléfono.
+   *
+   * ═════════════════════════════════════════════════════════════════════════
+   * ESTO NO ESTABA PROBADO
+   * ═════════════════════════════════════════════════════════════════════════
+   *
+   * `update` y `remove` filtran por `userId` y el comentario del archivo lo
+   * dice: «Ajena = no encontrada». Pero sacar `userId` de los dos WHERE dejaba
+   * las 819 pruebas de integración en verde.
+   *
+   * Lo que quedaba abierto no es sólo escribir: `update` **devuelve la fila
+   * completa**. Modificar la dirección ajena con cualquier cuerpo válido
+   * respondía con el nombre, el DNI, el teléfono y la calle de la víctima.
+   *
+   * El camino de checkout —`direccionParaEnviar`— sí estaba atado y sigue
+   * estándolo: se verificó que el `userId` va primero en el WHERE.
+   */
+  async function direccionDe(token: string) {
+    const r = await call('GET', '/api/v1/addresses', { token });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    const lista = (r.body.items ?? r.body) as Array<{ id: string }>;
+    return lista[0].id;
+  }
+
+  it('⛔ nadie modifica la dirección de otro', async () => {
+    const duenio = await nuevoComprador();
+    const intruso = await nuevoComprador();
+    const suya = await direccionDe(duenio.token);
+
+    const r = await call('PATCH', `/api/v1/addresses/${suya}`, {
+      token: intruso.token,
+      body: {
+        recipientFullName: 'Quien Sea',
+        documentType: 'DNI',
+        documentNumber: '11111111',
+        phoneE164: '+5491100000000',
+        street: 'Otra',
+        number: '1',
+        city: 'CABA',
+        province: 'Buenos Aires',
+        postalCode: 'C1000',
+        isDefault: false,
+      },
+    });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(404);
+    // Y sobre todo: la respuesta no puede traer los datos de la víctima.
+    expect(JSON.stringify(r.body)).not.toContain('30123456');
+    expect(JSON.stringify(r.body)).not.toContain('Corrientes');
+  });
+
+  it('⛔ nadie borra la dirección de otro', async () => {
+    const duenio = await nuevoComprador();
+    const intruso = await nuevoComprador();
+    const suya = await direccionDe(duenio.token);
+
+    const r = await call('DELETE', `/api/v1/addresses/${suya}`, { token: intruso.token });
+    expect(r.status, JSON.stringify(r.body)).toBe(404);
+
+    // Un borrado lógico exitoso pondría `deletedAt`. Se mira la base, no el
+    // código de estado: el 404 podría llegar después de haber escrito.
+    const fila = await prisma.userAddress.findUniqueOrThrow({ where: { id: suya } });
+    expect(fila.deletedAt).toBeNull();
+  });
+
+  it('⛔ la dirección ajena no se modifica aunque el intento falle', async () => {
+    const duenio = await nuevoComprador();
+    const intruso = await nuevoComprador();
+    const suya = await direccionDe(duenio.token);
+
+    await call('PATCH', `/api/v1/addresses/${suya}`, {
+      token: intruso.token,
+      body: {
+        recipientFullName: 'Quien Sea',
+        documentType: 'DNI',
+        documentNumber: '11111111',
+        phoneE164: '+5491100000000',
+        street: 'Otra',
+        number: '1',
+        city: 'CABA',
+        province: 'Buenos Aires',
+        postalCode: 'C1000',
+        isDefault: false,
+      },
+    });
+
+    const fila = await prisma.userAddress.findUniqueOrThrow({ where: { id: suya } });
+    expect(fila.recipientFullName).toBe('Ana Pérez');
+    expect(fila.street).toBe('Av. Corrientes');
+  });
+
   it('un comprador no ve la orden de otro', async () => {
     const { variantId } = await nuevaVarianteConStock(3);
     const duenio = await nuevoComprador();
