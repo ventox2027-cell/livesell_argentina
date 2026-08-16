@@ -1,9 +1,47 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     id("com.android.application")
     id("com.google.gms.google-services")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
+
+/**
+ * La clave con la que se firma la release.
+ *
+ * ════════════════════════════════════════════════════════════════════════════
+ * EL ARCHIVO NO ESTÁ EN EL REPOSITORIO, Y NO PUEDE ESTARLO
+ * ════════════════════════════════════════════════════════════════════════════
+ *
+ * `key.properties` apunta a un `.jks` que vive fuera del proyecto y lleva dos
+ * contraseñas. Está en `.gitignore` —junto con `*.jks` y `*.keystore`— y si
+ * alguna vez se sube, hay que rotar la clave: cualquiera que la tenga puede
+ * firmar una actualización que Play va a aceptar como nuestra.
+ *
+ * ⚠️ Y si se PIERDE, no se puede volver a publicar una actualización nunca
+ * más. Google no la reemplaza. Hay que subir una app nueva, con otro id, y
+ * pedirle a todo el mundo que la instale de cero.
+ *
+ * ════════════════════════════════════════════════════════════════════════════
+ * SIN EL ARCHIVO, LA COMPILACIÓN NO FALLA
+ * ════════════════════════════════════════════════════════════════════════════
+ *
+ * Cae a la clave de depuración. Es deliberado: un clon del repositorio tiene
+ * que poder compilar una release para inspeccionarla, y quien no va a publicar
+ * no necesita la clave de nadie.
+ *
+ * El costo es que un olvido produce un AAB firmado con debug en vez de un
+ * error. Por eso el paso de verificación con `apksigner` no es opcional — está
+ * en el runbook, y es lo primero que hay que mirar antes de subir.
+ */
+val propiedadesDeFirma = Properties()
+val archivoDeFirma = rootProject.file("key.properties")
+if (archivoDeFirma.exists()) {
+    propiedadesDeFirma.load(FileInputStream(archivoDeFirma))
+}
+val hayClaveDeSubida = propiedadesDeFirma.getProperty("storeFile") != null
 
 android {
     /**
@@ -50,6 +88,17 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        create("upload") {
+            if (hayClaveDeSubida) {
+                keyAlias = propiedadesDeFirma.getProperty("keyAlias")
+                keyPassword = propiedadesDeFirma.getProperty("keyPassword")
+                storeFile = file(propiedadesDeFirma.getProperty("storeFile"))
+                storePassword = propiedadesDeFirma.getProperty("storePassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
             // ⚠️ FIRMADO CON LA CLAVE DE DEBUG.
@@ -62,7 +111,12 @@ android {
             //
             // Al cambiarla también cambia la huella SHA-1, así que hay que
             // agregar un cliente de OAuth de Android nuevo en Google Cloud.
-            signingConfig = signingConfigs.getByName("debug")
+            // Con  presente, la de subida. Sin él, debug.
+            // Verificar SIEMPRE con  antes de subir: un olvido
+            // produce un AAB firmado con debug en vez de un error.
+            signingConfig =
+                if (hayClaveDeSubida) signingConfigs.getByName("upload")
+                else signingConfigs.getByName("debug")
         }
     }
 

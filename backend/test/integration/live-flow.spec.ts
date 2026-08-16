@@ -873,3 +873,104 @@ describe('Vivo — el precio que ve el comprador', () => {
     expect(enBandeja.precioDeVivoActivo).toBe(false);
   });
 });
+
+describe('Bloquear a un vendedor lo saca del listado de vivos', () => {
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * ESTE BLOQUE EXISTE PORQUE UN SABOTAJE NO ROMPIÓ NADA
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * `activos()` filtra los vivos de quien la persona bloqueó, y ese filtro
+   * estaba sin probar: al quitarlo, los 36 tests de vivos seguían en verde.
+   *
+   * O sea que bloquear a alguien podía dejar de funcionar en el feed y nadie se
+   * iba a enterar hasta que una persona bloqueada volviera a aparecer en la
+   * pantalla de quien la bloqueó — que es exactamente el momento en que un
+   * bloqueo tiene que haber funcionado.
+   */
+
+  /** Un vendedor con un vivo al aire. */
+  async function vendedorTransmitiendo() {
+    const v = await nuevoVendedorConProducto();
+    const c = await call('POST', '/api/v1/live', {
+      token: v.token,
+      body: { title: 'Vendiendo en vivo', productIds: [v.productId] },
+    });
+    expect(c.status, JSON.stringify(c.body)).toBe(201);
+    await call('POST', `/api/v1/live/${c.body.id}/start`, { token: v.token });
+
+    return { ...v, liveId: c.body.id as string };
+  }
+
+  /** Los ids de los vivos que ve esta persona. */
+  async function vivosQueVe(token: string): Promise<string[]> {
+    const r = await call('GET', '/api/v1/live?limit=50', { token });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    const items = (r.body.items ?? r.body) as Array<{ id: string }>;
+    return items.map((i) => i.id);
+  }
+
+  it('⛔ el vivo de un vendedor bloqueado NO aparece', async () => {
+    const vendedor = await vendedorTransmitiendo();
+    const espectador = await nuevoUsuario();
+
+    // Antes de bloquear, lo ve.
+    expect(await vivosQueVe(espectador.token)).toContain(vendedor.liveId);
+
+    const bloqueo = await call('POST', `/api/v1/blocks/seller/${vendedor.sellerId}`, {
+      token: espectador.token,
+      body: { reason: 'no quiero ver esta tienda' },
+    });
+    expect(bloqueo.status, JSON.stringify(bloqueo.body)).toBe(201);
+
+    // Después, no.
+    expect(await vivosQueVe(espectador.token)).not.toContain(vendedor.liveId);
+  });
+
+  it('⛔ el bloqueo es UNILATERAL: el bloqueado sigue viendo al otro', async () => {
+    /**
+     * Lo contrario permitiría hacerle desaparecer la tienda a alguien
+     * bloqueándolo, que es una forma barata y silenciosa de sabotear a un
+     * competidor.
+     */
+    const a = await vendedorTransmitiendo();
+    const b = await vendedorTransmitiendo();
+
+    await call('POST', `/api/v1/blocks/seller/${b.sellerId}`, {
+      token: a.token,
+      body: { reason: 'no quiero ver esta tienda' },
+    });
+
+    // A dejó de ver a B.
+    expect(await vivosQueVe(a.token)).not.toContain(b.liveId);
+    // Pero B sigue viendo a A.
+    expect(await vivosQueVe(b.token)).toContain(a.liveId);
+  });
+
+  it('sin sesión, el listado no se filtra por nadie', async () => {
+    // El feed se ve sin entrar. Sin `userId` no hay lista de bloqueados que
+    // aplicar, y la consulta tiene que salir igual.
+    const vendedor = await vendedorTransmitiendo();
+
+    const r = await call('GET', '/api/v1/live?limit=50');
+    expect(r.status).toBe(200);
+    const items = (r.body.items ?? r.body) as Array<{ id: string }>;
+    expect(items.map((i) => i.id)).toContain(vendedor.liveId);
+  });
+
+  it('desbloquear lo devuelve al listado', async () => {
+    // Un bloqueo que no se puede deshacer es una decisión permanente tomada en
+    // caliente. Ver `bloqueos.service.ts`.
+    const vendedor = await vendedorTransmitiendo();
+    const espectador = await nuevoUsuario();
+
+    await call('POST', `/api/v1/blocks/seller/${vendedor.sellerId}`, {
+      token: espectador.token,
+      body: { reason: 'no quiero ver esta tienda' },
+    });
+    expect(await vivosQueVe(espectador.token)).not.toContain(vendedor.liveId);
+
+    await call('DELETE', `/api/v1/blocks/seller/${vendedor.sellerId}`, { token: espectador.token });
+    expect(await vivosQueVe(espectador.token)).toContain(vendedor.liveId);
+  });
+});
