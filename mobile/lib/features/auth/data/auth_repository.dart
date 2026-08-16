@@ -200,6 +200,33 @@ class AuthRepository {
     return ConSesion(usuario: usuario, faltantes: _faltantes(me.data?['missing']));
   }
 
+  /// Registra —o desvincula— el token de avisos de ESTE dispositivo.
+  ///
+  /// ═══════════════════════════════════════════════════════════════════════
+  /// EL ENDPOINT YA EXISTÍA. ESTO ES EL LLAMADOR QUE FALTABA
+  /// ═══════════════════════════════════════════════════════════════════════
+  ///
+  /// `PATCH /auth/push-token` está en el backend desde hace rato: libera el
+  /// token de cualquier otro dispositivo que lo tuviera —los tokens se
+  /// reciclan entre instalaciones— y reinicia el contador de fallos.
+  ///
+  /// Con `null` desvincula: es lo que se manda al cerrar sesión, para que la
+  /// persona que entre después en este teléfono no reciba los avisos de la
+  /// anterior.
+  ///
+  /// El `installId` es el mismo que se manda al entrar, así que el backend
+  /// actualiza la fila que ya existe en vez de crear una nueva.
+  Future<void> actualizarPushToken(String? token) async {
+    await _api.patch<Map<String, dynamic>>(
+      '/auth/push-token',
+      data: {
+        'installId': await _installId(),
+        'pushToken': token,
+        'pushEnabled': token != null,
+      },
+    );
+  }
+
   Future<void> cerrarSesion() async {
     final refresh = await _tokens.refreshToken();
     if (refresh != null) {

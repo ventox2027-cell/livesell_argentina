@@ -9,6 +9,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 import '../../../core/config/runtime_config.dart';
 import '../../../core/design/componentes.dart';
 import '../../../core/design/tokens.dart';
+import '../../../core/push/permiso_de_avisos.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../auth/presentation/widgets/fecha_de_nacimiento_sheet.dart';
 import '../data/orders_repository.dart';
@@ -257,6 +258,19 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
         _pedido = actualizado;
         _paso = _Paso.resultado;
       });
+
+      /**
+       * El único momento razonable para pedir el permiso de avisos.
+       *
+       * Acaba de pagar y quiere saber cuándo sale su pedido: la pregunta se
+       * explica sola. En Android 13+ el diálogo del sistema se muestra UNA vez
+       * —si dice que no, no vuelve a aparecer nunca— así que gastarlo en el
+       * arranque, cuando todavía no sabe qué es la app, es perderlo.
+       *
+       * Va después de pintar el resultado: primero ve que la compra salió
+       * bien, y recién ahí se le pregunta otra cosa.
+       */
+      if (mounted) unawaited(ofrecerAvisosTrasComprar(context));
     } on PedidoException catch (e) {
       if (!mounted) return;
       // Un rechazo SÍ deja reintentar con otra tarjeta.

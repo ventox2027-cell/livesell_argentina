@@ -59,41 +59,49 @@
             </intent-filter>
 
             <!--
+              Los enlaces de vendox.com.ar abren la app.
+
               ══════════════════════════════════════════════════════════════════
-              ACÁ NO HAY UN intent-filter PARA vendox.com.ar, Y ES A PROPÓSITO
+              autoVerify NO VERIFICA NADA POR SÍ SOLO
               ══════════════════════════════════════════════════════════════════
 
-              El servidor ya sirve `/.well-known/assetlinks.json` con las huellas
-              cargadas, así que la mitad de Android está lista. Falta la otra
-              mitad: **la app no sabe qué hacer con un enlace entrante.**
+              Le pide a Android que, al instalar, baje
+              https://vendox.com.ar/.well-known/assetlinks.json y compruebe que
+              ahí figura la huella SHA-256 de la clave que firmó ESTE binario.
 
-              No hay `app_links` ni `uni_links` en `pubspec.yaml`, ni nada que
-              lea el enlace con el que se abrió el proceso. Con el filtro puesto,
-              tocar `vendox.com.ar/p/prd_123` abriría la app en el feed en vez de
-              en ese producto — y hoy ese mismo enlace abre una landing que sí lo
-              muestra, con su foto y su precio.
+              Si no coincide —o el archivo devuelve una lista vacía, o el
+              dominio no responde— la verificación falla y el enlace abre el
+              navegador. Sin error, sin aviso, sin nada en el log del teléfono.
+              Es el modo de falla que hace perder tardes enteras.
 
-              O sea que activarlo ahora **empeora** el resultado. Un enlace
-              compartido por WhatsApp dejaría de llevar a donde lleva hoy.
+              Por eso el servidor publica DOS huellas: la de Play App Signing
+              —con la que Google re-firma lo que descargan los usuarios— y la de
+              la clave de subida, para que la build local también abra la app.
+              Ver `ANDROID_CERT_SHA256` y `landing.service.ts`.
 
-              ─── Qué falta, exactamente ───
+              ══════════════════════════════════════════════════════════════════
+              POR QUÉ TOMA EL DOMINIO ENTERO Y NO RUTA POR RUTA
+              ══════════════════════════════════════════════════════════════════
 
-                1. Un paquete que entregue el enlace inicial y los siguientes.
-                2. Un enrutador que traduzca /p/, /v/, /t/ y /u/ a las pantallas.
-                3. Y que una ruta desconocida —/privacidad, por ejemplo— vuelva
-                   al navegador en vez de quedarse en una pantalla en blanco.
+              Sin `pathPrefix`, el filtro se queda con todo `vendox.com.ar`. Es
+              a propósito: hoy son cuatro rutas —/p/, /v/, /t/, /u/— y una
+              quinta se agrega en el backend sin tocar el manifiesto ni publicar
+              una versión nueva de la app.
 
-              Recién con eso, este bloque va acá y toma el dominio entero (sin
-              `pathPrefix`, para que agregar una ruta en el backend no obligue a
-              publicar una versión nueva de la app):
+              El costo es que la app también intercepta /privacidad y
+              /eliminar-cuenta, que son páginas web. Se devuelven al navegador
+              desde el código: `DestinoWeb` en `core/enlaces/destino.dart`.
 
-                  <intent-filter android:autoVerify="true">
-                      <action android:name="android.intent.action.VIEW"/>
-                      <category android:name="android.intent.category.DEFAULT"/>
-                      <category android:name="android.intent.category.BROWSABLE"/>
-                      <data android:scheme="https" android:host="vendox.com.ar"/>
-                  </intent-filter>
+              Y una ruta que no reconocemos **no navega a ningún lado**. Abrir
+              el feed «por las dudas» deja a alguien que tocó esperando un
+              producto en una pantalla que no pidió.
             -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="https" android:host="vendox.com.ar"/>
+            </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->

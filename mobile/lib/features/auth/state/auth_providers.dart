@@ -1,4 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../../core/push/push_service.dart';
 
 import '../../../core/auth/token_store.dart';
 import '../../../core/network/api_client.dart';
@@ -48,6 +52,22 @@ class SesionNotifier extends Notifier<EstadoSesion> {
 
   Future<void> restaurar() async {
     state = await _repo.restaurar();
+    _sincronizarAvisos();
+  }
+
+  /// Engancha o desengancha los avisos según haya sesión.
+  ///
+  /// ⚠️ NO pide permiso: sólo vuelve a subir el token si la persona YA lo
+  /// autorizó antes. El token puede haber cambiado mientras la sesión estaba
+  /// cerrada —una reinstalación, un backup restaurado— y quien ya dijo que sí
+  /// no tiene por qué volver a decidirlo.
+  ///
+  /// Cuándo se PIDE el permiso está en `permiso_de_avisos.dart`: después de
+  /// la primera compra, no en el arranque.
+  void _sincronizarAvisos() {
+    final push = PushService.instance;
+    push.registrarToken = _repo.actualizarPushToken;
+    if (state is ConSesion) unawaited(push.reengancharSiYaAutorizo());
   }
 
   Future<void> conGoogle(String idToken) async {
@@ -95,6 +115,18 @@ class SesionNotifier extends Notifier<EstadoSesion> {
   }
 
   Future<void> cerrarSesion() async {
+    /**
+     * El token se desvincula ANTES de cerrar la sesión.
+     *
+     * Después ya no hay con qué autenticar el `PATCH`, y el dispositivo
+     * quedaría asociado a la cuenta anterior: quien entre después en este
+     * teléfono recibiría «tu pedido salió» de pedidos que no son suyos.
+     *
+     * Si falla —sin red— se cierra igual. La persona pidió salir y la app
+     * obedece; el token queda huérfano hasta que el backend lo declare muerto
+     * en el primer envío fallido, que es un mecanismo que ya existe.
+     */
+    await PushService.instance.desvincular();
     await _repo.cerrarSesion();
     state = const SinSesion();
   }

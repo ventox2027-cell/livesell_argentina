@@ -54,6 +54,15 @@ dependencies:
   google_fonts: ^8.2.1
   cached_network_image: ^3.4.1
   google_sign_in: ^7.2.0
+
+  # Avisos push. El backend ya los manda con firebase-admin desde hace rato;
+  # esto es el lado que faltaba. Ver core/push/.
+  firebase_core: ^4.1.1
+  firebase_messaging: ^16.0.2
+
+  # Enlaces de vendox.com.ar que abren la app. Entrega el enlace inicial —app
+  # cerrada— y los siguientes —app abierta—. Ver core/enlaces/.
+  app_links: ^6.4.1
   http_parser: ^4.1.2
   image_picker: ^1.2.3
   socket_io_client: ^3.1.6
