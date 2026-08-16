@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 import 'tokens.dart';
 
@@ -36,13 +35,27 @@ ThemeData buildAppTheme() {
     outline: AppColor.borde,
   );
 
-  // Inter: alta legibilidad en tamaños chicos, que es donde vive la mayoría de
-  // la interfaz sobre video —precios, nombres, contadores—.
-  final base = GoogleFonts.interTextTheme(ThemeData.dark().textTheme);
+  /**
+   * Inter: alta legibilidad en tamaños chicos, que es donde vive la mayoría de
+   * la interfaz sobre video —precios, nombres, contadores—.
+   *
+   * ⚠️ Va EMPAQUETADA, no se descarga. Antes la traía `google_fonts`, que la
+   * baja de fonts.gstatic.com en el primer arranque: eso mandaba la IP de cada
+   * persona a Google sólo para dibujar texto, y dejaba la app con la
+   * tipografía del sistema hasta que hubiera red. Ver `pubspec.yaml`.
+   *
+   * Con `fontFamily` en el tema alcanza: Flutter la aplica a todo el árbol y
+   * elige el peso del archivo que corresponda entre los seis declarados.
+   */
+  const familia = 'Inter';
+  final base = ThemeData.dark().textTheme.apply(fontFamily: familia);
 
   return ThemeData(
     useMaterial3: true,
     brightness: Brightness.dark,
+    // También a nivel de tema: un `TextStyle` suelto sin familia la hereda de
+    // acá, igual que antes la heredaba del tema que armaba `google_fonts`.
+    fontFamily: familia,
     colorScheme: esquema,
     scaffoldBackgroundColor: AppColor.fondo,
     splashFactory: InkSparkle.splashFactory,
@@ -82,7 +95,7 @@ ThemeData buildAppTheme() {
         minimumSize: const Size.fromHeight(52),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(Redondeo.md)),
         textStyle:
-            GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.w600, letterSpacing: -0.2),
+            const TextStyle(fontFamily: familia, fontSize: 16, fontWeight: FontWeight.w600, letterSpacing: -0.2),
       ),
     ),
     outlinedButtonTheme: OutlinedButtonThemeData(
@@ -91,13 +104,13 @@ ThemeData buildAppTheme() {
         minimumSize: const Size.fromHeight(52),
         side: const BorderSide(color: AppColor.borde),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(Redondeo.md)),
-        textStyle: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.w600),
+        textStyle: const TextStyle(fontFamily: familia, fontSize: 16, fontWeight: FontWeight.w600),
       ),
     ),
     textButtonTheme: TextButtonThemeData(
       style: TextButton.styleFrom(
         foregroundColor: AppColor.textoSuave,
-        textStyle: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w500),
+        textStyle: const TextStyle(fontFamily: familia, fontSize: 14, fontWeight: FontWeight.w500),
       ),
     ),
     inputDecorationTheme: InputDecorationTheme(

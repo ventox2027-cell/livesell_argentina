@@ -51,7 +51,6 @@ dependencies:
   share_plus: ^10.1.4
   flutter_secure_storage: ^10.3.1
   go_router: ^17.5.0
-  google_fonts: ^8.2.1
   cached_network_image: ^3.4.1
   google_sign_in: ^7.2.0
 
@@ -77,6 +76,46 @@ flutter:
   uses-material-design: true
   assets:
     - assets/logo/
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # INTER VA EMPAQUETADA, NO SE DESCARGA
+  # ══════════════════════════════════════════════════════════════════════════
+  #
+  # Antes la traía `google_fonts`, que la baja de fonts.gstatic.com la primera
+  # vez que se abre la app. Eso mandaba la IP de cada persona a Google sólo
+  # para dibujar texto — un flujo hacia un tercero que la política no declaraba
+  # y que no hacía falta.
+  #
+  # Y de paso arregla algo que se veía: en el primer arranque sin señal, la app
+  # caía a la tipografía por defecto del sistema hasta que hubiera red.
+  #
+  # ─── Sólo los seis pesos que se usan ───
+  #
+  # Están contados sobre el código: w400, w500, w600, w700, w800 y w900. Inter
+  # trae nueve; las tres que faltan —Thin, ExtraLight, Light— no aparecen en
+  # ninguna pantalla y son 1,2 MB que nadie descargaría dos veces.
+  #
+  # `FontWeight.normal` es w400 y `FontWeight.bold` es w700, así que quedan
+  # cubiertos sin declarar nada más.
+  #
+  # Versión 4.1 (rsms/inter), licencia SIL Open Font License 1.1. El texto
+  # completo está en `assets/fonts/LICENSE.txt`, que la licencia exige
+  # distribuir junto con la fuente.
+  fonts:
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/Inter-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Inter-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Inter-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Inter-Bold.ttf
+          weight: 700
+        - asset: assets/fonts/Inter-ExtraBold.ttf
+          weight: 800
+        - asset: assets/fonts/Inter-Black.ttf
+          weight: 900
 
 # Ícono de la app.
 #

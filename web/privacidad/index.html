@@ -304,13 +304,25 @@
 
 <h3>Notificaciones</h3>
 <p>
-  Si activás las notificaciones, Google le asigna a esa instalación de la app un
-  identificador y lo guardamos para poder avisarte de tus pedidos. No lleva
-  datos sensibles adentro: te dice que algo pasó, no qué compraste.
+  Si activás las notificaciones, Firebase —de Google— le asigna a esa
+  instalación de la app un identificador, y lo guardamos junto a tu cuenta para
+  poder avisarte de tus pedidos.
+</p>
+<p>
+  <strong>El permiso se pide después de tu primera compra</strong>, no al abrir
+  la app: es el momento en que un aviso significa algo concreto. Podés decir que
+  no y seguir usando todo igual.
+</p>
+<p>
+  Lo que mandamos adentro del aviso es lo mínimo: que algo pasó y de qué pedido.
+  <strong>Nunca el importe, ni tu dirección, ni el código de entrega</strong> —
+  un aviso se lee en una pantalla bloqueada que puede estar sobre una mesa.
 </p>
 <p class="sutil">
-  Hoy la app todavía no registra ese identificador, así que en la práctica no
-  estamos enviando notificaciones push.
+  El identificador se borra cuando cerrás sesión, para que quien use ese
+  teléfono después no reciba tus avisos, y también al cerrar la cuenta. Si
+  desinstalás la app, Google lo invalida y nosotros lo descartamos en el primer
+  envío fallido.
 </p>
 
 <h2>4 · Qué NO hacemos</h2>
@@ -350,6 +362,11 @@
       <td><strong>Apple</strong><br><span class="sutil">Inicio de sesión</span></td>
       <td>Verificar tu identidad al entrar</td>
       <td>Nada nuestro. Apple nos da un identificador y, si lo permitís, tu correo.</td>
+    </tr>
+    <tr>
+      <td><strong>Firebase</strong><br><span class="sutil">Google · notificaciones</span></td>
+      <td>Entregar los avisos de tus pedidos al teléfono</td>
+      <td>El identificador de esa instalación de la app, y el texto del aviso. Nunca importes, direcciones ni el código de entrega.</td>
     </tr>
     <tr>
       <td><strong>LiveKit</strong><br><span class="sutil">Transporte del vivo</span></td>
