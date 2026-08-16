@@ -13,6 +13,7 @@ import {
 } from '@/modules/orders/shipping';
 import { AuditService } from '@/shared/audit/audit.service';
 import { exigirHabilitada } from '@/shared/config/banderas';
+import { DomainEvent, DomainEventBus } from '@/shared/events/domain-events';
 import {
   StorageProvider,
   validarImagen,
@@ -75,6 +76,7 @@ export class StoresService {
     private readonly audit: AuditService,
     private readonly notifications: NotificationsService,
     private readonly storage: StorageProvider,
+    private readonly events: DomainEventBus,
   ) {}
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -393,6 +395,19 @@ export class StoresService {
           },
         }),
       ]);
+
+      /**
+       * ⚠️ Se publica DESPUÉS de la transacción, no adentro.
+       *
+       * La restricción única sobre (orden) es lo que impide reseñar dos veces:
+       * si la transacción falla por eso, no se llega hasta acá y no se avisa.
+       * Publicarlo adentro avisaría de una reseña que después se deshizo.
+       */
+      this.events.publish(DomainEvent.reviewCreated, {
+        entityId: resena.id,
+        actorId: userId,
+        data: { sellerUserId: orden.seller.userId, sellerId: orden.sellerId },
+      });
 
       return {
         id: resena.id,

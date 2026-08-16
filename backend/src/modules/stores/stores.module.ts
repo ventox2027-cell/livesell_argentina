@@ -4,6 +4,8 @@ import { AuditService } from '@/shared/audit/audit.service';
 
 import { ReaperturasService } from './reaperturas.service';
 import { StoresController } from './stores.controller';
+import { DomainEventBus } from '@/shared/events/domain-events';
+
 import { StoresService } from './stores.service';
 
 /**
@@ -15,7 +17,7 @@ import { StoresService } from './stores.service';
  */
 @Module({
   controllers: [StoresController],
-  providers: [StoresService, ReaperturasService, AuditService],
+  providers: [StoresService, ReaperturasService, AuditService, DomainEventBus],
   exports: [StoresService, ReaperturasService],
 })
 export class StoresModule {}

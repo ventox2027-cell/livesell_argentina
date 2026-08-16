@@ -99,6 +99,15 @@ export const DomainEvent = {
   paymentUnknown: 'payment.unknown',
   paymentReconciled: 'payment.reconciled',
 
+  /**
+   * Alguien dejó una reseña sobre una compra.
+   *
+   * Lo escucha `VentasListener` para avisarle al vendedor. Va como evento y no
+   * como una llamada directa desde `resenar()` por lo mismo que el resto: el
+   * módulo de tiendas no tiene por qué saber que existen las notificaciones.
+   */
+  reviewCreated: 'review.created',
+
   refundStarted: 'refund.started',
   refundCompleted: 'refund.completed',
   refundFailed: 'refund.failed',

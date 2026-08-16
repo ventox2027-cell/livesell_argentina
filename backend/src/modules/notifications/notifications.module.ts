@@ -3,6 +3,7 @@ import { Global, Module } from '@nestjs/common';
 import { NotificationsController } from './notifications.controller';
 import { NotificationsDispatcher } from './notifications.dispatcher';
 import { NotificationsService } from './notifications.service';
+import { VentasListener } from './ventas.listener';
 import { PushDeFirebase } from './push-firebase.provider';
 import { PushDeConsola, PushProvider } from './push.provider';
 
@@ -68,6 +69,15 @@ import { PushDeConsola, PushProvider } from './push.provider';
         firebase.disponible ? firebase : consola,
       inject: [PushDeFirebase, PushDeConsola],
     },
+
+    /**
+     * Los avisos de la venta: orden, pago y reseña.
+     *
+     * Va acá y no en cada servicio del camino del dinero porque ese camino no
+     * tiene por qué saber que existen las notificaciones. Los eventos ya se
+     * publicaban esperando suscriptor; éste es el suscriptor.
+     */
+    VentasListener,
   ],
   exports: [NotificationsService],
 })

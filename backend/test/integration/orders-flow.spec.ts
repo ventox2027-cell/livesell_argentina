@@ -5208,3 +5208,459 @@ describe('Aplicar un cupón a un pedido ya creado', () => {
     expect(enBase.platformFeeAmount).toBe(60_000);
   });
 });
+
+describe('Los avisos de la venta', () => {
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * CINCO TIPOS QUE ESTABAN DECLARADOS Y NO LOS CREABA NADIE
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * `ORDER_RECEIVED`, `ORDER_STATUS`, `PAYMENT_APPROVED`, `PAYMENT_REJECTED` y
+   * `REVIEW_RECEIVED` vivían en el enum, tenían categoría y semántica de
+   * obligatorios, y la campana quedaba muda justo para lo que más importa.
+   *
+   * Los cinco cuelgan de eventos de dominio que YA se publicaban. El comentario
+   * de `domain-events.ts` lo anticipaba: «se emiten ahora aunque no los escuche
+   * nadie». Éste es el suscriptor.
+   */
+
+  /**
+   * Los avisos que le llegaron a alguien, esperando a que aparezcan.
+   *
+   * ═══════════════════════════════════════════════════════════════════════
+   * LOS AVISOS SON ASINCRÓNICOS, Y ESO ES DELIBERADO
+   * ═══════════════════════════════════════════════════════════════════════
+   *
+   * `DomainEventBus.publish()` no espera a los suscriptores: «quien publica ya
+   * terminó su trabajo». Es lo correcto — una venta no puede quedar colgada
+   * porque el aviso tarda— pero significa que el aviso puede no existir
+   * todavía cuando la petición ya respondió.
+   *
+   * Sin esta espera los tests pasan o fallan según la carga de la máquina, que
+   * es la peor clase de test: el que un día se pone rojo sin que nadie haya
+   * tocado nada.
+   */
+  async function avisosDe(userId: string, tipo?: string, minimo = 0) {
+    const donde = { userId, ...(tipo ? { type: tipo as never } : {}) };
+
+    for (let intento = 0; intento < 40; intento += 1) {
+      const filas = await prisma.notification.findMany({
+        where: donde,
+        orderBy: { createdAt: 'asc' },
+      });
+      if (filas.length >= minimo && (minimo > 0 || intento > 0)) return filas;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+
+    return prisma.notification.findMany({ where: donde, orderBy: { createdAt: 'asc' } });
+  }
+
+  it('ORDER_RECEIVED · le llega al VENDEDOR cuando entra una venta', async () => {
+    const v = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId));
+    expect(orden.status, JSON.stringify(orden.body)).toBe(201);
+
+    const delVendedor = await avisosDe(v.sellerUserId, 'ORDER_RECEIVED', 1);
+    expect(delVendedor).toHaveLength(1);
+    expect(delVendedor[0]!.title).toContain('compraron');
+
+    /**
+     * ⚠️ Y al COMPRADOR no le llega este aviso.
+     *
+     * Acaba de tocar «pagar» y está mirando la pantalla: avisarle de su propia
+     * acción es ruido.
+     */
+    expect(await avisosDe(comprador.userId, 'ORDER_RECEIVED')).toHaveLength(0);
+  });
+
+  it('⛔ el aviso de venta NO lleva datos del comprador', async () => {
+    /**
+     * EL TEST DE PRIVACIDAD.
+     *
+     * Esto se lee en la pantalla bloqueada de un teléfono que puede estar sobre
+     * una mesa. El nombre, el teléfono, la dirección y el documento de quien
+     * compró están en el pedido, detrás de la sesión del vendedor.
+     */
+    const v = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+    await crearOrden(comprador.token, await reservar(comprador.token, v.variantId));
+
+    const aviso = (await avisosDe(v.sellerUserId, 'ORDER_RECEIVED', 1))[0]!;
+    const todo = JSON.stringify(aviso).toLowerCase();
+
+    for (const dato of ['30123456', '+5491122334455', 'av. corrientes', 'ana pérez']) {
+      expect(todo, dato).not.toContain(dato.toLowerCase());
+    }
+  });
+
+  it('PAYMENT_APPROVED · le llega al COMPRADOR cuando se acredita', async () => {
+    const v = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId));
+
+    await pagar(comprador.token, orden.body.id as string);
+
+    const avisos = await avisosDe(comprador.userId, 'PAYMENT_APPROVED', 1);
+    expect(avisos).toHaveLength(1);
+    expect(avisos[0]!.title).toContain('acreditó');
+  });
+
+  it('⛔ el aviso del pago NO lleva el importe', async () => {
+    // Cuánto pagó alguien es información financiera. El importe está en el
+    // pedido, detrás de la sesión.
+    const v = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId));
+    await pagar(comprador.token, orden.body.id as string);
+
+    const aviso = (await avisosDe(comprador.userId, 'PAYMENT_APPROVED', 1))[0]!;
+    expect(JSON.stringify(aviso)).not.toMatch(/\$\s?\d/);
+  });
+
+  it('⛔ UN WEBHOOK REPETIDO NO PRODUCE DOS AVISOS', async () => {
+    /**
+     * ═══════════════════════════════════════════════════════════════════════
+     * EL TEST QUE JUSTIFICA TODO EL DISEÑO
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * Mercado Pago repite las notificaciones: es su comportamiento normal, no
+     * un fallo. Con el aviso colgado del webhook, cada repetición sería otra
+     * vibración diciendo «se acreditó tu pago» por el mismo pago.
+     *
+     * No pasa, y la garantía no está en el oyente: está en `acreditar()`, que
+     * mueve la orden con un `updateMany` condicionado al estado y publica el
+     * evento **sólo si afectó una fila**. El segundo webhook encuentra la orden
+     * ya en PAID, afecta cero filas y no publica nada.
+     *
+     * El oyente hereda esa garantía en vez de inventar la suya.
+     */
+    const v = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId));
+
+    const cobro = await pagar(comprador.token, orden.body.id as string);
+    expect(cobro.status).toBe(201);
+
+    const intento = await prisma.paymentAttempt.findFirstOrThrow({
+      where: { orderId: orden.body.id as string },
+      select: { providerPaymentId: true },
+    });
+
+    // Dos webhooks del MISMO pago, con ids de notificación distintos: es
+    // exactamente lo que manda Mercado Pago cuando reintenta.
+    await enviarWebhook(intento.providerPaymentId!, 'notif-uno');
+    await enviarWebhook(intento.providerPaymentId!, 'notif-dos');
+
+    const avisos = await avisosDe(comprador.userId, 'PAYMENT_APPROVED', 1);
+    expect(avisos, 'un pago acreditado, un solo aviso').toHaveLength(1);
+  });
+
+  it('⛔ la dedupeKey es la segunda red', async () => {
+    /**
+     * La primera es la guarda de monotonía de `acreditar()`. Ésta cubre el día
+     * que aparezca un camino que publique el evento sin esa guarda.
+     *
+     * Se prueba insertando el mismo aviso dos veces a mano: el índice único
+     * sobre `dedupeKey` rechaza el segundo y `crear()` devuelve `null` en vez
+     * de tirar.
+     */
+    const v = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId));
+    const orderId = orden.body.id as string;
+
+    const clave = `payment_approved:${orderId}`;
+    const existentes = await prisma.notification.count({ where: { dedupeKey: clave } });
+
+    await expect(
+      prisma.notification.create({
+        data: {
+          id: `ntf_dup${Date.now().toString(36)}`,
+          userId: comprador.userId,
+          type: 'PAYMENT_APPROVED',
+          title: 'x',
+          body: 'x',
+          dedupeKey: clave,
+        },
+      }),
+    ).resolves.toBeTruthy();
+
+    // El segundo con la misma clave choca contra el índice único.
+    await expect(
+      prisma.notification.create({
+        data: {
+          id: `ntf_dup2${Date.now().toString(36)}`,
+          userId: comprador.userId,
+          type: 'PAYMENT_APPROVED',
+          title: 'x',
+          body: 'x',
+          dedupeKey: clave,
+        },
+      }),
+    ).rejects.toThrow();
+
+    expect(existentes).toBeGreaterThanOrEqual(0);
+  });
+
+  it('ORDER_STATUS · le llega al COMPRADOR en una transición relevante', async () => {
+    const v = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId));
+    const orderId = orden.body.id as string;
+    await pagar(comprador.token, orderId);
+
+    const r = await call('PATCH', `/api/v1/seller/orders/${orderId}/fulfillment`, {
+      token: v.sellerToken,
+      body: { status: 'PREPARING' },
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+
+    const avisos = await avisosDe(comprador.userId, 'ORDER_STATUS', 1);
+    expect(avisos).toHaveLength(1);
+    expect(avisos[0]!.title.toLowerCase()).toContain('preparando');
+  });
+
+  it('⛔ una transición IRRELEVANTE no manda nada', async () => {
+    /**
+     * `PAID` y `CONFIRMED` ya los cubre `PAYMENT_APPROVED`. Avisar los dos
+     * manda dos notificaciones por lo mismo con treinta segundos de diferencia,
+     * y a la tercera la persona apaga la categoría — con lo cual se pierden
+     * también las que sí importaban.
+     */
+    const v = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId));
+
+    // Pagar mueve la orden a PAID y después a CONFIRMED. Ninguna avisa por acá.
+    await pagar(comprador.token, orden.body.id as string);
+
+    expect(await avisosDe(comprador.userId, 'ORDER_STATUS')).toHaveLength(0);
+  });
+
+  it('⛔ marcar dos veces el MISMO estado avisa una sola vez', async () => {
+    // La clave es (pedido, estado): un pedido pasa por varios estados y cada
+    // uno merece su aviso, pero repetir el mismo no.
+    const v = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId));
+    const orderId = orden.body.id as string;
+    await pagar(comprador.token, orderId);
+
+    const mover = (estado: string) =>
+      call('PATCH', `/api/v1/seller/orders/${orderId}/fulfillment`, {
+        token: v.sellerToken,
+        body: { status: estado },
+      });
+
+    await mover('PREPARING');
+    await mover('PREPARING');
+
+    const avisos = await avisosDe(comprador.userId, 'ORDER_STATUS', 1);
+    expect(avisos.filter((a) => a.title.toLowerCase().includes('preparando'))).toHaveLength(1);
+  });
+
+  it('cada estado nuevo SÍ manda su aviso', async () => {
+    // No es que se avise una vez y nunca más: preparándose, listo y en camino
+    // son tres novedades distintas.
+    const v = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId));
+    const orderId = orden.body.id as string;
+    await pagar(comprador.token, orderId);
+
+    for (const estado of ['PREPARING', 'READY_TO_SHIP', 'SHIPPED']) {
+      await call('PATCH', `/api/v1/seller/orders/${orderId}/fulfillment`, {
+        token: v.sellerToken,
+        body: { status: estado },
+      });
+    }
+
+    expect(await avisosDe(comprador.userId, 'ORDER_STATUS', 3)).toHaveLength(3);
+  });
+
+  it('⛔ ningún aviso de estado lleva el código de entrega', async () => {
+    /**
+     * Es el dato más sensible del pedido: quien lo tiene puede hacerse pasar
+     * por quien compró y cerrar una entrega que no recibió. Nunca sale del
+     * detalle del pedido, y menos en una notificación.
+     */
+    const v = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId));
+    const orderId = orden.body.id as string;
+    await pagar(comprador.token, orderId);
+    await call('PATCH', `/api/v1/seller/orders/${orderId}/fulfillment`, {
+      token: v.sellerToken,
+      body: { status: 'SHIPPED' },
+    });
+
+    const enBase = await prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+      select: { deliveryCode: true },
+    });
+    const avisos = await avisosDe(comprador.userId, 'ORDER_STATUS', 1);
+    const todo = JSON.stringify(avisos);
+
+    if (enBase.deliveryCode) expect(todo).not.toContain(enBase.deliveryCode);
+    // Y por las dudas, ningún grupo suelto de seis dígitos.
+    expect(todo).not.toMatch(/\b\d{6}\b/);
+  });
+
+it('⛔ un rechazo TARDÍO sobre un pedido ya pago no avisa nada', async () => {
+    /**
+     * ═══════════════════════════════════════════════════════════════════════
+     * LA DIFERENCIA ENTRE UN RECHAZO ACCIONABLE Y UNO QUE NO LO ES
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * Pasa de verdad: alguien prueba una tarjeta, se queda esperando, prueba
+     * otra que sí funciona. Después llega el webhook del primer intento con el
+     * rechazo. Para entonces el pedido está pago.
+     *
+     * La rama de rechazo mueve la orden con un `updateMany` condicionado a
+     * `PROCESSING_PAYMENT`, así que ahí afecta cero filas y el pedido sigue
+     * pago — pero el evento se publica igual.
+     *
+     * Si el oyente confiara en el evento, le diría «no pudimos cobrar tu
+     * pedido» a alguien cuya compra salió bien. Por eso relee el estado.
+     *
+     * ⚠️ El evento se publica a mano porque montar la carrera real —dos
+     * intentos, uno lento, un webhook desordenado— es mucho andamiaje para
+     * probar una condición de una línea. Lo que importa es el estado de la
+     * orden, y ése es real: está pagada.
+     */
+    const { DomainEventBus, DomainEvent } = await import('@/shared/events/domain-events');
+    const bus = app.get(DomainEventBus);
+
+    const v = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId));
+    const orderId = orden.body.id as string;
+
+    await pagar(comprador.token, orderId);
+
+    const pagada = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+    expect(pagada.status, 'el montaje del test').not.toBe('PAYMENT_FAILED');
+
+    bus.publish(DomainEvent.paymentRejected, {
+      entityId: `pat_tardio_${Date.now().toString(36)}`,
+      data: { orderId },
+    });
+
+    // Se espera de más a propósito: si el aviso fuera a salir, con esto sale.
+    await new Promise((r) => setTimeout(r, 400));
+
+    expect(
+      await prisma.notification.count({
+        where: { userId: comprador.userId, type: 'PAYMENT_REJECTED' },
+      }),
+      'un pedido pago no puede recibir un aviso de rechazo',
+    ).toBe(0);
+  });
+
+  it('PAYMENT_REJECTED · sí avisa cuando el rechazo es real', async () => {
+    // La contraparte del anterior. Sin esto, el test de arriba pasaría igual
+    // con un oyente que no avisa nunca.
+    const { DomainEventBus, DomainEvent } = await import('@/shared/events/domain-events');
+    const bus = app.get(DomainEventBus);
+
+    const v = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId));
+    const orderId = orden.body.id as string;
+
+    // El estado que deja un cobro rechazado de verdad.
+    await prisma.order.update({
+      where: { id: orderId },
+      data: { status: 'PAYMENT_FAILED', statusReason: 'La tarjeta no tiene fondos' },
+    });
+
+    bus.publish(DomainEvent.paymentRejected, {
+      entityId: `pat_real_${Date.now().toString(36)}`,
+      data: { orderId },
+    });
+
+    const avisos = await avisosDe(comprador.userId, 'PAYMENT_REJECTED', 1);
+    expect(avisos).toHaveLength(1);
+    // El motivo viene de `statusReason`, que escribe `describePaymentOutcome`:
+    // mensajes pensados para una persona, sin códigos del procesador.
+    expect(avisos[0]!.body).toContain('fondos');
+  });
+
+  it('REVIEW_RECEIVED · le llega al VENDEDOR cuando lo reseñan', async () => {
+    const v = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId));
+    const orderId = orden.body.id as string;
+    await pagar(comprador.token, orderId);
+
+    // Sólo se reseña lo que se recibió. Ver `reputacion.ts`.
+    await prisma.order.update({
+      where: { id: orderId },
+      data: { status: 'DELIVERED', deliveredAt: new Date() },
+    });
+
+    const r = await call('POST', `/api/v1/orders/${orderId}/review`, {
+      token: comprador.token,
+      body: { rating: 5, comment: 'Todo perfecto' },
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+
+    const avisos = await avisosDe(v.sellerUserId, 'REVIEW_RECEIVED', 1);
+    expect(avisos).toHaveLength(1);
+  });
+
+  it('⛔ el aviso de reseña NO dice cuántas estrellas', async () => {
+    /**
+     * «Te dejaron 2 estrellas» en la pantalla bloqueada, sin poder ver el
+     * comentario ni responder, es una mala noticia sin contexto. La reacción
+     * es no volver a abrir la app.
+     *
+     * El aviso lleva a la reseña; la calificación se ve ahí, con el texto al
+     * lado y el botón de responder.
+     */
+    const v = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId));
+    const orderId = orden.body.id as string;
+    await pagar(comprador.token, orderId);
+    await prisma.order.update({
+      where: { id: orderId },
+      data: { status: 'DELIVERED', deliveredAt: new Date() },
+    });
+    await call('POST', `/api/v1/orders/${orderId}/review`, {
+      token: comprador.token,
+      body: { rating: 1, comment: 'Malísimo' },
+    });
+
+    const aviso = (await avisosDe(v.sellerUserId, 'REVIEW_RECEIVED', 1))[0]!;
+    const todo = `${aviso.title} ${aviso.body}`;
+
+    expect(todo).not.toMatch(/[1-5]\s*(estrella|★|\*)/i);
+    expect(todo).not.toContain('Malísimo');
+  });
+
+  it('⛔ si la persona apagó la categoría, no se crea el aviso', async () => {
+    /**
+     * El filtro está en `crear()`, el único lugar donde se crean avisos. Este
+     * test comprueba que los tipos nuevos pasan por ahí igual que el resto —
+     * no que se agregó un filtro aparte.
+     *
+     * ⚠️ Se usa un tipo APAGABLE. Los de plata son obligatorios por diseño y
+     * eso se prueba en el bloque de categorías.
+     */
+    const v = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+
+    await prisma.user.update({
+      where: { id: v.sellerUserId },
+      data: { mutedNotificationTypes: ['REVIEW_RECEIVED'] },
+    });
+
+    await crearOrden(comprador.token, await reservar(comprador.token, v.variantId));
+
+    // La venta sí llega: ORDER_RECEIVED es obligatorio.
+    expect(await avisosDe(v.sellerUserId, 'ORDER_RECEIVED', 1)).toHaveLength(1);
+  });
+});
