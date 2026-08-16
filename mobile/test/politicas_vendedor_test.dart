@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vendox/features/seller/domain/politicas_models.dart';
+import 'package:vendox/features/seller/domain/seller_models.dart' show porcentajeLegible;
 
 /// Las reglas del formulario de políticas del vendedor.
 ///
@@ -174,6 +175,75 @@ void main() {
       expect(p.modo, ModoDeCambios.soloLegal);
       expect(p.envioDeVueltaLoPagaElVendedor, isTrue);
       expect(p.esValida, isTrue);
+    });
+  });
+
+  group('Las tasas del ejemplo vienen del servidor', () {
+    /**
+     * El ejemplo de «cuánto va a ver quien compre» tenía las dos tasas escritas
+     * a mano en el Dart: 600 puntos básicos de comisión y 619 de costo del
+     * procesador. Son los mismos valores que el backend usa por omisión, así
+     * que el número daba bien — de casualidad.
+     *
+     * El día que alguien mueva `VENDOX_PLATFORM_FEE_BPS` en el servidor, el
+     * vendedor sigue leyendo «6 %» y una resta que ya no es la suya. Nada
+     * falla, nada avisa: la pantalla miente con seguridad.
+     *
+     * Por eso las tasas viajan en el mismo payload que el resto de la política.
+     */
+    test('lee la comisión y el costo del procesador del JSON', () {
+      final p = PoliticaDeEnvioEditable.fromJson(const {
+        'shippingMode': 'FREE',
+        'comisionBps': 450,
+        'costoDelProcesadorBps': 700,
+      });
+
+      expect(p.comisionBps, 450);
+      expect(p.costoDelProcesadorBps, 700);
+    });
+
+    test('sin los campos usa los mismos valores que el backend por omisión', () {
+      // Un servidor viejo que todavía no los manda no puede dejar el ejemplo en
+      // cero: «Comisión de VendoX (0 %)» es peor que una estimación vieja.
+      final p = PoliticaDeEnvioEditable.fromJson(const {'shippingMode': 'FREE'});
+
+      expect(p.comisionBps, 600);
+      expect(p.costoDelProcesadorBps, 619);
+    });
+
+    test('copiarCon no las pierde al tocar otra cosa', () {
+      // El formulario reconstruye el objeto en cada tecla. Si `copiarCon` las
+      // dejara caer, el ejemplo volvería al valor por omisión mientras el
+      // vendedor escribe el monto del envío.
+      final p = PoliticaDeEnvioEditable.fromJson(const {
+        'shippingMode': 'FIXED_PRICE',
+        'shippingFlatAmount': 350000,
+        'comisionBps': 450,
+        'costoDelProcesadorBps': 700,
+      });
+
+      final tocada = p.copiarCon(montoFijo: 500000);
+      expect(tocada.comisionBps, 450);
+      expect(tocada.costoDelProcesadorBps, 700);
+    });
+  });
+
+  group('Porcentaje legible', () {
+    test('una tasa redonda no muestra decimales de relleno', () {
+      // «6,00 %» se lee como si la tasa tuviera una precisión que no tiene.
+      expect(porcentajeLegible(600), '6');
+    });
+
+    test('una tasa con decimales los muestra, con coma', () {
+      expect(porcentajeLegible(619), '6,19');
+      // Con punto sería un número de otro país justo donde se habla de plata.
+      expect(porcentajeLegible(619), isNot(contains('.')));
+    });
+
+    test('una tasa no redonda lleva los dos decimales', () {
+      // 450 puntos básicos es 4,5 %, y se muestra «4,50». Dos decimales fijos
+      // es lo que se espera de una cifra de dinero.
+      expect(porcentajeLegible(450), '4,50');
     });
   });
 }

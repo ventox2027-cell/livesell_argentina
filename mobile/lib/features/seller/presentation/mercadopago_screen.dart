@@ -7,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../../core/design/tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../auth/state/auth_providers.dart';
+import '../domain/seller_models.dart';
 
 /// Conectar la cuenta de Mercado Pago del vendedor.
 ///
@@ -340,9 +341,7 @@ class _ComoFunciona extends StatelessWidget {
   Widget build(BuildContext context) {
     // 600 bps = 6 %. Se muestra el número que manda el servidor, no uno escrito
     // acá: el día que cambie, la pantalla no puede seguir prometiendo el viejo.
-    final porcentaje = (comisionBps / 100).toStringAsFixed(
-      comisionBps % 100 == 0 ? 0 : 2,
-    );
+    final porcentaje = porcentajeLegible(comisionBps);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,

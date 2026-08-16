@@ -64,6 +64,8 @@ class PoliticaDeEnvioEditable {
     required this.trasladaCostoDelProcesador,
     this.nota,
     this.recargoDisponible = false,
+    this.comisionBps = 600,
+    this.costoDelProcesadorBps = 619,
   });
 
   factory PoliticaDeEnvioEditable.fromJson(Map<String, dynamic> j) => PoliticaDeEnvioEditable(
@@ -72,6 +74,8 @@ class PoliticaDeEnvioEditable {
         nota: j['shippingNote'] as String?,
         trasladaCostoDelProcesador: j['processorFeeMode'] == 'PASSED_TO_BUYER',
         recargoDisponible: j['recargoAlCompradorDisponible'] as bool? ?? false,
+        comisionBps: (j['comisionBps'] as num?)?.toInt() ?? 600,
+        costoDelProcesadorBps: (j['costoDelProcesadorBps'] as num?)?.toInt() ?? 619,
       );
 
   final ModoDeEnvio modo;
@@ -94,6 +98,20 @@ class PoliticaDeEnvioEditable {
   /// encontrarse con que desaparecio.
   final bool recargoDisponible;
 
+  /// La comisión de VendoX, en puntos básicos. 600 = 6 %.
+  ///
+  /// Viene del servidor, no escrita a mano acá: es el número con el que la
+  /// pantalla arma el ejemplo, y si el servidor cambia su tasa el ejemplo tiene
+  /// que cambiar con él. El valor por omisión es el mismo que el del backend y
+  /// existe sólo para el caso en que el campo no venga.
+  final int comisionBps;
+
+  /// Estimación del costo de Mercado Pago, en puntos básicos.
+  ///
+  /// Es aproximada y la pantalla lo aclara: la tasa real la informan ellos
+  /// después de cobrar y depende del plazo de acreditación y del medio de pago.
+  final int costoDelProcesadorBps;
+
   PoliticaDeEnvioEditable copiarCon({
     ModoDeEnvio? modo,
     int? montoFijo,
@@ -109,6 +127,8 @@ class PoliticaDeEnvioEditable {
         nota: nota ?? this.nota,
         trasladaCostoDelProcesador: trasladaCostoDelProcesador ?? this.trasladaCostoDelProcesador,
         recargoDisponible: recargoDisponible,
+        comisionBps: comisionBps,
+        costoDelProcesadorBps: costoDelProcesadorBps,
       );
 
   /// ¿Se puede guardar tal como está?

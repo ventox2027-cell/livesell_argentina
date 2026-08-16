@@ -323,6 +323,15 @@ String formatearPesos(int centavos) {
   return '${centavos < 0 ? '-' : ''}\$ $buffer,$decimales';
 }
 
+/// Puntos básicos como porcentaje legible, sin el signo. `600` → `"6"`.
+///
+/// Una tasa redonda va sin decimales: «6 %» y no «6,00 %», que se lee como si
+/// tuviera una precisión que no tiene. Una que no es redonda va con dos, aunque
+/// el segundo sea cero — 450 puntos básicos se muestra «4,50 %». Es plata: dos
+/// decimales fijos es lo que la gente espera ver.
+String porcentajeLegible(int bps) =>
+    (bps / 100).toStringAsFixed(bps % 100 == 0 ? 0 : 2).replaceAll('.', ',');
+
 /// Convierte lo que la persona escribe en centavos.
 ///
 /// Acepta `12500`, `12.500`, `12500,50` y `$ 12.500,50`. Devuelve `null` si no

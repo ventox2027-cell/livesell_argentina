@@ -3,6 +3,7 @@ import { type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { env } from '@/config/env.schema';
 import { CategoriasService } from '@/modules/commerce/categorias.service';
 import type { PrismaService } from '@/shared/prisma/prisma.service';
 import type { RedisService } from '@/shared/redis/redis.service';
@@ -3877,6 +3878,48 @@ describe('El embudo del vendedor', () => {
       expect(r.status, JSON.stringify(r.body)).toBe(200);
       expect(r.body.productId).toBe(v.productId);
       expect(r.body.embudo).not.toBeNull();
+    });
+  });
+
+  describe('Las tasas que la app necesita para estimar', () => {
+    /**
+     * La pantalla de políticas le muestra al vendedor cuánto va a ver quien
+     * compre, y lo recalcula mientras mueve el monto del envío. Ese cálculo lo
+     * hace la app, sin ir al servidor en cada tecla.
+     *
+     * Las OPERACIONES se copian —no hay forma de evitarlo— pero las TASAS no:
+     * estaban escritas a mano en el Dart, 600 y 619, los mismos valores que hay
+     * acá por omisión. Daban bien de casualidad. Mover
+     * `VENDOX_PLATFORM_FEE_BPS` en el servidor dejaba al vendedor leyendo una
+     * comisión que ya no era la suya, sin que nada fallara.
+     *
+     * Este test existe para que sacar los campos del payload rompa algo.
+     */
+    it('la política de envío incluye la comisión y el costo del procesador', async () => {
+      const v = await nuevoVendedor();
+
+      const r = await call('PATCH', `/api/v1/stores/${v.store.id}/shipping`, {
+        token: v.token,
+        body: { shippingMode: 'FREE', processorFeeMode: 'ABSORBED' },
+      });
+
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+      expect(r.body.comisionBps).toBe(env.VENDOX_PLATFORM_FEE_BPS);
+      expect(r.body.costoDelProcesadorBps).toBe(env.PROCESSOR_FEE_ESTIMATE_BPS);
+    });
+
+    it('son números, no textos con el signo adentro', async () => {
+      // La app divide por 100 y multiplica. Un "6 %" que llegue como texto se
+      // convierte en NaN y el ejemplo muestra un guión donde va la plata.
+      const v = await nuevoVendedor();
+
+      const r = await call('PATCH', `/api/v1/stores/${v.store.id}/shipping`, {
+        token: v.token,
+        body: { shippingMode: 'FREE', processorFeeMode: 'ABSORBED' },
+      });
+
+      expect(Number.isInteger(r.body.comisionBps)).toBe(true);
+      expect(Number.isInteger(r.body.costoDelProcesadorBps)).toBe(true);
     });
   });
 });

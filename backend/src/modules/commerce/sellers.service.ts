@@ -372,6 +372,24 @@ export class SellersService {
        * efecto el día que se encienda `BUYER_PROCESSOR_SURCHARGE_ENABLED`.
        */
       recargoAlCompradorDisponible: env.BUYER_PROCESSOR_SURCHARGE_ENABLED,
+      /**
+       * Las dos tasas que la pantalla de políticas necesita para estimar.
+       *
+       * Estaban escritas a mano en el Dart —600 y 619, los mismos números que
+       * hay acá por omisión— así que el ejemplo daba bien de casualidad. El día
+       * que alguien cambie `VENDOX_PLATFORM_FEE_BPS` en el servidor, el
+       * vendedor sigue viendo «6 %» y una resta que ya no es la suya, sin que
+       * nada falle ni avise.
+       *
+       * Van derivadas por el mismo motivo que las de arriba: la app no
+       * reimplementa reglas.
+       *
+       * `costoDelProcesadorBps` es una ESTIMACIÓN y la pantalla lo dice. La
+       * tasa real la informa Mercado Pago después de cobrar y depende del
+       * plazo de acreditación y del medio de pago.
+       */
+      comisionBps: env.VENDOX_PLATFORM_FEE_BPS,
+      costoDelProcesadorBps: env.PROCESSOR_FEE_ESTIMATE_BPS,
     };
   }
 

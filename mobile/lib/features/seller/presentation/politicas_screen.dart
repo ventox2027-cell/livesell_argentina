@@ -6,7 +6,7 @@ import '../../../core/design/tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../data/politicas_api.dart';
 import '../domain/politicas_models.dart';
-import '../domain/seller_models.dart' show formatearPesos;
+import '../domain/seller_models.dart' show formatearPesos, porcentajeLegible;
 
 /// Envío y devoluciones, del lado del vendedor.
 ///
@@ -253,8 +253,13 @@ class _Ejemplo extends StatelessWidget {
   final PoliticaDeEnvioEditable envio;
   final int precio;
 
-  /// La misma estimación que usa el backend por omisión.
-  static const _bpsProcesador = 619;
+  /// Redondeo al centavo, igual que `porcentajeDe` en el backend.
+  ///
+  /// El `+ 5000` antes de dividir por 10000 es medio punto básico: hace que
+  /// 0,5 suba en vez de perderse. Copiar la operación es inevitable —el
+  /// ejemplo se recalcula mientras el vendedor mueve el monto, sin ir al
+  /// servidor— pero las TASAS no se copian, vienen de `envio`.
+  static int _porcentajeDe(int monto, int bps) => (monto * bps + 5000) ~/ 10000;
 
   @override
   Widget build(BuildContext context) {
@@ -265,7 +270,7 @@ class _Ejemplo extends StatelessWidget {
     // mostrara un recargo que el pedido real no va a tener, el vendedor
     // configuraría su tienda mirando un número falso.
     final recargo = envio.recargoDisponible && envio.trasladaCostoDelProcesador
-        ? ((base * _bpsProcesador + 5000) ~/ 10000)
+        ? _porcentajeDe(base, envio.costoDelProcesadorBps)
         : 0;
 
     return Container(
@@ -292,11 +297,11 @@ class _Ejemplo extends StatelessWidget {
           ),
           _LineaEjemplo('Paga quien compra', formatearPesos(base + recargo), fuerte: true),
           _LineaEjemplo(
-            'Comisión de VendoX (6 %)',
+            'Comisión de VendoX (${porcentajeLegible(envio.comisionBps)} %)',
             // Sobre el producto, no sobre el total: el envío es plata que vos le
             // entregás al correo, y cobrarte comisión sobre eso sería cobrarte
             // por gastar.
-            '-${formatearPesos((precio * 600 + 5000) ~/ 10000)}',
+            '-${formatearPesos(_porcentajeDe(precio, envio.comisionBps))}',
           ),
           const SizedBox(height: Gap.sm),
           const Text(
