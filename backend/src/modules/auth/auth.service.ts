@@ -681,6 +681,55 @@ export class AuthService {
           deletedAt: new Date(),
         },
       });
+
+      /**
+       * El perfil de vendedor se cierra y se despersonaliza.
+       *
+       * ═══════════════════════════════════════════════════════════════════════
+       * SE ANONIMIZABA `User` Y SE DEJABA `Seller` PUBLICADO
+       * ═══════════════════════════════════════════════════════════════════════
+       *
+       * El perfil de vendedor es otra fila, con su propio `displayName`, su
+       * `bio` y su `avatarUrl` —que casi siempre es una foto de la persona—.
+       * `publicBySlug` filtra por `status: 'ACTIVE'` y nada ponía ese estado en
+       * otra cosa.
+       *
+       * O sea: alguien ejercía su derecho a que lo borren, y su nombre y su
+       * cara seguían online en vendox.com.ar con los productos a la venta.
+       *
+       * El estado ya existía en el enum sin que nadie lo escribiera nunca:
+       * `CLOSED`, «cerrado por decisión propia». Eso es lo que lo delata como
+       * un olvido y no como una decisión.
+       *
+       * ─── Por qué también el texto y no sólo el estado ───
+       *
+       * Cambiar el estado saca la tienda de las consultas públicas, pero deja
+       * el nombre y la foto en la base y en cualquier respuesta de admin. El
+       * `slug` **no** se toca: es la clave por la que se resuelven los enlaces
+       * ya compartidos, y liberarlo dejaría que otra persona se quede con la
+       * dirección de una tienda que existió.
+       */
+      await tx.seller.updateMany({
+        where: { userId },
+        data: {
+          status: 'CLOSED',
+          displayName: 'Cuenta eliminada',
+          bio: null,
+          avatarUrl: null,
+        },
+      });
+
+      /**
+       * Y las tiendas se cierran con él.
+       *
+       * Una tienda ACTIVE de un vendedor CLOSED sería un producto comprable sin
+       * nadie del otro lado. Se cierra la tienda, no se borra: las órdenes
+       * viejas apuntan acá y tienen que seguir resolviendo.
+       */
+      await tx.store.updateMany({
+        where: { seller: { userId } },
+        data: { status: 'CLOSED' },
+      });
     });
 
     this.logger.log({ msg: 'cuenta cerrada', userId });

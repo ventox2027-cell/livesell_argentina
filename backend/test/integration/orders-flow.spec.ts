@@ -1390,7 +1390,9 @@ describe('⛔ IDOR', () => {
     const r = await call('GET', '/api/v1/addresses', { token });
     expect(r.status, JSON.stringify(r.body)).toBe(200);
     const lista = (r.body.items ?? r.body) as Array<{ id: string }>;
-    return lista[0].id;
+    const primera = lista[0];
+    if (!primera) throw new Error('el comprador tendría que tener una dirección');
+    return primera.id;
   }
 
   it('⛔ nadie modifica la dirección de otro', async () => {

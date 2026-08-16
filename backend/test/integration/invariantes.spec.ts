@@ -777,6 +777,93 @@ describe('Los invariantes de VendoX', () => {
       const quedan = await prisma.recentlyViewed.count({ where: { userId: persona.userId } });
       expect(quedan).toBe(0);
     });
+
+    it('18c · Un vendedor que cierra la cuenta deja de tener tienda pública', async () => {
+      /**
+       * ═══════════════════════════════════════════════════════════════════════
+       * SE ANONIMIZABA `User` Y SE DEJABA `Seller` PUBLICADO
+       * ═══════════════════════════════════════════════════════════════════════
+       *
+       * Cerrar la cuenta anonimiza la fila del usuario, pero el perfil de
+       * vendedor es OTRA fila, con su propio `displayName`, su `bio` y su
+       * `avatarUrl` —que en la mayoría de los casos es una foto de la persona—.
+       * `publicBySlug` filtra por `status: 'ACTIVE'`, y nada ponía ese estado
+       * en otra cosa.
+       *
+       * Resultado: alguien ejercía su derecho a que lo borren, y su nombre y su
+       * cara seguían online en vendox.com.ar/t/su-tienda, con los productos
+       * publicados y comprables.
+       *
+       * El enum `SellerStatus` ya tenía el estado para esto —`CLOSED`, «cerrado
+       * por decisión propia»— sin que nadie lo escribiera nunca. Eso es lo que
+       * lo delata como olvido y no como decisión.
+       */
+      const t = await tiendaConProducto();
+
+      const slug = (
+        await prisma.seller.findUniqueOrThrow({
+          where: { id: t.sellerId },
+          select: { slug: true },
+        })
+      ).slug;
+
+      // Antes de cerrar, la tienda se ve.
+      expect((await call('GET', `/api/v1/sellers/by-slug/${slug}`)).status).toBe(200);
+
+      expect(
+        (await call('DELETE', '/api/v1/auth/me', { token: t.sellerToken })).status,
+      ).toBe(200);
+
+      // Después, no.
+      expect((await call('GET', `/api/v1/sellers/by-slug/${slug}`)).status).toBe(404);
+
+      const vendedor = await prisma.seller.findUniqueOrThrow({ where: { id: t.sellerId } });
+      expect(vendedor.status).toBe('CLOSED');
+      // Y el nombre y la foto también, no sólo el estado: cambiar el estado
+      // saca la tienda de las consultas públicas pero deja los datos en la
+      // base y en cualquier respuesta de admin.
+      expect(vendedor.displayName).toBe('Cuenta eliminada');
+      expect(vendedor.avatarUrl).toBeNull();
+      expect(vendedor.bio).toBeNull();
+
+      /**
+       * Ninguna tienda ACTIVE debajo de un vendedor CLOSED.
+       *
+       * Hoy las dos consultas públicas miran el estado del VENDEDOR, así que
+       * cerrar la tienda es redundante — se comprobó: quitar ese `updateMany`
+       * deja los tests en verde. Se afirma igual, contra la base, porque lo que
+       * se está fijando es el invariante y no el efecto visible: la próxima
+       * consulta que filtre sólo por `store.status` no puede encontrar una
+       * tienda abierta de alguien que se fue.
+       */
+      const tiendasAbiertas = await prisma.store.count({
+        where: { sellerId: t.sellerId, status: 'ACTIVE' },
+      });
+      expect(tiendasAbiertas).toBe(0);
+    });
+
+    it('18d · Y sus productos dejan de estar a la venta', async () => {
+      // Una tienda invisible con productos comprables por enlace directo sería
+      // peor que no haber cerrado nada: alguien pagaría por algo que no tiene
+      // vendedor del otro lado.
+      const t = await tiendaConProducto();
+      const tienda = await prisma.store.findUniqueOrThrow({
+        where: { id: t.storeId },
+        select: { slug: true },
+      });
+
+      // La vidriera es pública: no hace falta token, que es justo el problema.
+      const antes = await call('GET', `/api/v1/stores/by-slug/${tienda.slug}/products`);
+      expect(antes.status, JSON.stringify(antes.body)).toBe(200);
+      expect(antes.body.items.length).toBeGreaterThan(0);
+
+      expect(
+        (await call('DELETE', '/api/v1/auth/me', { token: t.sellerToken })).status,
+      ).toBe(200);
+
+      expect((await call('GET', `/api/v1/stores/by-slug/${tienda.slug}/products`)).status).toBe(404);
+      expect((await call('GET', `/api/v1/stores/by-slug/${tienda.slug}`)).status).toBe(404);
+    });
   });
 
   describe('Moderación', () => {
