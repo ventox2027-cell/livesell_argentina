@@ -5724,6 +5724,78 @@ it('⛔ un rechazo TARDÍO sobre un pedido ya pago no avisa nada', async () => {
     expect(despues.status).not.toBe('PAYMENT_FAILED');
   });
 
+  it('⛔ un aprobado DUPLICADO no resucita un pedido devuelto', async () => {
+    /**
+     * ═══════════════════════════════════════════════════════════════════════
+     * MERCADO PAGO REINTENTA EL WEBHOOK DURANTE HORAS
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * Para entonces el pedido puede haber recorrido todo el camino: se acreditó,
+     * no había stock, se devolvió la plata. Y llega otra copia del `approved`.
+     *
+     * `acreditar` tiene su guarda de monotonía y afecta cero filas — pero
+     * después llama a `confirmarInventario` FUERA del `if (count > 0)`. Ése es
+     * el camino por el que un webhook viejo vuelve a tocar un pedido cerrado.
+     *
+     * Si llegara hasta el final, el pedido devuelto pasaría a `CONFIRMED`: el
+     * vendedor vería una venta que tiene que despachar, de plata que ya se
+     * devolvió.
+     *
+     * ─── Lo frenan DOS capas, y este test prueba el par ───
+     *
+     * Una es el retorno temprano de `confirmarInventario` —«si no está en
+     * PAID, no sigas»—; la otra es la condición `status: 'PAID'` del
+     * `updateMany` de `marcarConfirmada`.
+     *
+     * Se midió: quitar cualquiera de las dos por separado deja este test en
+     * verde, porque la otra alcanza. Quitar las dos lo hace fallar. Así que lo
+     * que queda anclado no es una línea sino el comportamiento, que es lo que
+     * importa — y la redundancia queda documentada en vez de parecer un
+     * descuido.
+     */
+    const { OrderPaymentsService } = await import('@/modules/orders/payments.service');
+    const pagos = app.get(OrderPaymentsService);
+
+    const v = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId));
+    const orderId = orden.body.id as string;
+
+    await pagar(comprador.token, orderId);
+
+    const intento = await prisma.paymentAttempt.findFirstOrThrow({
+      where: { orderId },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    /**
+     * Se lleva el pedido a `REFUNDED` por la base y no por el flujo completo.
+     *
+     * Recorrerlo de verdad —agotar el stock entre la acreditación y la
+     * confirmación, esperar la devolución— es mucho andamiaje para probar una
+     * condición de una línea. Lo que este test necesita es un pedido en un
+     * estado terminal, y ése es exacto.
+     */
+    await prisma.order.update({
+      where: { id: orderId },
+      data: { status: 'REFUNDED', refundedAt: new Date() },
+    });
+
+    await pagos.aplicarResultado(
+      intento.id,
+      {
+        id: intento.providerPaymentId ?? `mp_dup_${Date.now().toString(36)}`,
+        status: 'approved',
+        approvedAt: new Date().toISOString(),
+        raw: {},
+      },
+      'webhook',
+    );
+
+    const despues = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+    expect(despues.status, 'un pedido devuelto no vuelve a estar vendido').toBe('REFUNDED');
+  });
+
   it('PAYMENT_REJECTED · sí avisa cuando el rechazo es real', async () => {
     // La contraparte del anterior. Sin esto, el test de arriba pasaría igual
     // con un oyente que no avisa nunca.
