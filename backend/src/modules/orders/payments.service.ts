@@ -14,6 +14,7 @@ import { PrismaService } from '@/shared/prisma/prisma.service';
 import { newId } from '@/shared/utils/id';
 
 import { admitePago, mapearEstadoMp } from './order-state';
+import { netoConCostoDeProcesador, type Precio } from './pricing';
 import {
   PaymentProvider,
   ProviderPaymentNotFoundError,
@@ -962,11 +963,27 @@ export class OrderPaymentsService {
     });
     if (orden.paymentProcessorFeeAmount == null) return;
 
+    /**
+     * ⚠️ Se usa `netoConCostoDeProcesador` y no la resta escrita a mano.
+     *
+     * Estaba duplicada: la fórmula vivía acá en línea Y en `pricing.ts`, donde
+     * la cubren los tests. O sea que lo probado no era lo que corría — cambiar
+     * la función dejaba los tests en verde y la producción con la cuenta
+     * vieja.
+     *
+     * Las dos daban el mismo número, así que no había un error de plata. Lo
+     * que había era una prueba que no protegía nada.
+     */
     await this.prisma.order.update({
       where: { id: orderId },
       data: {
-        sellerNetAmount:
-          orden.grossAmount - orden.platformFeeAmount - orden.paymentProcessorFeeAmount,
+        sellerNetAmount: netoConCostoDeProcesador(
+          {
+            grossAmount: orden.grossAmount,
+            platformFeeAmount: orden.platformFeeAmount,
+          } as Precio,
+          orden.paymentProcessorFeeAmount,
+        ),
       },
     });
   }
