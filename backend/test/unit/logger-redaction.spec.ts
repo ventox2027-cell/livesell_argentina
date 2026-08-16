@@ -68,6 +68,30 @@ describe('redacción de logs', () => {
     expect(out).not.toContain('30111222');
   });
 
+  it('⛔ tapa el DNI con el nombre que le da NUESTRO esquema', () => {
+    /**
+     * `docNumber` es el nombre de Mercado Pago. La columna propia se llama
+     * `documentNumber`, y no estaba en la lista: el documento quedaba tapado
+     * cuando venía del proveedor y expuesto cuando venía de nuestra base, que
+     * es justo la que lo tiene completo.
+     *
+     * El camino concreto es `shipping_address`, el objeto que cada orden
+     * guarda con el documento de quien compra adentro.
+     */
+    const { logger, salida } = capturar();
+    logger.info({
+      msg: 'orden creada',
+      direccion: { documentType: 'DNI', documentNumber: '30123456' },
+      orden: { shippingAddress: { documentType: 'DNI', documentNumber: '27987654' } },
+    });
+
+    const out = salida();
+    expect(out).not.toContain('30123456');
+    expect(out).not.toContain('27987654');
+    // El tipo sí se ve: sirve para depurar y no identifica a nadie.
+    expect(out).toContain('DNI');
+  });
+
   it('⛔ tapa las credenciales del almacenamiento', () => {
     /**
      * El código nunca registra estas credenciales a propósito. El riesgo real

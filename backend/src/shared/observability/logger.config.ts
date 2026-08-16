@@ -29,6 +29,25 @@ export const REDACT_PATHS = [
   '*.phoneE164',
 
   /**
+   * El DNI, con el nombre que le da NUESTRO esquema.
+   *
+   * `docNumber` de arriba es el nombre que usa Mercado Pago. La columna propia
+   * se llama `documentNumber`, y no estaba tapada — así que la lista protegía
+   * el documento cuando venía del proveedor y lo dejaba pasar cuando venía de
+   * nuestra base, que es la que lo tiene completo.
+   *
+   * El camino concreto: `direccionParaEnviar` arma el objeto que se guarda en
+   * `shipping_address` de cada orden, con el documento adentro. Cualquier
+   * `logger.debug(orden)` lo volcaría entero.
+   *
+   * También se tapa la ruta anidada de ese objeto, porque el comodín matchea
+   * un solo nivel y ahí el documento viaja dos abajo. Ver la nota del final.
+   */
+  '*.documentNumber',
+  'orden.shippingAddress.documentNumber',
+  'order.shippingAddress.documentNumber',
+
+  /**
    * El código de entrega.
    *
    * Es lo único que impide que un vendedor marque entregado un pedido que no
