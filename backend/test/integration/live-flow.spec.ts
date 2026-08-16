@@ -973,4 +973,72 @@ describe('Bloquear a un vendedor lo saca del listado de vivos', () => {
     await call('DELETE', `/api/v1/blocks/seller/${vendedor.sellerId}`, { token: espectador.token });
     expect(await vivosQueVe(espectador.token)).toContain(vendedor.liveId);
   });
+
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * SANCIONAR A UN VENDEDOR NO LE CORTABA LA TRANSMISIÓN
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * El bloqueo de arriba es de una persona a otra: «no me muestres esta
+   * tienda». Esto es distinto — es la plataforma sacando a alguien.
+   *
+   * `cambiarEstadoVendedor` pausa las tiendas, pero `activos()` no miraba el
+   * estado del vendedor. O sea: un vendedor bloqueado POR FRAUDE, en el
+   * segundo siguiente a la sanción, seguía en el feed de todo el mundo,
+   * vendiendo. La sanción le pausaba el catálogo y le dejaba el micrófono.
+   *
+   * El mismo agujero deja en el feed a quien cerró su cuenta mientras
+   * transmitía, ahora con el cartel «Cuenta eliminada» encima.
+   */
+  async function sancionar(sellerId: string, estado: 'SUSPENDED' | 'BLOCKED') {
+    const admin = await nuevoUsuario();
+    await prisma.user.update({ where: { id: admin.userId }, data: { role: 'admin' } });
+    const ruta = estado === 'SUSPENDED' ? 'suspend' : 'block';
+    const r = await call('POST', `/api/v1/admin/sellers/${sellerId}/${ruta}`, {
+      token: admin.token,
+      body: { reason: 'sancionado durante la auditoría de preproducción' },
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+  }
+
+  it('⛔ el vivo de un vendedor SUSPENDIDO desaparece del feed', async () => {
+    const vendedor = await vendedorTransmitiendo();
+    const espectador = await nuevoUsuario();
+
+    expect(await vivosQueVe(espectador.token)).toContain(vendedor.liveId);
+
+    await sancionar(vendedor.sellerId, 'SUSPENDED');
+
+    expect(await vivosQueVe(espectador.token)).not.toContain(vendedor.liveId);
+  });
+
+  it('⛔ el de uno BLOQUEADO por fraude, también', async () => {
+    const vendedor = await vendedorTransmitiendo();
+    const espectador = await nuevoUsuario();
+
+    await sancionar(vendedor.sellerId, 'BLOCKED');
+
+    expect(await vivosQueVe(espectador.token)).not.toContain(vendedor.liveId);
+  });
+
+  it('⛔ y el de quien cerró su cuenta en medio del vivo', async () => {
+    const vendedor = await vendedorTransmitiendo();
+    const espectador = await nuevoUsuario();
+
+    expect(
+      (await call('DELETE', '/api/v1/auth/me', { token: vendedor.token })).status,
+    ).toBe(200);
+
+    expect(await vivosQueVe(espectador.token)).not.toContain(vendedor.liveId);
+  });
+
+  it('el vivo de un vendedor en regla sigue apareciendo', async () => {
+    // El contrapeso: si el filtro nuevo fuera demasiado estricto —por ejemplo
+    // exigiendo un estado que casi nadie tiene— vaciaría el feed y los tests
+    // de arriba pasarían igual, porque todos afirman ausencias.
+    const vendedor = await vendedorTransmitiendo();
+    const espectador = await nuevoUsuario();
+
+    expect(await vivosQueVe(espectador.token)).toContain(vendedor.liveId);
+  });
 });

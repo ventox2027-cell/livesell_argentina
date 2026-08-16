@@ -901,10 +901,33 @@ export class LiveService {
     const sesiones = await this.prisma.liveSession.findMany({
       where: {
         state: { in: ['LIVE', 'RECONNECTING'] },
-        // El filtro va en el WHERE y no en un `.filter()` posterior: filtrar
-        // después rompe la paginación —se piden veinte y llegan diecisiete— y
-        // acá el tope es `take`.
-        ...(bloqueados.length > 0 ? { seller: { userId: { notIn: bloqueados } } } : {}),
+        /**
+         * Sólo vendedores en regla.
+         *
+         * ═══════════════════════════════════════════════════════════════════
+         * SANCIONAR NO LE CORTABA LA TRANSMISIÓN
+         * ═══════════════════════════════════════════════════════════════════
+         *
+         * `cambiarEstadoVendedor` pausa las tiendas del sancionado, pero acá
+         * no se miraba su estado. Un vendedor bloqueado POR FRAUDE seguía en
+         * el feed de todo el mundo en el segundo siguiente a la sanción: se
+         * le pausaba el catálogo y se le dejaba el micrófono.
+         *
+         * El mismo agujero dejaba al aire a quien cerró su cuenta mientras
+         * transmitía, ahora con el cartel «Cuenta eliminada» encima.
+         *
+         * No hace falta cortar la sesión en LiveKit para esto: sacarla del
+         * listado la vuelve inalcanzable desde la app, y la sesión termina
+         * sola por el camino de siempre.
+         *
+         * El filtro va en el WHERE y no en un `.filter()` posterior: filtrar
+         * después rompe la paginación —se piden veinte y llegan diecisiete— y
+         * acá el tope es `take`.
+         */
+        seller: {
+          status: 'ACTIVE',
+          ...(bloqueados.length > 0 ? { userId: { notIn: bloqueados } } : {}),
+        },
       },
       orderBy: { startedAt: 'desc' },
       take: limite,
