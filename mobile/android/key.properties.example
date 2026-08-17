@@ -7,15 +7,14 @@
 #   1. Copiar este archivo a `android/key.properties`
 #   2. Completar las dos contraseñas
 #   3. Comprobar que git no lo ve:
-#        git check-ignore -v android/key.properties
+#        git check-ignore -v mobile/android/key.properties
 #
-# Sin `key.properties`, la release se firma con la clave de DEPURACIÓN y el
-# binario no sirve para Play. Es a propósito: un clon del repositorio tiene que
-# poder compilar sin la clave de nadie.
+# Sin `key.properties`, o con un campo vacío, **la release no compila**: aborta
+# con un mensaje que dice qué falta. El debug sigue compilando sin nada, que es
+# lo que un clon del repositorio necesita de verdad.
 #
-# El costo de esa decisión es que un olvido produce un AAB mal firmado en vez
-# de un error de compilación. Por eso verificar con `apksigner` antes de subir
-# no es opcional.
+# Antes caía a la clave de depuración en silencio, y el problema aparecía recién
+# al mirar el binario con `apksigner` — o peor, al recibir el rechazo de Play.
 #
 # ════════════════════════════════════════════════════════════════════════════
 # ⚠️ EL .jks VA FUERA DEL REPOSITORIO
@@ -28,6 +27,15 @@
 #
 # Las contraseñas van en un gestor de contraseñas, no en un archivo de texto al
 # lado del .jks.
+#
+# ════════════════════════════════════════════════════════════════════════════
+# DESPUÉS DE COMPILAR, VERIFICAR
+# ════════════════════════════════════════════════════════════════════════════
+#
+#   apksigner verify --print-certs build/app/outputs/flutter-apk/app-release.apk
+#
+# Tiene que decir el DN de la clave de subida. Si dice
+# `CN=Android Debug, O=Android, C=US`, el binario no sirve para Play.
 
 storeFile=C:/VendoX-Secrets/Android/vendox-upload.jks
 storePassword=

@@ -1,4 +1,5 @@
 import java.util.Properties
+import java.io.File
 import java.io.FileInputStream
 
 plugins {
@@ -25,23 +26,111 @@ plugins {
  * pedirle a todo el mundo que la instale de cero.
  *
  * ════════════════════════════════════════════════════════════════════════════
- * SIN EL ARCHIVO, LA COMPILACIÓN NO FALLA
+ * SIN EL ARCHIVO, LA RELEASE **FALLA**
  * ════════════════════════════════════════════════════════════════════════════
  *
- * Cae a la clave de depuración. Es deliberado: un clon del repositorio tiene
- * que poder compilar una release para inspeccionarla, y quien no va a publicar
- * no necesita la clave de nadie.
+ * Antes caía a la clave de depuración en silencio. La intención era buena —un
+ * clon del repositorio tiene que poder compilar sin la clave de nadie— pero el
+ * resultado fue el que se ve venir: se compiló un APK de release firmado con
+ * debug, se instaló en un teléfono, y el problema recién apareció cuando
+ * alguien lo miró con `apksigner`. Un AAB así subido a Play se rechaza, y en el
+ * mejor de los casos se pierde el viaje.
  *
- * El costo es que un olvido produce un AAB firmado con debug en vez de un
- * error. Por eso el paso de verificación con `apksigner` no es opcional — está
- * en el runbook, y es lo primero que hay que mirar antes de subir.
+ * Ahora la release aborta con un mensaje que dice qué archivo falta. El debug
+ * sigue compilando sin nada, que es lo que el clon necesita de verdad.
+ *
+ * ─── Y si igual querés una release firmada con debug ───
+ *
+ * Existe, pero hay que pedirlo en voz alta:
+ *
+ *     flutter build apk --release --android-project-arg=firmaDebugAdrede=true
+ *     ./gradlew assembleRelease -PfirmaDebugAdrede=true
+ *
+ * Sirve para inspeccionar el binario o medir el tamaño sin tener la clave. Al
+ * ser explícito no puede pasar por accidente, que es la única propiedad que le
+ * pedimos.
  */
 val propiedadesDeFirma = Properties()
 val archivoDeFirma = rootProject.file("key.properties")
 if (archivoDeFirma.exists()) {
     propiedadesDeFirma.load(FileInputStream(archivoDeFirma))
 }
-val hayClaveDeSubida = propiedadesDeFirma.getProperty("storeFile") != null
+
+/**
+ * Qué le falta a la configuración de firma para servir.
+ *
+ * Devuelve la lista de problemas, vacía si está todo. Se revisa campo por campo
+ * en vez de mirar sólo si el archivo existe: un `key.properties` con la
+ * contraseña en blanco —porque se copió la plantilla y se completó a medias—
+ * hoy pasaba el control y reventaba mucho después, con un error de Gradle que
+ * no dice qué pasó.
+ */
+val problemasDeFirma: List<String> = when {
+    !archivoDeFirma.exists() -> listOf("no existe ${archivoDeFirma.absolutePath}")
+    else -> buildList {
+        for (campo in listOf("storeFile", "storePassword", "keyAlias", "keyPassword")) {
+            if (propiedadesDeFirma.getProperty(campo).isNullOrBlank()) {
+                add("falta `$campo` en key.properties")
+            }
+        }
+        val ruta = propiedadesDeFirma.getProperty("storeFile")
+        if (!ruta.isNullOrBlank() && !File(ruta).exists()) {
+            add("`storeFile` apunta a un archivo que no está: $ruta")
+        }
+    }
+}
+
+val hayClaveDeSubida = problemasDeFirma.isEmpty()
+
+/** La escotilla explícita. Ver el comentario de arriba. */
+val firmaDebugAdrede = project.findProperty("firmaDebugAdrede") == "true"
+
+/**
+ * El portón: una release sin clave no llega a producir un archivo.
+ *
+ * Va en el grafo de tareas y no en la configuración porque Gradle configura
+ * TODOS los tipos de compilación siempre. Fallar acá arriba rompería
+ * `assembleDebug`, el sync del IDE y `flutter test` — todo lo que no tiene
+ * nada que ver con firmar.
+ *
+ * El grafo, en cambio, sabe qué se está por construir de verdad.
+ */
+gradle.taskGraph.whenReady {
+    val vaAConstruirRelease = allTasks.any { tarea ->
+        tarea.project == project &&
+            Regex("^(assemble|bundle|package).*Release$").matches(tarea.name)
+    }
+
+    if (!vaAConstruirRelease || hayClaveDeSubida) return@whenReady
+
+    if (firmaDebugAdrede) {
+        logger.warn(
+            "\n⚠️  Release firmada con la clave de DEPURACIÓN, a pedido " +
+                "(-PfirmaDebugAdrede=true).\n" +
+                "    Este binario NO sirve para Play Console.\n",
+        )
+        return@whenReady
+    }
+
+    throw GradleException(
+        buildString {
+            append("\n\n")
+            append("No se puede firmar la release.\n\n")
+            problemasDeFirma.forEach { append("  · $it\n") }
+            append("\nQué hacer:\n\n")
+            append("  1. Copiar android/key.properties.example a android/key.properties\n")
+            append("  2. Completar storeFile, storePassword, keyAlias y keyPassword\n")
+            append("  3. Comprobar que git no lo ve:\n")
+            append("       git check-ignore -v mobile/android/key.properties\n\n")
+            append("El archivo queda fuera del repositorio y las contraseñas van en un\n")
+            append("gestor de contraseñas, nunca en el repo ni en una variable de CI en\n")
+            append("texto plano.\n\n")
+            append("Si de verdad querés una release firmada con debug —para inspeccionar\n")
+            append("el binario, no para publicar— pedila explícitamente:\n\n")
+            append("  flutter build apk --release --android-project-arg=firmaDebugAdrede=true\n\n")
+        },
+    )
+}
 
 android {
     /**
@@ -101,19 +190,25 @@ android {
 
     buildTypes {
         release {
-            // ⚠️ FIRMADO CON LA CLAVE DE DEBUG.
-            //
-            // Sirve para instalar en teléfonos propios y nada más. Antes de
-            // publicar hay que generar una clave propia y guardarla donde no se
-            // pierda: si se pierde, NO se puede volver a publicar una
-            // actualización de la app. Nunca. Hay que subir una app nueva y
-            // pedirle a todo el mundo que la instale de cero.
-            //
-            // Al cambiarla también cambia la huella SHA-1, así que hay que
-            // agregar un cliente de OAuth de Android nuevo en Google Cloud.
-            // Con  presente, la de subida. Sin él, debug.
-            // Verificar SIEMPRE con  antes de subir: un olvido
-            // produce un AAB firmado con debug en vez de un error.
+            /**
+             * Con `key.properties` válido, la clave de subida. Sin él, debug —
+             * pero esa rama ya no llega a producir nada: el portón del grafo de
+             * tareas aborta la compilación antes. Ver arriba.
+             *
+             * Queda asignada igual porque la CONFIGURACIÓN tiene que ser válida
+             * aunque no haya clave: el sync del IDE y `assembleDebug` pasan por
+             * acá, y dejar el campo en null los rompería.
+             *
+             * ⚠️ Si la clave de subida se pierde, NO se puede volver a publicar
+             * una actualización de la app. Nunca. Google no la reemplaza: hay
+             * que subir una app nueva, con otro id, y pedirle a todo el mundo
+             * que la instale de cero.
+             *
+             * Al cambiar la clave también cambia la huella SHA-1, así que hay
+             * que registrar el cliente de OAuth de Android nuevo en Google
+             * Cloud y agregar la huella en Firebase, o Google Sign-In deja de
+             * funcionar.
+             */
             signingConfig =
                 if (hayClaveDeSubida) signingConfigs.getByName("upload")
                 else signingConfigs.getByName("debug")
