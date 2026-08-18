@@ -64,9 +64,18 @@ async function bootstrap(): Promise<void> {
   // `configurarPrefijoYVersionado`.
   configurarPrefijoYVersionado(app);
 
-  // La app móvil no usa CORS. Solo el futuro Admin Lite.
+  /**
+   * La app móvil NO usa CORS: es un cliente nativo y el navegador no está en el
+   * medio. Esto es sólo para el Admin, que sí corre en un navegador.
+   *
+   * ⚠️ El dominio decía `livesell.ar`, heredado de cuando el proyecto se
+   * llamaba así. No rompía nada todavía —el APK no pasa por CORS y las páginas
+   * de `web/` son estáticas y no llaman a la API— pero es una lista de permitidos
+   * apuntando a un dominio que no es nuestro, y habría bloqueado al Admin el
+   * día que se despliegue, con un error que en el navegador no dice «CORS».
+   */
   app.enableCors({
-    origin: isLocalEnv(env.NODE_ENV) ? true : [/\.livesell\.ar$/],
+    origin: isLocalEnv(env.NODE_ENV) ? true : [/\.vendox\.com\.ar$/],
     credentials: true,
     allowedHeaders: ['content-type', 'authorization', 'x-spike-key', 'x-request-id'],
   });

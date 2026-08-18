@@ -113,6 +113,25 @@ const ESTRATEGIAS: Record<DeploymentProvider, Estrategia> = {
   ibm_code_engine: {
     porQue: 'sin cabecera propietaria: X-Forwarded-For se resuelve contando saltos',
   },
+
+  /**
+   * Railway pone un proxy propio delante de cada servicio y, como Render e IBM,
+   * documenta `X-Forwarded-For` sin publicar una cabecera propietaria que su
+   * borde sobrescriba.
+   *
+   * ⚠️ Railway **sí** manda `X-Envoy-External-Address`, y es tentador usarla
+   * porque trae una sola IP ya resuelta. No se usa: no está documentada como
+   * garantía del borde, y una cabecera que el proxy *agregue* en vez de
+   * sobrescribir se puede falsificar desde afuera. Leerla tendría más prioridad
+   * que el conteo de saltos y reabriría el problema entero por comodidad.
+   *
+   * Con el conteo de saltos —`TRUSTED_PROXY_HOPS=1`, que es lo que agrega el
+   * borde de Railway— la IP sale bien y no depende de nada que se pueda
+   * inventar desde afuera.
+   */
+  railway: {
+    porQue: 'sin cabecera propietaria confiable: X-Forwarded-For se resuelve contando saltos',
+  },
 };
 
 /**

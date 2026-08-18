@@ -1182,6 +1182,61 @@ export const envSchema = z
     path: ['TRUSTED_PROXY_HOPS'],
   })
   /**
+   * `PUBLIC_BASE_URL` no puede quedarse en una dirección de desarrollo.
+   *
+   * ═══════════════════════════════════════════════════════════════════════════
+   * ESTE ES EL ÚNICO CAMPO CUYO DEFAULT SIRVE EN LOCAL Y ROMPE EN PRODUCCIÓN
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * `DATABASE_URL` exige `sslmode`, `REDIS_URL` exige `rediss://`, `PORT` tiene
+   * que venir de la plataforma y `STORAGE_DRIVER` no puede ser `local`. Todas
+   * esas reglas existen. Ésta faltaba, y es la que más silenciosamente falla:
+   * el servidor arranca perfecto, contesta todo, y las fotos apuntan a una
+   * dirección que sólo existe en la máquina de quien lo configuró.
+   *
+   * Pasó de verdad. Varias fotos quedaron apuntando a un túnel de Cloudflare
+   * ya cerrado y las tarjetas de «Mi tienda» salían en gris. Nada falló ni
+   * avisó: el valor era una URL válida, simplemente no era alcanzable desde
+   * ningún teléfono.
+   *
+   * Se rechaza lo que no puede resolver un dispositivo cualquiera: `localhost`,
+   * la IP de loopback, las redes privadas —una IP de LAN funciona en casa y en
+   * ningún otro lado— y los túneles efímeros de desarrollo.
+   */
+  .refine(
+    (e) => {
+      if (esEntornoLocal(e.NODE_ENV)) return true;
+      const host = (() => {
+        try {
+          return new URL(e.PUBLIC_BASE_URL).hostname;
+        } catch {
+          return '';
+        }
+      })();
+      const inalcanzable =
+        host === 'localhost' ||
+        host === '127.0.0.1' ||
+        host === '0.0.0.0' ||
+        host === '10.0.2.2' ||
+        /^10\./.test(host) ||
+        /^192\.168\./.test(host) ||
+        /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+        host.endsWith('.trycloudflare.com') ||
+        host.endsWith('.ngrok.io') ||
+        host.endsWith('.ngrok-free.app') ||
+        host.endsWith('.loca.lt');
+      return !inalcanzable;
+    },
+    {
+      message:
+        'PUBLIC_BASE_URL apunta a una dirección que sólo existe en la máquina de desarrollo ' +
+        '(localhost, una IP de red privada o un túnel efímero). Es la URL con la que se arman ' +
+        'los enlaces de las imágenes: con este valor las fotos no cargan en ningún teléfono. ' +
+        'Poner el dominio público del backend, por ejemplo https://api.vendox.com.ar.',
+      path: ['PUBLIC_BASE_URL'],
+    },
+  )
+  /**
    * El proveedor tiene que estar declarado fuera de local.
    *
    * Quedar en `local` en un despliegue real significa que la IP saldría del

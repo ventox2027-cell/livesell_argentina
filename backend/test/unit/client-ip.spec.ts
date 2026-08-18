@@ -47,6 +47,7 @@ describe('ClientIpResolver', () => {
     ['fly', 1],
     ['render', 1],
     ['ibm_code_engine', 1],
+    ['railway', 1],
   ])('%s (detrás de un proxy)', (proveedor, saltos) => {
     it('con el cliente mintiendo y el proxy agregando detrás, toma la del proxy', async () => {
       /**

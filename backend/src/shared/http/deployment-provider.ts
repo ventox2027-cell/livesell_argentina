@@ -10,6 +10,6 @@
  * `client-ip.ts` que documente qué hace su borde con las cabeceras, no sumar
  * una cadena acá. Ver ahí por qué esa disciplina importa.
  */
-export const PROVEEDORES = ['local', 'fly', 'render', 'ibm_code_engine'] as const;
+export const PROVEEDORES = ['local', 'fly', 'render', 'ibm_code_engine', 'railway'] as const;
 
 export type DeploymentProvider = (typeof PROVEEDORES)[number];

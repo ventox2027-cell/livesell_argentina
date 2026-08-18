@@ -47,6 +47,9 @@ const VALID_STAGING = {
    * Se apaga en la base para que los tests de OTRAS reglas no fallen por ésta;
    * la regla en sí se prueba abajo, en su propio bloque.
    */
+  // La URL pública del backend. Sin esto el default es localhost, que fuera
+  // de local se rechaza: es la regla que se prueba abajo.
+  PUBLIC_BASE_URL: 'https://api.vendox.com.ar',
   PUSH_ENABLED: 'false',
 };
 
@@ -668,5 +671,77 @@ describe('Las huellas de firma de Android', () => {
     const otra = PLAY.split(':').reverse().join(':');
     const r = envSchema.safeParse({ ...VALID, ANDROID_CERT_SHA256: `${PLAY} , ${otra}` });
     expect(r.success).toBe(true);
+  });
+});
+
+describe('PUBLIC_BASE_URL fuera de local', () => {
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * EL ÚNICO DEFAULT QUE SIRVE EN LOCAL Y ROMPE EN PRODUCCIÓN EN SILENCIO
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * Es la URL con la que se arman los enlaces de las imágenes. Con un valor de
+   * desarrollo el servidor arranca perfecto, contesta todo, y las fotos apuntan
+   * a una dirección que no existe fuera de la máquina de quien lo configuró.
+   *
+   * Pasó: varias fotos quedaron apuntando a un túnel de Cloudflare ya cerrado y
+   * las tarjetas de «Mi tienda» salían en gris, sin un solo error en ningún
+   * log.
+   */
+  const rechazadas = [
+    ['el default de desarrollo', 'http://localhost:3100'],
+    ['loopback', 'http://127.0.0.1:3100'],
+    ['el alias del emulador de Android', 'http://10.0.2.2:3100'],
+    ['una IP de LAN', 'http://192.168.0.14:3100'],
+    ['otra red privada', 'http://10.1.2.3:3100'],
+    ['un túnel de Cloudflare', 'https://algo-random.trycloudflare.com'],
+    ['un túnel de ngrok', 'https://algo.ngrok-free.app'],
+  ] as const;
+
+  for (const [queEs, url] of rechazadas) {
+    it(`⛔ rechaza ${queEs}`, () => {
+      const r = envSchema.safeParse({ ...VALID_STAGING, PUBLIC_BASE_URL: url });
+
+      expect(r.success, `${url} tendría que rechazarse`).toBe(false);
+      if (!r.success) {
+        expect(r.error.issues.some((i) => i.path.includes('PUBLIC_BASE_URL'))).toBe(true);
+      }
+    });
+  }
+
+  it('acepta un dominio público de verdad', () => {
+    // La contraparte. Sin esto, una regla que rechazara todo pasaría los siete
+    // tests de arriba y nadie podría desplegar.
+    for (const url of [
+      'https://api.vendox.com.ar',
+      'https://vendox-backend-production.up.railway.app',
+    ]) {
+      expect(
+        envSchema.safeParse({ ...VALID_STAGING, PUBLIC_BASE_URL: url }).success,
+        url,
+      ).toBe(true);
+    }
+  });
+
+  it('en local el default sigue sirviendo', () => {
+    // Un clon del repositorio tiene que poder arrancar sin configurar nada.
+    expect(envSchema.safeParse({ ...VALID }).success).toBe(true);
+  });
+});
+
+describe('Railway como proveedor de despliegue', () => {
+  it('se acepta', () => {
+    // Sin esto el contenedor no arranca: `DEPLOYMENT_PROVIDER` es obligatorio
+    // fuera de local y su lista es cerrada a propósito.
+    const r = envSchema.safeParse({ ...VALID_STAGING, DEPLOYMENT_PROVIDER: 'railway' });
+    expect(r.success, JSON.stringify(r.success ? '' : r.error.issues)).toBe(true);
+  });
+
+  it('⛔ un proveedor inventado se sigue rechazando', () => {
+    // La lista cerrada es la garantía: cada proveedor tiene que documentar qué
+    // hace su borde con las cabeceras. Ver `client-ip.ts`.
+    expect(
+      envSchema.safeParse({ ...VALID_STAGING, DEPLOYMENT_PROVIDER: 'heroku' }).success,
+    ).toBe(false);
   });
 });
