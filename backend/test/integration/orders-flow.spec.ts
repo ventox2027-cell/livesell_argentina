@@ -58,7 +58,7 @@ const TEST_ENV = {
   INVENTORY_EXPIRATION_QUEUE_ENABLED: 'false',
   ORDERS_RECONCILER_ENABLED: 'false',
   INVENTORY_RESERVATION_TTL_SECONDS: '300',
-  VENDOX_PLATFORM_FEE_BPS: '600',
+  VENDOX_PLATFORM_FEE_BPS: '400',
   ORDER_EXPIRATION_GRACE_SECONDS: '0',
 };
 
@@ -297,10 +297,10 @@ describe('Crear una orden', () => {
     expect(r.body.status).toBe('PENDING_PAYMENT');
     expect(r.body.itemsSubtotal).toBe(890_000);
     expect(r.body.grossAmount).toBe(890_000);
-    // 6 % de $8.900 = $534
-    expect(r.body.platformFeeBps).toBe(600);
-    expect(r.body.platformFeeAmount).toBe(53_400);
-    expect(r.body.sellerNetAmount).toBe(836_600);
+    // 4 % de $8.900 = $356
+    expect(r.body.platformFeeBps).toBe(400);
+    expect(r.body.platformFeeAmount).toBe(35_600);
+    expect(r.body.sellerNetAmount).toBe(854_400);
     expect(r.body.reference).toHaveLength(8);
 
     // La dirección viajó como foto, no como referencia.
@@ -340,7 +340,7 @@ describe('Crear una orden', () => {
     expect(r.status).toBe(201);
     expect(r.body.grossAmount).toBe(890_000);
     expect(r.body.currency).toBe('ARS');
-    expect(r.body.sellerNetAmount).toBe(836_600);
+    expect(r.body.sellerNetAmount).toBe(854_400);
   });
 
   it('⛔ el sellerId que manda el cliente se IGNORA', async () => {
@@ -2242,18 +2242,18 @@ describe('Envío y costo del procesador', () => {
     expect(publico.body.envio.trasladaCostoDelProcesador).toBe(false);
   });
 
-  it('⛔ la comisión del 6 % NO se cobra sobre el envío ni sobre el recargo', async () => {
+  it('⛔ la comisión del 4 % NO se cobra sobre el envío ni sobre el recargo', async () => {
     /**
      * ═══════════════════════════════════════════════════════════════════════
      * DECISIÓN COMERCIAL, NO UN DETALLE DE CÁLCULO
      * ═══════════════════════════════════════════════════════════════════════
      *
-     * VendoX cobra 6 % **sobre lo que se vendió**, no sobre lo que se movió.
+     * VendoX cobra 4 % **sobre lo que se vendió**, no sobre lo que se movió.
      *
      * El envío es plata que el vendedor cobra y le entrega a un tercero para
      * despachar el paquete: no es ingreso suyo. Cobrarle comisión sobre eso
      * sería cobrarle por gastar. Y el recargo del procesador existe justamente
-     * para cubrir lo que Mercado Pago le va a descontar; cobrarle 6 % encima
+     * para cubrir lo que Mercado Pago le va a descontar; cobrarle 4 % encima
      * haría que trasladar el costo le siga saliendo plata.
      *
      * Es distinto del costo del procesador, cuya base SÍ es producto + envío:
@@ -2277,14 +2277,14 @@ describe('Envío y costo del procesador', () => {
     const r = await crearOrden(comprador.token, reservationId);
 
     expect(r.status, JSON.stringify(r.body)).toBe(201);
-    expect(r.body.platformFeeBps).toBe(600);
+    expect(r.body.platformFeeBps).toBe(400);
 
-    // 6 % de 890.000 = 53.400. NO de 1.316.756.
-    expect(r.body.platformFeeAmount).toBe(53_400);
+    // 4 % de 890.000 = 35.600. NO de 1.316.756.
+    expect(r.body.platformFeeAmount).toBe(35_600);
 
     // El vendedor se queda con el envío entero y con el recargo entero: los va
     // a gastar en el correo y en Mercado Pago.
-    expect(r.body.sellerNetAmount).toBe((r.body.grossAmount as number) - 53_400);
+    expect(r.body.sellerNetAmount).toBe((r.body.grossAmount as number) - 35_600);
   });
 
   it('cambiar la política después NO le cambia el total a quien ya compró', async () => {
@@ -4457,7 +4457,7 @@ describe('Precio exclusivo del vivo', () => {
     return { variantId, sellerToken, sellerId, productId, liveId: vivo.id, precio };
   }
 
-  it('⛔ la comisión del 6 % sale sobre lo que se PAGÓ, no sobre el precio de lista', async () => {
+  it('⛔ la comisión del 4 % sale sobre lo que se PAGÓ, no sobre el precio de lista', async () => {
     /**
      * El invariante comercial de este bloque.
      *
@@ -4481,8 +4481,8 @@ describe('Precio exclusivo del vivo', () => {
     // Se cobró el precio de vivo.
     expect(orden.body.itemsSubtotal).toBe(1_250_000);
 
-    // Y la comisión es el 6 % de ESO: $750, no $1.080.
-    expect(orden.body.platformFeeAmount).toBe(75_000);
+    // Y la comisión es el 4 % de ESO: $500, no $720.
+    expect(orden.body.platformFeeAmount).toBe(50_000);
     expect(orden.body.platformFeeAmount).not.toBe(108_000);
   });
 
@@ -4727,7 +4727,7 @@ describe('Cupones', () => {
     expect(r.status).toBe(402);
   });
 
-  it('⛔ la comisión del 6 % sale sobre lo que se PAGÓ', async () => {
+  it('⛔ la comisión del 4 % sale sobre lo que se PAGÓ', async () => {
     /**
      * EL INVARIANTE COMERCIAL DE ESTE BLOQUE.
      *
@@ -4746,9 +4746,9 @@ describe('Cupones', () => {
     expect(orden.body.discountAmount).toBe(250_000);
     expect(orden.body.grossAmount).toBe(750_000);
 
-    // 6 % de $7.500, no de $10.000.
-    expect(orden.body.platformFeeAmount).toBe(45_000);
-    expect(orden.body.platformFeeAmount).not.toBe(60_000);
+    // 4 % de $7.500, no de $10.000.
+    expect(orden.body.platformFeeAmount).toBe(30_000);
+    expect(orden.body.platformFeeAmount).not.toBe(40_000);
   });
 
   it('⛔ el cupón de OTRA tienda no sirve acá', async () => {
@@ -4921,7 +4921,7 @@ describe('Cupones', () => {
     const orden = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId));
 
     expect(orden.body.discountAmount).toBe(0);
-    expect(orden.body.platformFeeAmount).toBe(60_000);
+    expect(orden.body.platformFeeAmount).toBe(40_000);
   });
 
   it('el tope recorta el descuento', async () => {
@@ -5162,9 +5162,9 @@ describe('Aplicar un cupón a un pedido ya creado', () => {
     expect(r.status, JSON.stringify(r.body)).toBe(201);
     expect(r.body.discountAmount).toBe(250_000);
     expect(r.body.grossAmount).toBe(750_000);
-    // ⚠️ La comisión se rehace: 6 % de $7.500. No alcanza con restar del total.
-    expect(r.body.platformFeeAmount).toBe(45_000);
-    expect(r.body.sellerNetAmount).toBe(705_000);
+    // ⚠️ La comisión se rehace: 4 % de $7.500. No alcanza con restar del total.
+    expect(r.body.platformFeeAmount).toBe(30_000);
+    expect(r.body.sellerNetAmount).toBe(720_000);
   });
 
   it('⛔ no se puede aplicar dos veces', async () => {
@@ -5273,7 +5273,7 @@ describe('Aplicar un cupón a un pedido ya creado', () => {
     expect(r.status, JSON.stringify(r.body)).toBe(200);
     expect(r.body.discountAmount).toBe(0);
     expect(r.body.grossAmount).toBe(1_000_000);
-    expect(r.body.platformFeeAmount).toBe(60_000);
+    expect(r.body.platformFeeAmount).toBe(40_000);
 
     const sinCupon = await prisma.coupon.findUniqueOrThrow({ where: { id: p.cuponId } });
     expect(sinCupon.usos).toBe(0);
@@ -5299,7 +5299,7 @@ describe('Aplicar un cupón a un pedido ya creado', () => {
     const enBase = await prisma.order.findUniqueOrThrow({ where: { id: p.orden.id } });
     expect(enBase.discountAmount).toBe(0);
     expect(enBase.grossAmount).toBe(1_000_000);
-    expect(enBase.platformFeeAmount).toBe(60_000);
+    expect(enBase.platformFeeAmount).toBe(40_000);
   });
 });
 

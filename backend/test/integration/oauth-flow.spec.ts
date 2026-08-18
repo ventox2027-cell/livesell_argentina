@@ -488,7 +488,7 @@ describe('Conectar Mercado Pago', () => {
 
       // Lo que sí: la pista, para que soporte pueda hablar del token.
       expect(r.body!.tokenTerminaEn).toBe('····9z8x');
-      expect(r.body!.comisionBps).toBe(600);
+      expect(r.body!.comisionBps).toBe(400);
     });
 
     it('⛔ nadie ve el estado de la cuenta de otro vendedor', async () => {

@@ -587,7 +587,7 @@ export const envSchema = z
      * Configurable para que el dia que se negocie otra tasa no se toque codigo.
      */
     PROCESSOR_FEE_ESTIMATE_BPS: z.coerce.number().int().min(0).max(2000).default(619),
-    VENDOX_PLATFORM_FEE_BPS: z.coerce.number().int().min(0).max(5_000).default(600),
+    VENDOX_PLATFORM_FEE_BPS: z.coerce.number().int().min(0).max(5_000).default(400),
 
     /**
      * ¿Se le traslada al comprador el costo estimado de Mercado Pago?

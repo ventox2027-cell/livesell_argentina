@@ -67,8 +67,8 @@ const TEST_ENV = {
   ORDERS_RECONCILER_ENABLED: 'false',
   INVENTORY_RESERVATION_TTL_SECONDS: '300',
 
-  /** 6 % sobre el producto. Es el número del negocio, no un valor de prueba. */
-  VENDOX_PLATFORM_FEE_BPS: '600',
+  /** 4 % sobre el producto. Es el número del negocio, no un valor de prueba. */
+  VENDOX_PLATFORM_FEE_BPS: '400',
   ORDER_EXPIRATION_GRACE_SECONDS: '0',
 };
 
@@ -325,9 +325,9 @@ async function conConfig<T>(cambios: Record<string, unknown>, fn: () => Promise<
 
 describe('Los invariantes de VendoX', () => {
   describe('Plata', () => {
-    it('1 · La comisión es 6 % y se calcula SÓLO sobre el producto', async () => {
+    it('1 · La comisión es 4 % y se calcula SÓLO sobre el producto', async () => {
       /**
-       * La decisión de negocio: 6 % sobre el producto, no sobre el envío ni
+       * La decisión de negocio: 4 % sobre el producto, no sobre el envío ni
        * sobre el recargo del procesador.
        *
        * Cobrar comisión sobre el envío significa quedarse con parte de lo que
@@ -338,7 +338,7 @@ describe('Los invariantes de VendoX', () => {
       const envio = 350_000; //    $3.500 de envío, para que el total NO sea el producto
       const { orden } = await compraPaga({ precio, envio });
 
-      expect(orden.platformFeeBps).toBe(600);
+      expect(orden.platformFeeBps).toBe(400);
       expect(orden.itemsSubtotal).toBe(precio);
 
       /**
@@ -346,18 +346,18 @@ describe('Los invariantes de VendoX', () => {
        * algo.
        *
        * La primera versión no lo configuraba: con envío gratis, `grossAmount`
-       * es igual a `itemsSubtotal`, «6 % del producto» y «6 % del total» dan el
+       * es igual a `itemsSubtotal`, «4 % del producto» y «4 % del total» dan el
        * mismo número, y el test pasaba con la regla rota.
        */
       expect(orden.shippingAmount).toBe(envio);
       expect(orden.grossAmount).toBeGreaterThan(orden.itemsSubtotal);
 
-      // 6 % de $10.000 = $600. El envío no paga comisión.
-      expect(orden.platformFeeAmount).toBe(60_000);
+      // 4 % de $10.000 = $400. El envío no paga comisión.
+      expect(orden.platformFeeAmount).toBe(40_000);
       expect(orden.platformFeeAmount).toBe(
         Math.round((orden.itemsSubtotal * orden.platformFeeBps) / 10_000),
       );
-      // Y sobre el total daría $810: distinto, o sea que no se calcula así.
+      // Y sobre el total daría $540: distinto, o sea que no se calcula así.
       expect(orden.platformFeeAmount).not.toBe(
         Math.round((orden.grossAmount * orden.platformFeeBps) / 10_000),
       );

@@ -8,7 +8,7 @@
   "venceEl": null,
   "ultimaRenovacion": null,
   "tokenTerminaEn": null,
-  "comisionBps": 600,
+  "comisionBps": 400,
   "mercadoPagoObligatorio": true,
   "puedeVender": false,
   "faltaConectar": true

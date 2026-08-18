@@ -793,3 +793,42 @@ describe('GIT_SHA', () => {
     if (r.success) expect(r.data.GIT_SHA).toBe('unknown');
   });
 });
+
+describe('La comisión de VendoX', () => {
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * ESTE TEST FIJA EL NÚMERO DEL NEGOCIO, NO UN VALOR DE PRUEBA
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * Casi todos los tests de comisión pasan el bps explícito en su entorno, así
+   * que prueban la ARITMÉTICA y no la tasa. El default es lo que usa un
+   * despliegue que no configura nada — o sea, producción — y no lo fijaba
+   * ninguno.
+   *
+   * Se midió: cambiar el default de 400 a 600 dejaba en verde casi toda la
+   * suite.
+   *
+   * 4 % sobre el producto. Nunca sobre el envío, el costo del procesador ni el
+   * precio de lista.
+   */
+  it('por omisión es 4 %', () => {
+    const r = envSchema.safeParse({ ...VALID });
+
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.VENDOX_PLATFORM_FEE_BPS).toBe(400);
+  });
+
+  it('se puede configurar por entorno sin tocar código', () => {
+    // Lo que hace posible bajarla por volumen sin desplegar.
+    const r = envSchema.safeParse({ ...VALID, VENDOX_PLATFORM_FEE_BPS: '300' });
+
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.VENDOX_PLATFORM_FEE_BPS).toBe(300);
+  });
+
+  it('⛔ no acepta una tasa absurda', () => {
+    // El tope es 50 %. Un dedo de más en el teclado no puede quedarse con la
+    // venta entera de alguien.
+    expect(envSchema.safeParse({ ...VALID, VENDOX_PLATFORM_FEE_BPS: '9000' }).success).toBe(false);
+  });
+});
