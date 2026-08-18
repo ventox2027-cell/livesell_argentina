@@ -39,7 +39,8 @@
     "migrate:deploy": "prisma migrate deploy",
     "admin:create": "tsx scripts/crear-admin.ts",
     "db:generate": "node scripts/prisma-generate-forzado.mjs",
-    "db:apply": "node scripts/aplicar-migracion.mjs"
+    "db:apply": "node scripts/aplicar-migracion.mjs",
+    "media:subir": "tsx scripts/subir-media-a-r2.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1110.0",
