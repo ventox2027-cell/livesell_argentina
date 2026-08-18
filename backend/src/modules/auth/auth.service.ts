@@ -745,7 +745,32 @@ export class AuthService {
   private faltantes(user: User): string[] {
     const falta: string[] = [];
     if (!user.phoneE164) falta.push('phone');
-    if (!user.phoneVerified) falta.push('phoneVerification');
+
+    /**
+     * ⚠️ `phoneVerification` NO se informa, y no es un olvido.
+     *
+     * ═══════════════════════════════════════════════════════════════════════
+     * SE PEDÍA ALGO QUE NADIE PODÍA CUMPLIR
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * `phoneVerified` se pone en `false` cuando alguien cambia su teléfono y
+     * al cerrar la cuenta. En **ningún** lugar se pone en `true`: no hay envío
+     * de SMS, ni código, ni endpoint que lo confirme. Nunca lo hubo.
+     *
+     * O sea que esta línea agregaba `phoneVerification` a la lista para todas
+     * las cuentas, siempre. La app muestra «Completá tu perfil» mientras la
+     * lista no esté vacía, así que el cartel no se iba nunca: alguien cargaba
+     * nombre, teléfono y fecha de nacimiento, y lo seguía viendo. Sin forma de
+     * hacerlo desaparecer y sin nada que le dijera qué le faltaba.
+     *
+     * No bloqueaba comprar —se verificó: `phoneVerification` no se lee en
+     * ningún otro lado, ni acá ni en la app— así que el daño era exactamente
+     * ése: un aviso permanente pidiendo algo imposible.
+     *
+     * Se saca de la lista, no del modelo. La columna y el reseteo al cambiar
+     * de número se quedan: el día que exista la verificación por SMS, esto
+     * vuelve en una línea y el reseteo ya está bien escrito.
+     */
     if (user.firstName === 'Sin nombre' || !user.lastName) falta.push('name');
     // Se pide antes de comprar y antes de crear la tienda, no al registrarse.
     // Ver `edad.ts`.

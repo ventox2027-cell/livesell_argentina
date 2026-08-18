@@ -9,7 +9,7 @@ import type { RedisService } from '@/shared/redis/redis.service';
 import { hashearContrasena } from '@/shared/crypto/contrasenas';
 
 import { crearAppDePrueba } from '../helpers/app';
-import { datosDeAdulto } from '../helpers/edad';
+import { NACIMIENTO_ADULTO_ISO, datosDeAdulto } from '../helpers/edad';
 
 /**
  * Recorrido completo de autenticación, contra PostgreSQL REAL.
@@ -169,6 +169,56 @@ describe('Registro e inicio de sesión', () => {
     expect(s.missing).toContain('phone');
   });
 
+
+  /**
+   * ═════════════════════════════════════════════════════════════════════════
+   * EL AVISO QUE NO SE IBA NUNCA
+   * ═════════════════════════════════════════════════════════════════════════
+   *
+   * La app muestra «Completá tu perfil» mientras `missing` no esté vacío.
+   *
+   * `phoneVerified` se pone en `false` al cambiar de número y al cerrar la
+   * cuenta, y en NINGÚN lugar se pone en `true`: no hay SMS, ni código, ni
+   * endpoint que lo confirme. Así que `phoneVerification` estaba en la lista
+   * de todas las cuentas, siempre, y el cartel no se iba aunque la persona
+   * cargara todo.
+   */
+  it('⛔ no pide verificar el teléfono: no existe forma de hacerlo', async () => {
+    const s = await entrar('sin-verificacion@test.com');
+    expect(s.missing).not.toContain('phoneVerification');
+  });
+
+  it('con nombre, teléfono y fecha de nacimiento, no falta nada', async () => {
+    /**
+     * El test que fija el comportamiento completo: cargando lo que la app
+     * pide, `missing` tiene que quedar VACÍO. Sin esto, cualquier requisito
+     * nuevo que nadie pueda cumplir vuelve a dejar el cartel para siempre.
+     */
+    const s = await entrar('completo@test.com');
+
+    const r = await call('PATCH', '/api/v1/auth/me', {
+      token: s.accessToken,
+      body: {
+        firstName: 'Ana',
+        lastName: 'Gómez',
+        phone: '+5491133445566',
+        birthDate: NACIMIENTO_ADULTO_ISO,
+      },
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+
+    const me = await call('GET', '/api/v1/auth/me', { token: s.accessToken });
+    expect(me.status).toBe(200);
+    expect(me.body.missing, JSON.stringify(me.body.missing)).toEqual([]);
+  });
+
+  it('sigue pidiendo lo que de verdad falta', async () => {
+    // La contraparte. Sin esto, una lista que quedara siempre vacía pasaría
+    // los dos tests de arriba y la app no pediría nunca nada.
+    const s = await entrar('le-falta@test.com');
+    expect(s.missing).toContain('phone');
+    expect(s.missing).toContain('birthDate');
+  });
   it('registra el dispositivo y no lo duplica al reentrar', async () => {
     const disp = dispositivo('-fijo');
     const email = 'dispositivo@test.com';
