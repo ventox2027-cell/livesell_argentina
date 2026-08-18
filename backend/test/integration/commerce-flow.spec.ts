@@ -924,6 +924,233 @@ describe('Imágenes de producto', () => {
     expect(r.status).toBe(404);
   });
 
+  /**
+   * ═════════════════════════════════════════════════════════════════════════
+   * LA URL DE LA FOTO NO PUEDE VENIR DE UN HOST QUE YA NO EXISTE
+   * ═════════════════════════════════════════════════════════════════════════
+   *
+   * Pasó en un celular: «Mi tienda» mostraba el recuadro gris en vez de la
+   * foto. El archivo estaba entero en el almacenamiento y la fila en la base.
+   * Lo que estaba muerto era la columna `url`, escrita meses antes con el host
+   * de un túnel de desarrollo efímero.
+   *
+   * No es un problema sólo de desarrollo: toda foto subida durante la beta
+   * queda apuntando al host de la beta. El día que el backend pase a
+   * `api.vendox.com.ar`, todas dejan de verse a la vez y nada falla ni avisa.
+   *
+   * Estos tests recorren las respuestas REALES buscando hosts ajenos al
+   * configurado. Están escritos así —y no comparando contra una URL armada a
+   * mano— para que también atrapen un punto de emisión NUEVO que se olvide de
+   * resolver: hay una docena, y el propio `FEED_SELECT` ya advertía que
+   * duplicar este bloque deja tarjetas sin foto.
+   */
+  describe('La URL de la foto se deriva del storageKey', () => {
+    /** Todas las URLs que aparecen en una respuesta, a cualquier profundidad. */
+    function urlsDe(valor: unknown, encontradas: string[] = []): string[] {
+      if (typeof valor === 'string') {
+        if (valor.startsWith('http://') || valor.startsWith('https://')) encontradas.push(valor);
+      } else if (Array.isArray(valor)) {
+        for (const v of valor) urlsDe(v, encontradas);
+      } else if (valor && typeof valor === 'object') {
+        for (const v of Object.values(valor)) urlsDe(v, encontradas);
+      }
+      return encontradas;
+    }
+
+    /** Las que apuntan a una imagen de producto, que son las que nos importan. */
+    const deMedia = (urls: string[]) => urls.filter((u) => u.includes('/media/products/'));
+
+    it('⛔ el listado de Mi tienda no devuelve el host viejo', async () => {
+      const { token } = await nuevoVendedor();
+      const p = await crearProducto(token, { status: 'ACTIVE' });
+      await subirArchivo(token, p.id, jpegDePrueba());
+
+      const r = await call('GET', '/api/v1/products/mine', { token });
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+
+      const urls = deMedia(urlsDe(r.body));
+      expect(urls.length, 'el producto tiene foto: tiene que haber una URL').toBeGreaterThan(0);
+      for (const u of urls) {
+        expect(u.startsWith(env.PUBLIC_BASE_URL), `URL de otro host: ${u}`).toBe(true);
+      }
+    });
+
+    it('⛔ un producto con foto nunca sale sin portada', async () => {
+      const { token } = await nuevoVendedor();
+      const p = await crearProducto(token, { status: 'ACTIVE', categoryId: 'cat_otros' });
+      await subirArchivo(token, p.id, jpegDePrueba());
+
+      const r = await call('GET', '/api/v1/products/mine', { token });
+      const producto = (r.body.items as Array<{ id: string; images: unknown[] }>).find(
+        (x) => x.id === p.id,
+      );
+
+      expect(producto, 'el producto tiene que estar en el listado').toBeDefined();
+      expect(producto!.images.length, 'con foto subida, images no puede venir vacío').toBe(1);
+    });
+
+    it('la portada es la PRIMERA foto, no una cualquiera', async () => {
+      const { token } = await nuevoVendedor();
+      const p = await crearProducto(token, { status: 'ACTIVE' });
+
+      const a = await subirArchivo(token, p.id, jpegDePrueba());
+      await subirArchivo(token, p.id, jpegDePrueba());
+
+      const enBase = await prisma.productImage.findFirstOrThrow({
+        where: { productId: p.id, position: 0 },
+        select: { id: true, storageKey: true },
+      });
+      expect(enBase.id, 'la primera que se sube es la portada').toBe(a.body.id);
+
+      const r = await call('GET', '/api/v1/products/mine', { token });
+      const producto = (r.body.items as Array<{ id: string; images: Array<{ id: string }> }>).find(
+        (x) => x.id === p.id,
+      );
+
+      expect(producto!.images[0]!.id).toBe(enBase.id);
+    });
+
+    it('la URL se arma con el storageKey de la fila, no con lo guardado', async () => {
+      /**
+       * El corazón del arreglo. Se ensucia la columna `url` a mano —igual que
+       * quedó en la base real— y la respuesta tiene que ignorarla.
+       */
+      const { token } = await nuevoVendedor();
+      const p = await crearProducto(token, { status: 'ACTIVE' });
+      const img = await subirArchivo(token, p.id, jpegDePrueba());
+
+      await prisma.productImage.update({
+        where: { id: img.body.id as string },
+        data: { url: 'https://un-tunel-que-ya-no-existe.example.com/media/loquesea.jpg' },
+      });
+
+      const r = await call('GET', '/api/v1/products/mine', { token });
+      const cuerpo = JSON.stringify(r.body);
+
+      expect(cuerpo).not.toContain('un-tunel-que-ya-no-existe');
+
+      const fila = await prisma.productImage.findUniqueOrThrow({
+        where: { id: img.body.id as string },
+        select: { storageKey: true },
+      });
+      expect(cuerpo).toContain(fila.storageKey);
+    });
+
+    it('⛔ el FEED tampoco devuelve el host viejo', async () => {
+      /**
+       * El feed y la vidriera van por otro camino que «Mi tienda»: usan
+       * `portadaDe` en vez de `conUrls`. Se probó y hacía falta — con sólo los
+       * tests de arriba, hacer que `portadaDe` volviera a leer la columna
+       * guardada dejaba las 840 pruebas en verde.
+       *
+       * Y es el camino que mira quien COMPRA, que es el que más importa.
+       */
+      const { token } = await nuevoVendedor();
+      const p = await crearProducto(token, { status: 'ACTIVE', categoryId: 'cat_otros' });
+      const img = await subirArchivo(token, p.id, jpegDePrueba());
+
+      // Se ensucia la columna igual que quedó en la base real.
+      await prisma.productImage.update({
+        where: { id: img.body.id as string },
+        data: { url: 'https://un-tunel-que-ya-no-existe.example.com/media/loquesea.jpg' },
+      });
+
+      const fila = await prisma.productImage.findUniqueOrThrow({
+        where: { id: img.body.id as string },
+        select: { storageKey: true },
+      });
+
+      /**
+       * Se afirma que la URL BUENA está, no sólo que la mala no está.
+       *
+       * Sin la primera mitad este test no sirve: al sacar `url` del `select`,
+       * una portada que quedara en `null` tampoco «contiene» el host viejo, y
+       * el sabotaje pasaría en verde. Se midió.
+       */
+      function revisar(cuerpo: unknown, donde: string) {
+        const texto = JSON.stringify(cuerpo);
+        expect(texto, `${donde}: falta la URL de la foto`).toContain(fila.storageKey);
+        expect(texto, `${donde}: sigue el host viejo`).not.toContain('un-tunel-que-ya-no-existe');
+      }
+
+      const feed = await call('GET', '/api/v1/discover/products?limit=50');
+      expect(feed.status, JSON.stringify(feed.body)).toBe(200);
+      revisar(feed.body, 'feed');
+
+      const store = await prisma.store.findFirstOrThrow({
+        where: { products: { some: { id: p.id as string } } },
+        select: { id: true, slug: true },
+      });
+      const vidriera = await call('GET', `/api/v1/stores/by-slug/${store.slug}/products`);
+      revisar(vidriera.body, 'vidriera');
+
+      /**
+       * El catálogo de la tienda va por `portadaDe`, que es OTRO camino que el
+       * feed y la vidriera —esos usan `conUrls`—. Sin este caso, romper
+       * `portadaDe` dejaba las 199 pruebas en verde: se midió dos veces.
+       */
+      const catalogo = await call('GET', `/api/v1/stores/${store.id}/catalog?limit=20`);
+      expect(catalogo.status, JSON.stringify(catalogo.body)).toBe(200);
+      revisar(catalogo.body, 'catálogo de la tienda');
+    });
+
+    it('reordenar devuelve URLs, no claves de almacenamiento', async () => {
+      /**
+       * Este test existe por una regresión que se metió arreglando lo de
+       * arriba: al cambiar el `select` a `storageKey`, el endpoint de
+       * reordenar pasó a devolver las filas crudas — con la clave interna y
+       * sin ninguna URL. La suite entera siguió en verde.
+       *
+       * Lo que se veía: reordenás las fotos en el editor y todas se vuelven
+       * grises hasta recargar.
+       */
+      const { token } = await nuevoVendedor();
+      const p = await crearProducto(token);
+      const a = await subirArchivo(token, p.id, jpegDePrueba());
+      const b = await subirArchivo(token, p.id, jpegDePrueba());
+
+      const r = await call('PATCH', `/api/v1/products/${p.id}/images/reorder`, {
+        token,
+        body: { imageIds: [b.body.id, a.body.id] },
+      });
+
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+      const imagenes = r.body as Array<Record<string, unknown>>;
+      expect(imagenes).toHaveLength(2);
+      for (const img of imagenes) {
+        expect(typeof img.url, 'cada imagen tiene que traer su url').toBe('string');
+        expect(img.storageKey, 'la clave de almacenamiento no sale de la API').toBeUndefined();
+      }
+      // Y el orden nuevo se respeta: la portada es la que se puso primera.
+      expect(imagenes[0]!.id).toBe(b.body.id);
+    });
+
+    it('subir una foto devuelve su url, no la clave', async () => {
+      const { token } = await nuevoVendedor();
+      const p = await crearProducto(token);
+
+      const r = await subirArchivo(token, p.id, jpegDePrueba());
+
+      expect(typeof r.body.url).toBe('string');
+      expect((r.body.url as string).startsWith(env.PUBLIC_BASE_URL)).toBe(true);
+    });
+
+    it('un producto SIN fotos devuelve la lista vacía, no una URL rota', async () => {
+      // La contraparte: sin esto, un resolver que devolviera siempre una URL
+      // armada pasaría los tests de arriba y pondría una imagen inexistente en
+      // cada tarjeta sin foto.
+      const { token } = await nuevoVendedor();
+      const p = await crearProducto(token, { status: 'ACTIVE' });
+
+      const r = await call('GET', '/api/v1/products/mine', { token });
+      const producto = (r.body.items as Array<{ id: string; images: unknown[] }>).find(
+        (x) => x.id === p.id,
+      );
+
+      expect(producto!.images).toEqual([]);
+    });
+  });
+
   it('borrar una foto compacta las posiciones', async () => {
     // Si quedara un hueco, la segunda foto tendría position 2 y el reordenado
     // siguiente no tendría forma de saber cuál es la portada.

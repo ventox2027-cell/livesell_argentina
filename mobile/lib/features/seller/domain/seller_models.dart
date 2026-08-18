@@ -257,7 +257,13 @@ class Producto {
           .map((e) => Variante.fromJson(e as Map<String, dynamic>))
           .toList(),
       images: imagenes,
-      portada: imagenes.isNotEmpty ? imagenes.first.url : null,
+      // Una url vacía no es una portada. `Image.network('')` lanza, y aunque
+      // el `errorBuilder` de la tarjeta lo atrape y muestre el marcador, el
+      // camino correcto es no intentar la descarga. Pasa si el backend manda
+      // la imagen sin url — el modelo es tolerante a propósito y la deja en ''.
+      portada: imagenes.isNotEmpty && imagenes.first.url.isNotEmpty
+          ? imagenes.first.url
+          : null,
       cantidadVariantes: _int((j['_count'] as Map<String, dynamic>?)?['variants']),
     );
   }

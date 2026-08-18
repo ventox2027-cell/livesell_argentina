@@ -4,6 +4,7 @@ import { LiveKitService } from '@/modules/livekit/livekit.service';
 import { SellerOAuthService } from '@/modules/payments/seller-oauth.service';
 import { BloqueosService } from '@/modules/moderation/bloqueos.service';
 import { AuditService } from '@/shared/audit/audit.service';
+import { portadaDe } from '@/shared/storage/url-publica';
 import { exigirHabilitada } from '@/shared/config/banderas';
 
 import { AgendaService } from './agenda.service';
@@ -550,7 +551,7 @@ export class LiveService {
       nombre: variante.product.name,
       // `null` si la variante es la interna del producto. Ver `variantePublica`.
       variante: variante.options.length === 0 ? null : variante.title,
-      imagenUrl: variante.product.images[0]?.url ?? null,
+      imagenUrl: portadaDe(variante.product.images),
       precioCentavos: precio.precioCentavos,
       hayDescuento: precio.hayDescuento,
       precioDeListaCentavos: precio.precioDeListaCentavos,
@@ -755,7 +756,7 @@ export class LiveService {
       bandeja: bandeja.map((b) => ({
         productId: b.productId,
         nombre: b.product.name,
-        imagenUrl: b.product.images[0]?.url ?? null,
+        imagenUrl: portadaDe(b.product.images),
         posicion: b.position,
         vecesDestacado: b.featuredCount,
         /**
@@ -1100,7 +1101,7 @@ export class LiveService {
        * elegir, no hay nada que nombrar.
        */
       variante: v.options.length === 0 ? null : v.title,
-      imagenUrl: v.product.images[0]?.url ?? null,
+      imagenUrl: portadaDe(v.product.images),
       precioCentavos: precio.precioCentavos,
       /**
        * El tachado sale sólo cuando hay descuento de verdad.

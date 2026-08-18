@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 
 import { Injectable, Logger } from '@nestjs/common';
 
-import { env } from '@/config/env.schema';
+import { urlPublicaDe } from './url-publica';
 import { DomainError } from '@/shared/errors/domain.error';
 
 /**
@@ -131,19 +131,24 @@ export abstract class StorageProvider {
   abstract borrar(storageKey: string): Promise<void>;
 
   /**
-   * La URL que se guarda en la base de datos.
+   * La URL con la que se muestra el objeto.
    *
-   * ⚠️ **Tiene que ser estable para siempre.** No es un detalle de
-   * implementación: `ProductImage.url` y `OrderItem.imageUrlSnapshot` se
-   * persisten, y el segundo es un snapshot histórico — lo que el comprador vio
-   * cuando compró.
-   *
-   * Guardar ahí una URL firmada sería sembrar imágenes rotas a plazo fijo: el
+   * ⚠️ **Nunca una URL firmada.** Sembraría imágenes rotas a plazo fijo: el
    * historial de pedidos de todo el mundo se vaciaría solo al vencer las
-   * firmas, y nada lo avisaría hasta que alguien abriera una compra vieja.
+   * firmas, y nada lo avisaría hasta que alguien abriera una compra vieja. La
+   * firma, cuando hace falta, se genera al servir la imagen. Ver
+   * `r2.provider.ts`.
    *
-   * Por eso la firma, cuando hace falta, se genera al momento de servir la
-   * imagen y nunca se persiste. Ver `r2.provider.ts`.
+   * ⚠️ **Y tampoco es lo que hay que devolver desde la base.** Este método
+   * depende del host configurado HOY. Antes su resultado se guardaba en
+   * `ProductImage.url` y se devolvía tal cual, así que un cambio de host dejaba
+   * las fotos viejas apuntando a un dominio muerto — pasó, y las tarjetas
+   * salían en gris. Las respuestas derivan la URL del `storageKey` al leer, con
+   * `urlPublicaDe`. Ver `url-publica.ts`.
+   *
+   * Queda pendiente `OrderItem.imageUrlSnapshot`, que sí se persiste y tiene la
+   * misma enfermedad: arreglarlo necesita guardar el `storageKey` en la orden,
+   * o sea una migración.
    */
   abstract urlPublica(storageKey: string): string;
 
@@ -207,7 +212,7 @@ export class LocalStorageProvider extends StorageProvider {
   }
 
   urlPublica(storageKey: string): string {
-    return `${env.PUBLIC_BASE_URL.replace(/\/$/, '')}/media/${storageKey}`;
+    return urlPublicaDe(storageKey);
   }
 
   async borrar(storageKey: string): Promise<void> {

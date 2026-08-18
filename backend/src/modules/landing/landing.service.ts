@@ -3,6 +3,7 @@ import { Injectable } from '@nestjs/common';
 import { env } from '@/config/env.schema';
 import { PRODUCTO_COMPRABLE } from '@/modules/commerce/visibilidad';
 import { PrismaService } from '@/shared/prisma/prisma.service';
+import { portadaDe } from '@/shared/storage/url-publica';
 
 import { paginaDeLanding, paginaNoEncontrada } from './pagina';
 
@@ -53,7 +54,7 @@ export class LandingService {
         name: true,
         description: true,
         basePriceCents: true,
-        images: { where: { position: 0 }, take: 1, select: { url: true } },
+        images: { where: { position: 0 }, take: 1, select: { storageKey: true } },
         store: {
           select: {
             name: true,
@@ -87,7 +88,7 @@ export class LandingService {
         descripcion:
           producto.description?.trim() ||
           `${producto.name}, de ${producto.store.seller.displayName}. Comprá en vivo por VendoX.`,
-        imagen: producto.images[0]?.url ?? null,
+        imagen: portadaDe(producto.images),
         url,
         rutaEnLaApp: `/producto/${producto.id}`,
         precio: this.plata(producto.basePriceCents),

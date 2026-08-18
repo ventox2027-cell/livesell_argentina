@@ -12,6 +12,7 @@ import {
   permiteRetiro,
 } from '@/modules/orders/shipping';
 import { AuditService } from '@/shared/audit/audit.service';
+import { portadaDe, urlPublicaDe } from '@/shared/storage/url-publica';
 import { exigirHabilitada } from '@/shared/config/banderas';
 import { DomainEvent, DomainEventBus } from '@/shared/events/domain-events';
 import {
@@ -852,7 +853,7 @@ export class StoresService {
         return {
           id: p.id,
           nombre: p.name,
-          imagenUrl: p.images[0]?.url ?? null,
+          imagenUrl: portadaDe(p.images),
           precioCentavos: p.basePriceCents,
           moneda: p.currency,
           /** Suma de todas las variantes: es lo que decide si se muestra "agotado". */
@@ -932,7 +933,7 @@ export class StoresService {
       descripcion: producto.description,
       precioCentavos: producto.basePriceCents,
       moneda: producto.currency,
-      imagenes: producto.images.map((i) => i.url),
+      imagenes: producto.images.map((i) => urlPublicaDe(i.storageKey)),
       ejes: producto.options.map((o) => ({
         id: o.id,
         nombre: o.name,
@@ -1105,7 +1106,7 @@ export class StoresService {
                 id: true,
                 name: true,
                 status: true,
-                images: { orderBy: { position: 'asc' }, take: 1, select: { url: true } },
+                images: { orderBy: { position: 'asc' }, take: 1, select: { storageKey: true } },
               },
             },
           },
@@ -1144,7 +1145,7 @@ export class StoresService {
         fila = {
           productoId: producto.id,
           nombre: producto.name,
-          imagen: producto.images[0]?.url ?? null,
+          imagen: portadaDe(producto.images),
           publicado: producto.status === 'ACTIVE',
           personas: 0,
           unidades: 0,

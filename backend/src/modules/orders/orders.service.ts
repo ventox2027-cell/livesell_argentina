@@ -3,6 +3,7 @@ import { Prisma, type OrderStatus } from '@prisma/client';
 
 import { env } from '@/config/env.schema';
 import { AuditService } from '@/shared/audit/audit.service';
+import { portadaDe } from '@/shared/storage/url-publica';
 import { CuponesService } from '@/modules/commerce/cupones.service';
 import { resolverPrecio } from '@/modules/live/precio-de-vivo';
 import { exigirHabilitada } from '@/shared/config/banderas';
@@ -247,7 +248,7 @@ export class OrdersService {
             basePriceCents: true,
             status: true,
             deletedAt: true,
-            images: { orderBy: { position: 'asc' }, take: 1, select: { url: true } },
+            images: { orderBy: { position: 'asc' }, take: 1, select: { storageKey: true } },
             store: {
               select: {
                 id: true,
@@ -540,7 +541,7 @@ export class OrdersService {
             productNameSnapshot: producto.name,
             variantLabelSnapshot: variante.title,
             skuSnapshot: variante.sku,
-            imageUrlSnapshot: producto.images[0]?.url ?? null,
+            imageUrlSnapshot: portadaDe(producto.images),
             quantity: reserva.quantity,
             unitPrice,
             subtotal: precio.itemsSubtotal,

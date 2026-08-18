@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 
 import { env } from '@/config/env.schema';
 import { AuditService } from '@/shared/audit/audit.service';
+import { conUrls } from '@/shared/storage/url-publica';
 import { exigirHabilitada } from '@/shared/config/banderas';
 import { DomainError } from '@/shared/errors/domain.error';
 import { DomainEvent, DomainEventBus } from '@/shared/events/domain-events';
@@ -130,7 +131,7 @@ const FEED_SELECT = {
   ...PRODUCT_SELECT,
   likesCount: true,
   createdAt: true,
-  images: { orderBy: { position: 'asc' }, take: 1, select: { id: true, url: true, position: true } },
+  images: { orderBy: { position: 'asc' }, take: 1, select: { id: true, storageKey: true, position: true } },
   // Un solo join en vez de una consulta por producto. Con 20 productos
   // por página, el N+1 serían 41 viajes a la base para armar un scroll.
   store: {
@@ -502,14 +503,17 @@ export class ProductsService {
         ...PRODUCT_SELECT,
         // `take: 1` evita el N+1: una consulta con join en vez de una por
         // producto para traer la portada.
-        images: { where: { position: 0 }, take: 1, select: { id: true, url: true, position: true } },
+        images: { where: { position: 0 }, take: 1, select: { id: true, storageKey: true, position: true } },
         _count: { select: { variants: { where: { deletedAt: null } } } },
       },
       orderBy: { id: 'desc' },
       take: query.limit + 1,
     });
 
-    return this.paginar(filas, query.limit);
+    return this.paginar(
+      filas.map((f) => ({ ...f, images: conUrls(f.images) })),
+      query.limit,
+    );
   }
 
   /**
@@ -534,13 +538,16 @@ export class ProductsService {
       },
       select: {
         ...PRODUCT_SELECT,
-        images: { orderBy: { position: 'asc' }, take: 1, select: { id: true, url: true, position: true } },
+        images: { orderBy: { position: 'asc' }, take: 1, select: { id: true, storageKey: true, position: true } },
       },
       orderBy: { id: 'desc' },
       take: query.limit + 1,
     });
 
-    return this.paginar(filas, query.limit);
+    return this.paginar(
+      filas.map((f) => ({ ...f, images: conUrls(f.images) })),
+      query.limit,
+    );
   }
 
   /**
@@ -684,6 +691,7 @@ export class ProductsService {
     // un vendedor: consultando dos veces por día se saca cuánto vendió.
     const conDisponibilidad = filas.map((p) => ({
       ...p,
+      images: conUrls(p.images),
       variants: p.variants.map((v) => {
         const inv = v.inventory;
         const { inventory: _inventory, ...resto } = v;
@@ -770,6 +778,7 @@ export class ProductsService {
 
     const conDisponibilidad = enOrden.map((p) => ({
       ...p,
+      images: conUrls(p.images),
       variants: p.variants.map((v) => {
         const { inventory: inv, ...resto } = v;
         return {
@@ -1192,13 +1201,14 @@ export class ProductsService {
         },
         images: {
           orderBy: { position: 'asc' },
-          select: { id: true, url: true, position: true, altText: true },
+          select: { id: true, storageKey: true, position: true, altText: true },
         },
       },
     });
 
     return {
       ...product,
+      images: conUrls(product.images),
       variants: product.variants.map((v) => ({
         ...v,
         optionValueIds: v.options.map((o) => o.optionValueId),

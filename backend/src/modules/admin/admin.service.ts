@@ -3,6 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { OrdersReconciler } from '@/modules/orders/reconciler.service';
 import { OrderPaymentsService } from '@/modules/orders/payments.service';
 import { AuditService } from '@/shared/audit/audit.service';
+import { urlPublicaDe } from '@/shared/storage/url-publica';
 import { DomainError } from '@/shared/errors/domain.error';
 import { PrismaService } from '@/shared/prisma/prisma.service';
 
@@ -508,7 +509,7 @@ export class AdminService {
       vendedor: verVendedor(p.store.seller),
       imagenes: p.images.map((i) => ({
         id: i.id,
-        url: i.url,
+        url: urlPublicaDe(i.storageKey),
         posicion: i.position,
       })),
       variantes: p.variants.map((v) => ({

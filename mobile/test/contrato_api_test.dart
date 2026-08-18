@@ -87,6 +87,33 @@ void main() {
       expect(p.images.single.esManipulable, isFalse);
     });
 
+    test('⛔ una imagen SIN url no deja una portada rota', () {
+      /**
+       * El caso que dejó las tarjetas en gris: el backend devolvía una URL
+       * armada con el host de un túnel de desarrollo ya muerto.
+       *
+       * Del lado de la app eso llega igual que cualquier URL — no hay forma de
+       * saber que el host no existe hasta que falla la descarga, y para eso
+       * está el `errorBuilder` de la tarjeta, que muestra el marcador.
+       *
+       * Lo que sí se puede exigir acá: si el campo viene vacío o no viene,
+       * `portada` tiene que quedar en `null` y no en una cadena vacía.
+       * `Image.network('')` lanza, y aunque el `errorBuilder` lo atrape, el
+       * camino correcto es no intentar la descarga.
+       */
+      final sinUrl = {
+        ...json,
+        'images': [
+          {'id': 'img_x', 'position': 0},
+        ],
+      };
+
+      final p = Producto.fromJson(sinUrl);
+
+      expect(p.portada, isNull, reason: 'una url vacía no es una portada');
+      expect(p.images, hasLength(1), reason: 'la imagen sigue existiendo');
+    });
+
     test('sin fotos no rompe', () {
       final p = Producto.fromJson({...json, 'images': <dynamic>[]});
       expect(p.portada, isNull);

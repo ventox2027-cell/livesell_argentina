@@ -3,6 +3,7 @@ import { Prisma, type LikeTarget } from '@prisma/client';
 
 import { env } from '@/config/env.schema';
 import { DomainError } from '@/shared/errors/domain.error';
+import { portadaDe } from '@/shared/storage/url-publica';
 import { PrismaService } from '@/shared/prisma/prisma.service';
 import { newId } from '@/shared/utils/id';
 
@@ -208,7 +209,7 @@ export class SocialService {
         name: true,
         basePriceCents: true,
         currency: true,
-        images: { where: { position: 0 }, take: 1, select: { url: true } },
+        images: { where: { position: 0 }, take: 1, select: { storageKey: true } },
         store: { select: { id: true, name: true, slug: true } },
         variants: {
           where: { deletedAt: null, status: 'ACTIVE' },
@@ -244,7 +245,7 @@ export class SocialService {
             nombre: p.name,
             precioCentavos: p.basePriceCents,
             moneda: p.currency,
-            portada: p.images[0]?.url ?? null,
+            portada: portadaDe(p.images),
             tienda: p.store,
             /** Dato real del inventario. Es lo que hace útil la lista. */
             hayStock: disponible,
@@ -341,7 +342,7 @@ export class SocialService {
         name: true,
         basePriceCents: true,
         currency: true,
-        images: { where: { position: 0 }, take: 1, select: { url: true } },
+        images: { where: { position: 0 }, take: 1, select: { storageKey: true } },
         store: { select: { id: true, name: true, slug: true } },
       },
     });
@@ -359,7 +360,7 @@ export class SocialService {
             nombre: p.name,
             precioCentavos: p.basePriceCents,
             moneda: p.currency,
-            portada: p.images[0]?.url ?? null,
+            portada: portadaDe(p.images),
             tienda: p.store,
             vistoEl: f.viewedAt,
           },

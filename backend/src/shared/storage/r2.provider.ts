@@ -8,6 +8,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 
 import { env } from '@/config/env.schema';
+import { urlPublicaDe } from './url-publica';
 import { StorageMetrics } from '@/shared/storage/storage.metrics';
 import {
   StorageProvider,
@@ -191,17 +192,18 @@ export class R2StorageProvider extends StorageProvider implements OnModuleDestro
   }
 
   /**
-   * La URL que se guarda en la base. Estable, no caduca.
+   * La URL con la que se muestra el objeto. Se calcula, no se guarda.
    *
-   * Con dominio configurado, va directa al CDN. Sin él, apunta a nuestra
-   * redirección — ver la nota de arriba sobre por qué no puede ser una URL
-   * firmada.
+   * Con dominio configurado va directa al CDN; sin él, a nuestra redirección.
+   *
+   * ⚠️ Decía «la URL que se guarda en la base, estable, no caduca». Era falso
+   * en cuanto cambia el host: fotos subidas contra un túnel de desarrollo
+   * quedaron apuntando a un dominio muerto y las tarjetas salían en gris. La
+   * lógica ahora vive en `url-publica.ts` y las respuestas la derivan del
+   * `storageKey` al leer. Ver el comentario de ese archivo.
    */
   urlPublica(storageKey: string): string {
-    if (env.R2_PUBLIC_BASE_URL) {
-      return `${env.R2_PUBLIC_BASE_URL.replace(/\/$/, '')}/${storageKey}`;
-    }
-    return `${env.PUBLIC_BASE_URL.replace(/\/$/, '')}/media/${storageKey}`;
+    return urlPublicaDe(storageKey);
   }
 
   /**

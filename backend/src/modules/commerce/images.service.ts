@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 
 import { AuditService } from '@/shared/audit/audit.service';
+import { conUrls, urlPublicaDe } from '@/shared/storage/url-publica';
 import { exigirHabilitada } from '@/shared/config/banderas';
 import { DomainError } from '@/shared/errors/domain.error';
 import { DomainEvent, DomainEventBus } from '@/shared/events/domain-events';
@@ -98,7 +99,10 @@ export class ImagesService {
       after: { imageId: imagen.id, position: imagen.position },
     });
 
-    return imagen;
+    // La `url` derivada, no la columna. Hoy dan lo mismo —se acaba de
+    // escribir— pero devolver la columna acá y la derivada en todo el resto
+    // sería dejar dos fuentes para el mismo dato.
+    return { ...imagen, url: urlPublicaDe(imagen.storageKey) };
   }
 
   async remove(userId: string, productId: string, imageId: string) {
@@ -184,10 +188,14 @@ export class ImagesService {
       after: { orden: dto.imageIds },
     });
 
-    return this.prisma.productImage.findMany({
+    const imagenes = await this.prisma.productImage.findMany({
       where: { productId: product.id },
       orderBy: { position: 'asc' },
-      select: { id: true, url: true, position: true, altText: true },
+      select: { id: true, storageKey: true, position: true, altText: true },
     });
+
+    // Con `url` derivada, igual que en el resto de las respuestas: la app no
+    // conoce `storageKey` ni tiene por qué.
+    return conUrls(imagenes);
   }
 }
