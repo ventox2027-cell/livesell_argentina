@@ -92,6 +92,56 @@ describe('Escalada a una persona', () => {
       }
     });
 
+
+    it('⛔ las formas que la lista vieja se comía', () => {
+      /**
+       * ═══════════════════════════════════════════════════════════════════════
+       * DECÍA «atencion humana» PERO NO «asistencia humana»
+       * ═══════════════════════════════════════════════════════════════════════
+       *
+       * «Necesito asistencia humana», escrito tal cual, seguía de largo y lo
+       * contestaba el asistente automático. Tampoco entraban «agente»,
+       * «representante», «asesor» ni «soporte humano».
+       *
+       * Los dos errores no cuestan lo mismo: escalar de más pone un mensaje en
+       * la bandeja de alguien que lo lee y sigue; no escalar deja a una persona
+       * que YA pidió un humano peleando con una máquina.
+       */
+      for (const mensaje of [
+        'Necesito asistencia humana',
+        'necesito asistencia humana',
+        'quiero asistencia humana',
+        'pasame con soporte humano',
+        'quiero hablar con un agente',
+        'quiero hablar con un representante',
+        'necesito ayuda de una persona',
+        'esto no me sirve, quiero un asesor',
+        'no quiero un bot',
+        'dame un operador',
+      ]) {
+        const d = decidirEscalada({ ...base, mensaje });
+        expect(d.escalar, mensaje).toBe(true);
+        expect(d.motivo, mensaje).toBe('lo_pidio_la_persona');
+      }
+    });
+
+    it('una consulta común NO escala por esta vía', () => {
+      /**
+       * La contraparte, y hace falta: una lista demasiado generosa que
+       * escalara todo pasaría los tests de arriba y dejaría al asistente sin
+       * nada que contestar — que es justo lo que el soporte automático existe
+       * para evitar.
+       */
+      for (const mensaje of [
+        'cuando llega mi pedido',
+        'como cambio la foto de mi producto',
+        'no me acuerdo la contrasena',
+        'cuanto sale el envio a Cordoba',
+      ]) {
+        const d = decidirEscalada({ ...base, mensaje });
+        expect(d.escalar, mensaje).toBe(false);
+      }
+    });
     it('el aviso no intenta convencer de nada', () => {
       const d = decidirEscalada({ ...base, mensaje: 'quiero hablar con una persona' });
       expect(d.aviso).not.toContain('puedo ayudarte');

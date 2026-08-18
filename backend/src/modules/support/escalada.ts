@@ -116,6 +116,64 @@ export function normalizar(texto: string): string {
 }
 
 /**
+ * Formas de pedir un humano. Comparadas sobre el texto ya normalizado.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * LA LISTA ERA DE CINCO Y SE LE ESCAPABA LO MÁS OBVIO
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Decía `atencion humana` pero no `asistencia humana`, así que «Necesito
+ * asistencia humana» —escrito tal cual— seguía de largo y lo contestaba el
+ * asistente automático. Tampoco entraban «agente», «representante», «asesor»
+ * ni «soporte humano».
+ *
+ * ─── Por qué conviene pasarse de generoso ───
+ *
+ * Los dos errores no cuestan lo mismo. Escalar de más pone un mensaje en la
+ * bandeja de alguien del equipo, que lo lee y sigue. No escalar deja a una
+ * persona que YA pidió un humano peleando con una máquina — y termina en el
+ * humano igual, con la persona enojada y con razón.
+ *
+ * Por eso ante la duda se escala. Es la misma idea que ya estaba escrita abajo
+ * («sin excepciones y sin intentar convencer a nadie»); lo que faltaba era que
+ * la lista la acompañara.
+ */
+const PEDIDOS_DE_HUMANO = [
+  // Pedir hablar con alguien.
+  'hablar con una persona',
+  'hablar con alguien',
+  'hablar con un humano',
+  'hablar con un agente',
+  'hablar con un asesor',
+  'hablar con un representante',
+  'hablar con soporte',
+  'con una persona real',
+  'una persona real',
+
+  // Pedir atención/asistencia/ayuda humana.
+  'atencion humana',
+  'asistencia humana',
+  'soporte humano',
+  'ayuda humana',
+  'ayuda de una persona',
+  'ayuda de alguien',
+
+  // Nombrar al humano directamente.
+  'un humano',
+  'un agente',
+  'un asesor',
+  'un representante',
+  'un operador',
+
+  // Rechazar explícitamente al asistente.
+  'no quiero un bot',
+  'no quiero hablar con un bot',
+  'no me sirve el bot',
+  'sos un bot',
+  'eres un bot',
+];
+
+/**
  * ¿Este mensaje tiene que ir a una persona?
  *
  * Se evalúa ANTES de generar cualquier respuesta automática. Un asistente que
@@ -157,13 +215,7 @@ export function decidirEscalada(params: {
    * es la peor experiencia de soporte que existe, y encima suele terminar en el
    * humano igual, con la persona ya enojada.
    */
-  if (
-    texto.includes('hablar con una persona') ||
-    texto.includes('hablar con alguien') ||
-    texto.includes('atencion humana') ||
-    texto.includes('un humano') ||
-    texto.includes('una persona real')
-  ) {
+  if (PEDIDOS_DE_HUMANO.some((p) => texto.includes(p))) {
     return {
       escalar: true,
       motivo: 'lo_pidio_la_persona',
