@@ -1136,7 +1136,8 @@ export const envSchema = z
         'La DATABASE_URL apunta al pooler de Neon pero le falta `pgbouncer=true`. ' +
         'Sin eso Prisma usa prepared statements que PgBouncer no puede sostener en modo ' +
         'transacción, y las consultas fallan con `prepared statement "s0" already exists` ' +
-        'de forma intermitente. Agregar `?pgbouncer=true&connection_limit=5`.',
+        'de forma intermitente. Agregar `&pgbouncer=true&connection_limit=5` al final ' +
+        '(con `&`, no con `?`: la URL de Neon ya trae `?sslmode=require`).',
       path: ['DATABASE_URL'],
     },
   )
@@ -1342,7 +1343,37 @@ export const envSchema = z
    * local el puerto lo tiene que elegir la plataforma— no tendría nada que
    * mirar.
    */
-  .transform((e) => ({ ...e, PORT: e.PORT ?? 3000 }));
+  .transform((e) => ({
+    ...e,
+    PORT: e.PORT ?? 3000,
+
+    /**
+     * Qué commit está corriendo, con lo que haya.
+     *
+     * ═══════════════════════════════════════════════════════════════════════
+     * EL CAMPO EXISTE PARA UNA PREGUNTA Y VENÍA RESPONDIENDO «unknown»
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * `/health` expone esto justamente para saber, cuando algo se rompe, si lo
+     * que está arriba es lo que se creía. El Dockerfile lo recibe por
+     * `--build-arg GIT_SHA=...`, que sirve en un despliegue por línea de
+     * comandos y no en uno por integración con el repositorio: Railway
+     * construye la imagen él y nadie le pasa ese argumento.
+     *
+     * Resultado en el primer despliegue real: `"version": "unknown"`. Un
+     * despliegue que hubiera fallado en silencio y dejado arriba la versión
+     * anterior habría pasado por bueno, que es exactamente lo que este campo
+     * tenía que impedir.
+     *
+     * Railway sí inyecta `RAILWAY_GIT_COMMIT_SHA` en tiempo de ejecución. Se
+     * usa como respaldo, sin desplazar a `GIT_SHA`: lo explícito gana, porque
+     * quien lo pasa a mano sabe lo que está haciendo.
+     */
+    GIT_SHA:
+      e.GIT_SHA !== 'unknown'
+        ? e.GIT_SHA
+        : (process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 12) ?? 'unknown'),
+  }));
 
 export type Env = z.infer<typeof envSchema>;
 

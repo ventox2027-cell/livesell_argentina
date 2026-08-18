@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { envSchema } from '@/config/env.schema';
 
@@ -743,5 +743,53 @@ describe('Railway como proveedor de despliegue', () => {
     expect(
       envSchema.safeParse({ ...VALID_STAGING, DEPLOYMENT_PROVIDER: 'heroku' }).success,
     ).toBe(false);
+  });
+});
+
+describe('GIT_SHA', () => {
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * EL CAMPO EXISTE PARA UNA PREGUNTA Y RESPONDÍA «unknown»
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * `/health` lo expone para saber, cuando algo se rompe, si lo que está arriba
+   * es lo que se creía. El Dockerfile lo recibe por `--build-arg`, que no
+   * existe cuando la plataforma construye la imagen ella misma.
+   *
+   * En el primer despliegue real de Railway devolvió `"unknown"`.
+   */
+  const sinSha = { ...VALID_STAGING };
+  delete (sinSha as Record<string, unknown>).GIT_SHA;
+
+  afterEach(() => {
+    delete process.env.RAILWAY_GIT_COMMIT_SHA;
+  });
+
+  it('usa el que inyecta la plataforma cuando no hay uno explícito', () => {
+    process.env.RAILWAY_GIT_COMMIT_SHA = '703ba0bdeadbeefcafe1234567890';
+
+    const r = envSchema.safeParse(sinSha);
+
+    expect(r.success, JSON.stringify(r.success ? '' : r.error.issues)).toBe(true);
+    if (r.success) expect(r.data.GIT_SHA).toBe('703ba0bdeadb');
+  });
+
+  it('lo explícito gana sobre el de la plataforma', () => {
+    // Quien lo pasa a mano sabe lo que está haciendo.
+    process.env.RAILWAY_GIT_COMMIT_SHA = 'aaaaaaaaaaaaaaaa';
+
+    const r = envSchema.safeParse({ ...VALID_STAGING, GIT_SHA: 'mio-a-mano' });
+
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.GIT_SHA).toBe('mio-a-mano');
+  });
+
+  it('sin ninguno de los dos, queda en unknown', () => {
+    // La contraparte: sin esto, un respaldo que inventara un valor pasaría los
+    // tests de arriba y `/health` mentiría con seguridad.
+    const r = envSchema.safeParse(sinSha);
+
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.GIT_SHA).toBe('unknown');
   });
 });
