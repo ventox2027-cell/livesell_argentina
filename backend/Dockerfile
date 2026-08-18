@@ -63,6 +63,24 @@ COPY . .
 # `prune --prod` deja fuera las dependencias de desarrollo. Es la diferencia
 # entre llevarse el compilador de TypeScript y el framework de tests a
 # producción o no.
+#
+# ⚠️ Por eso `prisma` —el CLI, no `@prisma/client`— vive en `dependencies` y no
+# en `devDependencies`.
+#
+# Parece un error y no lo es. El CLI no se usa en runtime, así que su lugar
+# natural sería devDependencies; pero entonces `prune --prod` lo saca de la
+# imagen, y con él se va la única forma de correr `prisma migrate deploy` al
+# desplegar.
+#
+# Lo que pasa cuando falta: el comando de arranque
+# `prisma migrate deploy && node dist/main.js` falla con "not found", la
+# plataforma cae al CMD de abajo, y la API levanta perfecto contra una base sin
+# esquema. `/health` responde 200 y **todas las consultas dan 500**. Pasó al
+# desplegar en Railway: el contenedor se veía sano y nada decía que las
+# migraciones no habían corrido.
+#
+# El costo son 67 MB de imagen. Barato al lado de un despliegue que parece
+# exitoso y no lo es.
 RUN pnpm prisma generate && pnpm build && pnpm prune --prod
 
 # ─── 3. Runtime ───────────────────────────────────────────────────────────────
