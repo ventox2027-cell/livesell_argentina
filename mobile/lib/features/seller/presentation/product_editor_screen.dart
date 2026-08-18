@@ -1020,14 +1020,21 @@ class _SelectorDeCategoria extends ConsumerWidget {
         decoration: InputDecoration(labelText: 'Rubro'),
         child: Text('Cargando…'),
       ),
-      error: (_, __) => InputDecorator(
+      /**
+       * El motivo REAL, no siempre «sin conexión».
+       *
+       * Antes este handler descartaba el error y mostraba ese texto pasara lo
+       * que pasara. Con el servidor arriba contestando 404, el cartel mandaba
+       * a revisar la WiFi — y el problema estaba del otro lado.
+       */
+      error: (error, __) => InputDecorator(
         decoration: const InputDecoration(
           labelText: 'Rubro',
           helperText: 'No se pudo cargar la lista. Podés guardar el borrador igual.',
         ),
         child: Row(
           children: [
-            const Expanded(child: Text('Sin conexión con el servidor')),
+            Expanded(child: Text(mensajeDeFalloDeCategorias(error))),
             TextButton(
               onPressed: () => ref.invalidate(categoriasProvider),
               child: const Text('Reintentar'),

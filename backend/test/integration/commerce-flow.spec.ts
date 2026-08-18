@@ -2687,6 +2687,72 @@ describe('Categorías de producto', () => {
     expect(p.categoryId).toBe('cat_hogar');
   });
 
+  /**
+   * El rubro elegido tiene que estar cuando el vendedor vuelve a abrir.
+   *
+   * ═════════════════════════════════════════════════════════════════════════
+   * LO QUE SE PROBABA ERA LA RESPUESTA DE CREACIÓN, NO LA VUELTA
+   * ═════════════════════════════════════════════════════════════════════════
+   *
+   * El test de arriba mira lo que devuelve el POST. Eso no prueba que el dato
+   * haya quedado guardado: un `categoryId` que se devolviera desde el cuerpo
+   * del pedido sin escribirse en la base pasaría igual.
+   *
+   * Lo que el vendedor vive es otra cosa — cierra el editor, vuelve a entrar,
+   * y el campo Rubro tiene que estar completo. Si aparece vacío, va a elegir
+   * de nuevo o, peor, va a creer que se despublicó.
+   */
+  it('el rubro sobrevive a cerrar y reabrir el producto', async () => {
+    const { token } = await nuevoVendedor();
+    const p = await crearProducto(token, { status: 'ACTIVE', categoryId: 'cat_hogar' });
+
+    // Reabrir es un GET del detalle, que es lo que hace el editor.
+    const alReabrir = await call('GET', `/api/v1/products/${p.id}`, { token });
+
+    expect(alReabrir.status, JSON.stringify(alReabrir.body)).toBe(200);
+    expect(alReabrir.body.categoryId).toBe('cat_hogar');
+  });
+
+  it('cambiar el rubro lo cambia de verdad, no sólo en la respuesta', async () => {
+    const { token } = await nuevoVendedor();
+    const p = await crearProducto(token, { status: 'ACTIVE', categoryId: 'cat_hogar' });
+
+    const editado = await call('PATCH', `/api/v1/products/${p.id}`, {
+      token,
+      body: { categoryId: 'cat_mascotas' },
+    });
+    expect(editado.status, JSON.stringify(editado.body)).toBe(200);
+    expect(editado.body.categoryId).toBe('cat_mascotas');
+
+    // Y en la base, que es donde importa.
+    const enBase = await prisma.product.findUniqueOrThrow({ where: { id: p.id as string } });
+    expect(enBase.categoryId).toBe('cat_mascotas');
+
+    // Y al reabrir.
+    const alReabrir = await call('GET', `/api/v1/products/${p.id}`, { token });
+    expect(alReabrir.body.categoryId).toBe('cat_mascotas');
+  });
+
+  it('el id que devuelve el catálogo es uno que el editor puede guardar', async () => {
+    /**
+     * El contrato entre las dos puntas, en un solo test.
+     *
+     * La app llena el desplegable con lo que devuelve `/categories` y manda de
+     * vuelta el `id` que eligió la persona. Si esos dos vocabularios se
+     * separaran —por ejemplo si el catálogo empezara a devolver el `slug` como
+     * `id`— cada intento de publicar daría 404 y ninguno de los tests de
+     * arriba se enteraría, porque todos usan ids escritos a mano.
+     */
+    const catalogo = await call('GET', '/api/v1/categories');
+    const primera = (catalogo.body as { id: string }[])[0];
+    expect(primera, 'el catálogo no puede venir vacío').toBeDefined();
+
+    const { token } = await nuevoVendedor();
+    const p = await crearProducto(token, { status: 'ACTIVE', categoryId: primera!.id });
+
+    expect(p.categoryId).toBe(primera!.id);
+  });
+
   it('⛔ una categoría inventada se rechaza con 404, no con un 500 de Prisma', async () => {
     /**
      * Antes `categoryId` era texto libre de hasta 40 caracteres que se escribía
