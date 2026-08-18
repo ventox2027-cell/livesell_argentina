@@ -9,8 +9,10 @@ import '../../../shared/widgets/app_snack.dart';
 import '../../inventory/data/inventory_repository.dart';
 import '../../inventory/presentation/stock_screen.dart';
 import '../data/categorias_api.dart';
+import '../data/tasas_api.dart';
 import '../data/seller_repository.dart';
 import 'widgets/conectar_mp_sheet.dart';
+import '../domain/desglose_de_precio.dart';
 import '../domain/seller_models.dart';
 
 /// Crear y editar un producto.
@@ -396,6 +398,17 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
                       prefixText: '\$ ',
                       hintText: '12.500',
                     ),
+                    // Se redibuja el desglose mientras escribe. Enterarse de lo
+                    // que se lleva la plataforma DESPUÉS de vender es la razón
+                    // por la que un costo publicado se siente escondido.
+                    onChanged: (_) => setState(() {}),
+                  ),
+                  _DesgloseDelPrecio(
+                    centavos: parsearPesos(_precio.text) ?? 0,
+                    onUsarPrecio: (sugerido) {
+                      _precio.text = formatearPesos(sugerido).replaceAll('\$ ', '');
+                      setState(() {});
+                    },
                   ),
                   const SizedBox(height: Gap.lg),
 
@@ -1005,6 +1018,192 @@ class _AccesoStock extends ConsumerWidget {
 /// funcionando: alguien con mala señal tiene que poder guardar el borrador
 /// igual. Lo único que no va a poder es publicar, y eso ya se lo dice el botón
 /// de publicar.
+/// Cuánto se lleva cada uno, mientras el vendedor escribe el precio.
+///
+/// ═══════════════════════════════════════════════════════════════════════════
+/// EL ARGUMENTO COMERCIAL DE VENDOX, HECHO PANTALLA
+/// ═══════════════════════════════════════════════════════════════════════════
+///
+/// «Antes de publicar te mostramos cuánto vas a pagar y cuánto estimamos que
+/// vas a recibir. Sin costos escondidos.»
+///
+/// Un costo publicado en algún lado pero descubierto DESPUÉS de vender se
+/// siente escondido igual. Por eso va acá, al lado del campo, y no en una
+/// pantalla de ayuda.
+///
+/// ⚠️ El costo de Mercado Pago es una ESTIMACIÓN y la pantalla lo dice. La tasa
+/// real la informan ellos después de cobrar y depende del medio de pago, las
+/// cuotas y las condiciones de la cuenta. Presentarlo como exacto sería la
+/// misma clase de promesa incumplible que un aviso que nadie puede satisfacer.
+class _DesgloseDelPrecio extends ConsumerWidget {
+  const _DesgloseDelPrecio({required this.centavos, required this.onUsarPrecio});
+
+  final int centavos;
+  final ValueChanged<int> onUsarPrecio;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Sin precio todavía no hay nada que mostrar. Un desglose en cero ocupa
+    // lugar y no dice nada.
+    if (centavos <= 0) return const SizedBox.shrink();
+
+    final tasas = ref.watch(tasasProvider).valueOrNull ?? TasasDeVendox.porOmision;
+    final d = desglosarPrecio(
+      precio: centavos,
+      comisionBps: tasas.comisionBps,
+      costoDelProcesadorBps: tasas.costoDelProcesadorBps,
+    );
+
+    return Padding(
+      padding: const EdgeInsets.only(top: Gap.md),
+      child: Container(
+        padding: const EdgeInsets.all(Gap.md),
+        decoration: BoxDecoration(
+          color: AppColor.superficie,
+          borderRadius: BorderRadius.circular(Redondeo.md),
+          border: Border.all(color: AppColor.borde),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _Linea('Lo que ve quien compra', formatearPesos(d.precio)),
+            _Linea(
+              'Comisión de VendoX (${porcentajeLegible(tasas.comisionBps)} %)',
+              '-${formatearPesos(d.comision)}',
+            ),
+            _Linea(
+              'Mercado Pago (aprox.)',
+              '-${formatearPesos(d.costoDelProcesador)}',
+            ),
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: Gap.sm),
+              child: Divider(height: 1, color: AppColor.borde),
+            ),
+            _Linea('Estimado que recibís', formatearPesos(d.netoEstimado), fuerte: true),
+            const SizedBox(height: Gap.sm),
+            const Text(
+              'El costo de Mercado Pago lo informan ellos después de cobrar, así que '
+              'esto es aproximado.',
+              style: TextStyle(fontSize: 11, color: AppColor.textoDebil, height: 1.35),
+            ),
+            const SizedBox(height: Gap.sm),
+            _CuantoQuerasRecibir(tasas: tasas, onUsarPrecio: onUsarPrecio),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _Linea extends StatelessWidget {
+  const _Linea(this.etiqueta, this.valor, {this.fuerte = false});
+
+  final String etiqueta;
+  final String valor;
+  final bool fuerte;
+
+  @override
+  Widget build(BuildContext context) {
+    final estilo = TextStyle(
+      fontSize: fuerte ? 14 : 13,
+      fontWeight: fuerte ? FontWeight.w700 : FontWeight.w400,
+      color: fuerte ? AppColor.texto : AppColor.textoSuave,
+    );
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(etiqueta, style: estilo),
+          Text(valor, style: estilo),
+        ],
+      ),
+    );
+  }
+}
+
+/// La cuenta al revés: cuánto publicar para recibir lo que la persona quiere.
+///
+/// Es la pregunta que el vendedor se hace de verdad. «Yo quiero que me queden
+/// $100.000» es más natural que «quiero publicar a $111.350».
+class _CuantoQuerasRecibir extends StatefulWidget {
+  const _CuantoQuerasRecibir({required this.tasas, required this.onUsarPrecio});
+
+  final TasasDeVendox tasas;
+  final ValueChanged<int> onUsarPrecio;
+
+  @override
+  State<_CuantoQuerasRecibir> createState() => _CuantoQuerasRecibirState();
+}
+
+class _CuantoQuerasRecibirState extends State<_CuantoQuerasRecibir> {
+  final _neto = TextEditingController();
+  bool _abierto = false;
+
+  @override
+  void dispose() {
+    _neto.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_abierto) {
+      return Align(
+        alignment: Alignment.centerLeft,
+        child: TextButton(
+          onPressed: () => setState(() => _abierto = true),
+          style: TextButton.styleFrom(padding: EdgeInsets.zero),
+          child: const Text('¿Cuánto querés recibir?', style: TextStyle(fontSize: 13)),
+        ),
+      );
+    }
+
+    final pedido = parsearPesos(_neto.text) ?? 0;
+    final sugerido = pedido > 0
+        ? precioParaRecibir(
+            neto: pedido,
+            comisionBps: widget.tasas.comisionBps,
+            costoDelProcesadorBps: widget.tasas.costoDelProcesadorBps,
+          )
+        : null;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        TextField(
+          controller: _neto,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          onChanged: (_) => setState(() {}),
+          decoration: const InputDecoration(
+            labelText: 'Quiero recibir',
+            prefixText: '\$ ',
+            isDense: true,
+          ),
+        ),
+        if (sugerido != null) ...[
+          const SizedBox(height: Gap.sm),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Publicá a ${formatearPesos(sugerido)} aprox.',
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                ),
+              ),
+              TextButton(
+                onPressed: () => widget.onUsarPrecio(sugerido),
+                child: const Text('Usar'),
+              ),
+            ],
+          ),
+        ],
+      ],
+    );
+  }
+}
+
 class _SelectorDeCategoria extends ConsumerWidget {
   const _SelectorDeCategoria({required this.elegida, required this.onElegir});
 

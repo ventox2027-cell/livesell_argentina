@@ -12,6 +12,7 @@ import 'package:vendox/core/config/runtime_config.dart';
 import 'package:vendox/core/network/api_client.dart';
 import 'package:vendox/features/auth/state/auth_providers.dart';
 import 'package:vendox/features/seller/data/categorias_api.dart';
+import 'package:vendox/features/seller/data/tasas_api.dart';
 import 'package:vendox/features/seller/presentation/product_editor_screen.dart';
 
 /// El selector de rubro del editor de producto.
@@ -102,6 +103,126 @@ void main() {
    * problema estaba del otro lado y el servidor lo estaba diciendo — con un
    * número que la pantalla tiraba a la basura.
    */
+
+  group('Lo que se lleva cada uno, al publicar', () {
+    /**
+     * ═════════════════════════════════════════════════════════════════════════
+     * EL ARGUMENTO COMERCIAL, HECHO PANTALLA
+     * ═════════════════════════════════════════════════════════════════════════
+     *
+     * «Antes de publicar te mostramos cuánto vas a pagar y cuánto estimamos que
+     * vas a recibir.» Un costo publicado en algún lado pero descubierto DESPUÉS
+     * de vender se siente escondido igual.
+     */
+    testWidgets('sin precio no muestra nada', (tester) async {
+      // Un desglose en cero ocupa lugar y no dice nada.
+      await tester.pumpWidget(editor());
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Estimado que recibís'), findsNothing);
+    });
+
+    testWidgets('al escribir un precio aparece el desglose completo', (tester) async {
+      await tester.pumpWidget(editor());
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.widgetWithText(TextField, 'Precio'), '100000');
+      await tester.pumpAndSettle();
+
+      expect(find.text('Lo que ve quien compra'), findsOneWidget);
+      expect(find.textContaining('Comisión de VendoX'), findsOneWidget);
+      expect(find.text('Mercado Pago (aprox.)'), findsOneWidget);
+      expect(find.text('Estimado que recibís'), findsOneWidget);
+    });
+
+    testWidgets('los números son los del negocio, no inventados', (tester) async {
+      await tester.pumpWidget(editor());
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.widgetWithText(TextField, 'Precio'), '100000');
+      await tester.pumpAndSettle();
+
+      // 4 % de $100.000 = $4.000 · 6,19 % = $6.190 · quedan $89.810.
+      expect(find.text(r'-$ 4.000,00'), findsOneWidget);
+      expect(find.text(r'-$ 6.190,00'), findsOneWidget);
+      expect(find.text(r'$ 89.810,00'), findsOneWidget);
+    });
+
+
+    testWidgets('⛔ las tasas salen del SERVIDOR, no escritas en la app', (tester) async {
+      /**
+       * El bug que ya pasó una vez, en la pantalla de políticas: 600 y 619
+       * escritos a mano en el Dart. Daban bien de casualidad porque coincidían
+       * con los del servidor, y el día que la comisión bajó a 4 % ese ejemplo
+       * habría seguido mostrando 6 % sin que nada fallara ni avisara.
+       *
+       * Acá se fuerza una tasa distinta y la pantalla tiene que seguirla.
+       */
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            categoriasProvider.overrideWith((ref) async => catalogo),
+            tasasProvider.overrideWith(
+              (ref) async =>
+                  const TasasDeVendox(comisionBps: 250, costoDelProcesadorBps: 1000),
+            ),
+          ],
+          child: const MaterialApp(home: ProductEditorScreen()),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.widgetWithText(TextField, 'Precio'), '100000');
+      await tester.pumpAndSettle();
+
+      // 2,5 % de $100.000 = $2.500 · 10 % = $10.000 · quedan $87.500.
+      expect(find.textContaining('2,50 %'), findsOneWidget);
+      expect(find.text(r'-$ 2.500,00'), findsOneWidget);
+      expect(find.text(r'-$ 10.000,00'), findsOneWidget);
+      expect(find.text(r'$ 87.500,00'), findsOneWidget);
+    });
+    testWidgets('⛔ dice que el costo de Mercado Pago es aproximado', (tester) async {
+      /**
+       * No es una formalidad. La tasa real la informan ellos después de cobrar
+       * y depende del medio de pago y de las cuotas. Presentar el neto como
+       * exacto sería la misma clase de promesa incumplible que un aviso que
+       * nadie puede satisfacer.
+       */
+      await tester.pumpWidget(editor());
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.widgetWithText(TextField, 'Precio'), '100000');
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('aproximado'), findsOneWidget);
+      expect(find.textContaining('aprox.'), findsWidgets);
+    });
+
+    testWidgets('«¿cuánto querés recibir?» sugiere un precio y lo puede usar', (tester) async {
+      await tester.pumpWidget(editor());
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.widgetWithText(TextField, 'Precio'), '1000');
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('¿Cuánto querés recibir?'));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.widgetWithText(TextField, 'Quiero recibir'), '100000');
+      await tester.pumpAndSettle();
+
+      // 100.000 / (1 − 0,0419 − 0,0619) ≈ 111.346.
+      expect(find.textContaining('Publicá a'), findsOneWidget);
+
+      await tester.tap(find.text('Usar'));
+      await tester.pumpAndSettle();
+
+      // Y el precio del formulario quedó cargado con la sugerencia.
+      final campo = tester.widget<TextField>(find.widgetWithText(TextField, 'Precio'));
+      expect(campo.controller!.text, isNot('1000'));
+      expect(campo.controller!.text, contains('111'));
+    });
+  });
   group('El motivo del fallo', () {
     test('un 404 no se reporta como falta de conexión', () {
       const fallo = FalloDeCategorias(MotivoDeFallo.servidor, statusCode: 404);

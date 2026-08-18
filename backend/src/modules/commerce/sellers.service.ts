@@ -258,7 +258,24 @@ export class SellersService {
 
   async myStore(userId: string) {
     const { store } = await this.ownership.primaryStoreOf(userId);
-    return store;
+
+    /**
+     * Las tasas viajan con la tienda propia.
+     *
+     * El editor de producto necesita mostrarle al vendedor cuánto se lleva
+     * VendoX y cuánto estima que le queda, mientras escribe el precio. Ese
+     * cálculo se hace en la app —se recalcula en cada tecla, sin ir al
+     * servidor— pero las TASAS no se copian: es la misma decisión que se tomó
+     * para la pantalla de políticas, y por el mismo motivo.
+     *
+     * Escritas a mano en el Dart, el día que cambie la comisión el vendedor
+     * seguiría leyendo la vieja. Ya pasó una vez.
+     */
+    return {
+      ...store,
+      comisionBps: env.VENDOX_PLATFORM_FEE_BPS,
+      costoDelProcesadorBps: env.PROCESSOR_FEE_ESTIMATE_BPS,
+    };
   }
 
   async updateStore(userId: string, storeId: string, dto: UpdateStoreDto) {
