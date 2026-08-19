@@ -116,7 +116,7 @@ class _SinVendedorState extends ConsumerState<_SinVendedor> {
 
     setState(() => _creando = true);
     try {
-      await ref.read(sellerRepositoryProvider).crearVendedor(displayName: nombre);
+      final creada = await ref.read(sellerRepositoryProvider).crearVendedor(displayName: nombre);
       if (!mounted) return;
 
       /**
@@ -140,8 +140,25 @@ class _SinVendedorState extends ConsumerState<_SinVendedor> {
        * lado. La conclusión razonable es que la app no funciona.
        *
        * Ahora el refresco va primero y no depende de que nada más salga bien.
+       *
+       * ═══════════════════════════════════════════════════════════════════════
+       * Y NO SE VUELVE A PEDIR LO QUE EL `POST` YA DEVOLVIÓ
+       * ═══════════════════════════════════════════════════════════════════════
+       *
+       * Acá decía `ref.invalidate(...)`, que deja el provider en `loading` y
+       * dispara un `GET /sellers/me`. O sea: un viaje entero a Railway para
+       * traer el vendedor y la tienda que la respuesta del `POST` ya tenía en
+       * la mano — y mientras tanto, la pantalla mostrando su spinner de cuerpo
+       * entero.
+       *
+       * Con 650 ms de latencia a la base eso son varios segundos en los que la
+       * persona no ve su tienda después de haberla creado. Suficiente para
+       * pensar que no funcionó, cerrar la app y volver a abrirla.
+       *
+       * `adoptar` la pone en el mismo frame. La reconciliación va después y
+       * nadie la espera.
        */
-      ref.invalidate(miPerfilVendedorProvider);
+      ref.read(miPerfilVendedorProvider.notifier).adoptar(creada);
 
       /**
        * Y la sesión se refresca aparte, sin `await` y sin poder romper nada.
@@ -167,6 +184,19 @@ class _SinVendedorState extends ConsumerState<_SinVendedor> {
           // arranque o en la próxima llamada a `/auth/me`.
         }),
       );
+
+      /**
+       * Y se confirma contra el servidor, en segundo plano.
+       *
+       * ⚠️ `reconciliar()` y no `invalidate`: invalidar dejaría el provider en
+       * `loading` y la pantalla volvería al spinner, borrando la tienda que la
+       * persona acaba de ver aparecer.
+       *
+       * Si falla, se conserva lo adoptado. Una tienda que EXISTE —el `POST`
+       * devolvió 201— no puede desaparecer de la pantalla porque un refresco de
+       * cortesía no llegó.
+       */
+      unawaited(ref.read(miPerfilVendedorProvider.notifier).reconciliar());
 
       AppSnack.exito(context, '¡Listo! Ya podés cargar productos.');
     } on ComercioException catch (e) {

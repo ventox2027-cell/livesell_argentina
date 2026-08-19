@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -48,9 +50,23 @@ class _RepoDeAlta extends Fake implements SellerRepository {
     return _perfil(displayName);
   }
 
+  /// Si el `GET /sellers/me` posterior tiene que fallar.
+  ///
+  /// Sirve para probar lo importante: que la tienda recién creada NO dependa de
+  /// que ese viaje salga bien.
+  bool fallaAlPreguntar = false;
+
+  /// Si el `GET` no tiene que contestar nunca.
+  ///
+  /// Es la forma de demostrar que la pantalla cambia con lo que devolvió el
+  /// `POST` y no esperando un segundo viaje.
+  bool cuelgaAlPreguntar = false;
+
   @override
   Future<PerfilVendedor?> miPerfil() async {
     vecesQuePreguntoElPerfil += 1;
+    if (cuelgaAlPreguntar) return Completer<PerfilVendedor?>().future;
+    if (fallaAlPreguntar) throw ComercioException('sin red');
     return creada ? _perfil('Tejidos del Sur') : null;
   }
 
@@ -297,6 +313,80 @@ void main() {
       await crearTienda(tester);
 
       expect(repo.vecesQuePreguntoElPerfil, greaterThan(antes));
+    });
+  });
+
+  /// La tienda aparece SIN esperar un segundo viaje.
+  ///
+  /// ═══════════════════════════════════════════════════════════════════════════
+  /// EL RETRASO QUE QUEDABA, Y POR QUÉ NO SE VEÍA EN LOS TESTS
+  /// ═══════════════════════════════════════════════════════════════════════════
+  ///
+  /// El arreglo anterior movió `ref.invalidate` antes del refresco de sesión, y
+  /// resolvió el caso en que la sesión fallaba. Pero seguía habiendo un viaje de
+  /// más: invalidar deja el provider en `loading` y dispara un `GET /sellers/me`
+  /// para traer el vendedor y la tienda que la respuesta del `POST` **ya tenía**.
+  ///
+  /// En un test ese GET contesta al instante y no se nota. En un teléfono contra
+  /// Railway, con 650 ms de latencia a la base, son varios segundos con la
+  /// pantalla en el spinner después de tocar «Crear mi tienda» — suficiente para
+  /// pensar que no funcionó y cerrar la app.
+  ///
+  /// Estos tests hacen que el GET **no conteste** o **falle**. Ahí la diferencia
+  /// entre usar la respuesta del POST y volver a preguntar deja de ser
+  /// invisible.
+  group('La tienda se ve sin esperar el GET', () {
+    /// ⛔ EL TEST DEL RETRASO.
+    ///
+    /// El `GET /sellers/me` no contesta NUNCA. Si la pantalla dependiera de él,
+    /// se quedaría en el spinner para siempre — que es exactamente lo que se
+    /// sentía en el teléfono, sólo que ahí terminaba contestando.
+    testWidgets('⛔ aunque el GET no conteste nunca, la tienda se ve', (tester) async {
+      await tester.pumpWidget(pantalla());
+      await tester.pumpAndSettle();
+      repo.cuelgaAlPreguntar = true;
+
+      await tester.enterText(find.byType(TextField), 'Tejidos del Sur');
+      await tester.tap(find.text('Crear mi tienda'));
+      // Sin `pumpAndSettle`: con un futuro colgado no habría nada que asentar.
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(find.text('Empezá a vender'), findsNothing);
+      expect(find.text('MIS PRODUCTOS'), findsOneWidget);
+      expect(find.text('Tejidos del Sur'), findsWidgets);
+    });
+
+    /// ⛔ Y si el GET falla, la tienda TAMPOCO puede desaparecer.
+    ///
+    /// El `POST` devolvió 201: la tienda existe. Que un refresco de cortesía no
+    /// llegue no puede borrarla de la pantalla y devolver a la persona al
+    /// formulario que acaba de completar.
+    testWidgets('⛔ si la reconciliación falla, la tienda sigue visible', (tester) async {
+      await tester.pumpWidget(pantalla());
+      await tester.pumpAndSettle();
+      repo.fallaAlPreguntar = true;
+
+      await crearTienda(tester);
+
+      expect(find.text('Empezá a vender'), findsNothing);
+      expect(find.text('MIS PRODUCTOS'), findsOneWidget);
+    });
+
+    /// El alta es UNA sola, pase lo que pase con el refresco.
+    ///
+    /// Es lo que evita la segunda tienda por reintento: si la pantalla volviera
+    /// al formulario, la persona tocaría el botón otra vez.
+    testWidgets('⛔ no se crea una segunda tienda por el reintento del usuario', (tester) async {
+      await tester.pumpWidget(pantalla());
+      await tester.pumpAndSettle();
+      repo.fallaAlPreguntar = true;
+
+      await crearTienda(tester);
+
+      // El formulario ya no existe, así que no hay botón que volver a tocar.
+      expect(find.text('Crear mi tienda'), findsNothing);
+      expect(repo.vecesQueCreo, 1);
     });
   });
 }

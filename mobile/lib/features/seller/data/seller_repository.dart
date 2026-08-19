@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http_parser/http_parser.dart';
 
 import '../../../core/network/api_client.dart';
+import '../../auth/domain/session.dart';
 import '../../auth/state/auth_providers.dart';
 import '../domain/seller_models.dart';
 
@@ -402,12 +403,77 @@ final sellerRepositoryProvider = Provider<SellerRepository>(
 );
 
 /// Perfil de vendedor del usuario actual. `null` si todavía no lo es.
-final miPerfilVendedorProvider = FutureProvider<PerfilVendedor?>((ref) async {
-  // Se recalcula al cambiar la sesión: si alguien cierra sesión y entra con
-  // otra cuenta, no puede seguir viendo la tienda de la anterior.
-  ref.watch(sesionProvider);
-  return ref.watch(sellerRepositoryProvider).miPerfil();
-});
+///
+/// ═══════════════════════════════════════════════════════════════════════════
+/// POR QUÉ NO ES UN `FutureProvider`
+/// ═══════════════════════════════════════════════════════════════════════════
+///
+/// Porque hace falta poder DECIRLE el perfil, no sólo pedírselo.
+///
+/// Cuando alguien crea su tienda, `POST /sellers` ya devuelve el vendedor y la
+/// tienda completos. Con un `FutureProvider` eso no se puede aprovechar: la
+/// única forma de actualizar la pantalla era invalidar y esperar un `GET
+/// /sellers/me` — un viaje entero a Railway para traer lo que la app ya tenía
+/// en la mano.
+///
+/// Con 650 ms de latencia a la base, ese viaje son varios segundos de pantalla
+/// en blanco después de tocar «Crear mi tienda», y es lo que hacía que
+/// pareciera que la tienda no se había creado.
+///
+/// Ahora `adoptar()` la pone al instante y la reconciliación va después, sin
+/// que nadie la espere.
+class PerfilVendedorNotifier extends AsyncNotifier<PerfilVendedor?> {
+  @override
+  Future<PerfilVendedor?> build() async {
+    /**
+     * ⚠️ Se observa el ID de la persona, NO el objeto de sesión entero.
+     *
+     * Antes era `ref.watch(sesionProvider)`. `ConSesion` no define igualdad, así
+     * que **cada** refresco de sesión creaba una instancia nueva y este provider
+     * se recalculaba de cero — tirando lo que ya tenía y pidiendo todo otra vez.
+     *
+     * Y justo después de crear la tienda la app refresca la sesión, para que el
+     * rol `seller` llegue al resto de las pantallas. O sea que el peor momento
+     * para un recálculo completo era exactamente ése: el perfil recién adoptado
+     * se descartaba y volvía la espera.
+     *
+     * Con el id, cambiar de cuenta sigue recalculando —que es lo que esta línea
+     * vino a garantizar— y un refresco de la misma sesión no.
+     */
+    ref.watch(sesionProvider.select((s) => s is ConSesion ? s.usuario.id : null));
+    return ref.watch(sellerRepositoryProvider).miPerfil();
+  }
+
+  /// Pone un perfil que ya se tiene, sin ir a buscarlo.
+  ///
+  /// Lo usa el alta de tienda con la respuesta del `POST`. La pantalla cambia
+  /// en el mismo frame.
+  void adoptar(PerfilVendedor perfil) => state = AsyncData(perfil);
+
+  /// Vuelve a pedirlo al servidor **sin borrar lo que ya se ve**.
+  ///
+  /// ⚠️ La diferencia con `ref.invalidate` es todo el punto: invalidar deja el
+  /// provider en `loading`, y la pantalla que lo observa muestra su spinner de
+  /// cuerpo entero. Para una reconciliación de fondo eso es un parpadeo que
+  /// borra la tienda que la persona acaba de crear.
+  ///
+  /// Si falla, se conserva lo anterior. Una tienda que existe no puede
+  /// desaparecer de la pantalla porque un refresco de cortesía no llegó.
+  Future<void> reconciliar() async {
+    final anterior = state.valueOrNull;
+    final nuevo = await AsyncValue.guard(
+      () => ref.read(sellerRepositoryProvider).miPerfil(),
+    );
+
+    if (nuevo.hasError && anterior != null) return;
+    state = nuevo;
+  }
+}
+
+final miPerfilVendedorProvider =
+    AsyncNotifierProvider<PerfilVendedorNotifier, PerfilVendedor?>(
+  PerfilVendedorNotifier.new,
+);
 
 final misProductosProvider = FutureProvider<Pagina<Producto>>((ref) async {
   ref.watch(miPerfilVendedorProvider);
