@@ -795,7 +795,37 @@ export class ProductsService {
       }
     })();
 
-    const filas = await this.prisma.product.findMany({
+    /**
+     * ═══════════════════════════════════════════════════════════════════════
+     * LOS PROMOCIONADOS SE PIDEN EN PARALELO CON EL FEED, NO DESPUÉS
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * Qué productos están promocionados ahora no depende de qué traiga la
+     * consulta orgánica: son dos preguntas independientes. Encadenarlas
+     * agregaba un viaje entero a la base al camino más caliente de la app.
+     *
+     * Y con Neon eso no es un detalle. Medido contra Railway el 19/08:
+     * `/categories` responde en 610 ms —de los cuales 450 son TLS y conexión—
+     * mientras el feed tardaba **3,5 segundos**, consistentes en cinco
+     * intentos seguidos. No era arranque en frío: eran cuatro viajes en serie
+     * a una base que reporta 682 ms de latencia en `/ready`.
+     *
+     * Se pide sólo cuando va a hacer falta. Con cursor —página dos en
+     * adelante— no hay promocionados, y con un orden explícito o una búsqueda
+     * tampoco: pedirlos igual sería gastar el viaje que se está tratando de
+     * ahorrar.
+     */
+    const pediraPromocionados =
+      query.cursor === undefined && query.orden === 'relevancia' && idsBuscados === null;
+
+    const promesaDePromocionados = pediraPromocionados
+      ? this.promociones.productosPromocionadosAhora()
+      : Promise.resolve<string[]>([]);
+
+    const promesaDeFilas = this.prisma.product.findMany({
+      // Un JOIN en vez de una consulta por relación. Ver `relationJoins` en el
+      // esquema: acá está el camino que se midió en 3,5 s contra Railway.
+      relationLoadStrategy: 'join',
       where: {
         ...PRODUCTO_COMPRABLE,
         ...(idsBuscados ? { id: { in: idsBuscados } } : {}),
@@ -828,6 +858,11 @@ export class ProductsService {
       select: FEED_SELECT,
       take: query.limit + 1,
     });
+
+    const [filas, idsPromocionados] = await Promise.all([
+      promesaDeFilas,
+      promesaDePromocionados,
+    ]);
 
     // La disponibilidad sale como ETIQUETA, no como número. Publicar el stock
     // exacto de cada variante le regala a la competencia el ritmo de ventas de
@@ -865,7 +900,21 @@ export class ProductsService {
      */
     if (query.orden !== 'relevancia') return pagina;
 
-    const vivos = await this.vendedoresEnVivo(pagina.items.map((p) => p.store.seller.id));
+    /**
+     * Los dos viajes que quedan van juntos.
+     *
+     * Quién está en vivo y cómo son las tarjetas promocionadas son
+     * independientes entre sí: encadenarlas duplicaba la espera sin ganar nada.
+     */
+    const [vivos, filasPromocionadas] = await Promise.all([
+      this.vendedoresEnVivo(pagina.items.map((p) => p.store.seller.id)),
+      idsPromocionados.length > 0
+        ? this.prisma.product.findMany({
+            where: { id: { in: idsPromocionados }, ...PRODUCTO_VISIBLE },
+            select: FEED_SELECT,
+          })
+        : Promise.resolve([]),
+    ]);
 
     const ordenados = ordenarPorPuntaje(pagina.items, (p) => ({
       creadoEl: p.createdAt,
@@ -883,12 +932,11 @@ export class ProductsService {
      * implementación sino la decisión central del módulo.
      *
      * Sólo en la primera página: promocionar en la página siete es cobrarle a
-     * alguien por un lugar que casi nadie ve.
+     * alguien por un lugar que casi nadie ve. Eso lo decide
+     * `pediraPromocionados` allá arriba, cuando se resuelve si vale la pena
+     * gastar el viaje.
      */
-    const items =
-      query.cursor === undefined
-        ? await this.conPromocionados(ordenados)
-        : ordenados.map((item) => ({ ...item, promocionado: false }));
+    const items = this.intercalarPagos(ordenados, idsPromocionados, filasPromocionadas);
 
     return { ...pagina, items };
   }
@@ -903,16 +951,14 @@ export class ProductsService {
    * Y pasa por `PRODUCTO_VISIBLE`: una promoción no puede mostrar algo que la
    * tienda pausó o borró después de comprarla.
    */
-  private async conPromocionados<T extends { id: string; store: { seller: { id: string } } }>(
+  private intercalarPagos<T extends { id: string; store: { seller: { id: string } } }>(
     organicos: T[],
+    ids: string[],
+    filas: Array<Prisma.ProductGetPayload<{ select: typeof FEED_SELECT }>>,
   ) {
-    const ids = await this.promociones.productosPromocionadosAhora();
-    if (ids.length === 0) return organicos.map((item) => ({ ...item, promocionado: false }));
-
-    const filas = await this.prisma.product.findMany({
-      where: { id: { in: ids }, ...PRODUCTO_VISIBLE },
-      select: FEED_SELECT,
-    });
+    if (ids.length === 0 || filas.length === 0) {
+      return organicos.map((item) => ({ ...item, promocionado: false }));
+    }
 
     // El orden de compra lo define `productosPromocionadosAhora`; la base
     // devuelve lo que quiere, así que se reordena según los ids.

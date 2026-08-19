@@ -13,6 +13,28 @@
 
 generator client {
   provider = "prisma-client-js"
+
+  /// `relationJoins` deja pedir las relaciones con un JOIN en vez de una
+  /// consulta por relación.
+  ///
+  /// ═══════════════════════════════════════════════════════════════════════
+  /// POR QUÉ HIZO FALTA: EL FEED TARDABA 3,5 SEGUNDOS
+  /// ═══════════════════════════════════════════════════════════════════════
+  ///
+  /// Por omisión, un `select` anidado NO produce un JOIN: Prisma recorre el
+  /// grafo y emite una consulta por relación, en serie. El feed —que pide
+  /// producto, imágenes, tienda, vendedor, variantes e inventario— hacía OCHO
+  /// viajes seguidos a la base.
+  ///
+  /// En local eso son 20 ms y no se nota. Contra Neon desde Railway, con 682 ms
+  /// de latencia medidos en `/ready`, son 3,5 segundos — medidos también, cinco
+  /// veces seguidas, el 19/08/2026.
+  ///
+  /// ⚠️ Es una función en vista previa. No se activa globalmente: se pide con
+  /// `relationLoadStrategy: 'join'` sólo donde se midió que hace falta, para
+  /// que un cambio de comportamiento no aparezca en una consulta que nadie
+  /// revisó.
+  previewFeatures = ["relationJoins"]
 }
 
 datasource db {

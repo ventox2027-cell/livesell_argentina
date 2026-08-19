@@ -5297,3 +5297,176 @@ describe('Tope de Free bajo concurrencia', () => {
     expect(await publicados(v.seller.id as string)).toBe(5);
   });
 });
+
+/**
+ * Cuántas veces habla el feed con la base.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * POR QUÉ ESTO SE MIDE Y NO SE CONFÍA
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Medido contra Railway el 19/08/2026, cinco intentos seguidos:
+ *
+ *     /api/v1/categories                  610 ms   (450 de TLS y conexión)
+ *     /api/v1/discover/products?limit=20  3.480 ms
+ *
+ * No era arranque en frío —los cinco intentos dieron entre 3,41 y 3,59 s— ni
+ * volumen de datos: la base estaba recién creada. Eran cuatro viajes EN SERIE
+ * a una base que `/ready` reporta con 682 ms de latencia.
+ *
+ * Cada viaje que se agrega al feed cuesta casi un segundo de pantalla en
+ * blanco. Un N+1 que en local no se nota, acá se ve.
+ *
+ * Estos tests no miden tiempo —eso depende de la máquina— sino CUÁNTAS
+ * consultas se hacen, que es lo que se traduce en tiempo cuando la base está
+ * lejos.
+ */
+describe('El feed no habla de más con la base', () => {
+  /**
+   * Todas las consultas de la sesión, en orden.
+   *
+   * ⚠️ UN listener para todo el archivo, y se cuenta por diferencia.
+   *
+   * La primera versión registraba uno nuevo en cada medición. Prisma no expone
+   * `$off`, así que se iban acumulando: la segunda medición contaba cada
+   * consulta dos veces, la tercera tres. El test daba «6 esperaba 3» de forma
+   * intermitente según el orden en que corrieran los casos.
+   *
+   * Es el mismo error que el de la espera de abajo: una instrumentación mal
+   * hecha no falla, MIENTE — y encima de forma inconsistente, que es peor.
+   */
+  const consultasDeLaSesion: string[] = [];
+  let escuchando = false;
+
+  function empezarAEscuchar() {
+    if (escuchando) return;
+    escuchando = true;
+    (prisma as unknown as { $on: (e: string, cb: () => void) => void }).$on('query', () => {
+      consultasDeLaSesion.push('q');
+    });
+  }
+
+  /** Cuenta las consultas que dispara `accion`. */
+  async function consultasDe(accion: () => Promise<unknown>): Promise<number> {
+    empezarAEscuchar();
+    const antes = consultasDeLaSesion.length;
+
+    await accion();
+
+    /**
+     * ⚠️ Los eventos de Prisma llegan DESPUÉS de que la promesa se resuelve.
+     *
+     * Sin esta espera el contador da cero y los tests pasan por la razón
+     * equivocada: «0 consultas con 3 productos y 0 con 12» cumple la igualdad
+     * y no prueba nada. Pasó exactamente eso al escribirlos.
+     */
+    await new Promise((r) => setTimeout(r, 200));
+    return consultasDeLaSesion.length - antes;
+  }
+
+  async function tiendaConProductos(cantidad: number) {
+    const v = await nuevoVendedor();
+    await darPlan(v.seller.id as string, 'PRO');
+    for (let i = 1; i <= cantidad; i += 1) {
+      const r = await call('POST', '/api/v1/products', {
+        token: v.token,
+        body: {
+          name: `Feed perf ${Date.now()}-${i}`,
+          basePriceCents: 500_000,
+          categoryId: 'cat_otros',
+          status: 'ACTIVE',
+        },
+      });
+      expect(r.status, JSON.stringify(r.body)).toBe(201);
+    }
+    return v;
+  }
+
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * EL TEST QUE DETECTA UN N+1
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * Con 3 productos y con 12, el feed tiene que hacer LA MISMA cantidad de
+   * consultas. Si crece con los productos, es que hay una consulta por fila —y
+   * eso, con la base a 682 ms, son doce segundos.
+   */
+  it('⛔ la cantidad de consultas NO crece con la cantidad de productos', async () => {
+    await tiendaConProductos(3);
+    const conPocos = await consultasDe(() => call('GET', '/api/v1/discover/products?limit=20'));
+
+    await tiendaConProductos(9);
+    const conMuchos = await consultasDe(() => call('GET', '/api/v1/discover/products?limit=20'));
+
+    expect(conMuchos).toBe(conPocos);
+  });
+
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * EL TECHO: TRES CONSULTAS
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * Antes eran OCHO, y no por un N+1 por producto sino por uno por RELACIÓN.
+   * Prisma, por omisión, no hace JOIN con un `select` anidado: recorre el grafo
+   * y emite una consulta por cada rama, en serie. El feed pedía producto,
+   * imágenes, tienda, vendedor, variantes e inventario — seis viajes, más
+   * promociones y sesiones en vivo.
+   *
+   * Con `relationLoadStrategy: 'join'` esas seis se vuelven una.
+   *
+   * Lo que queda:
+   *
+   *   1. los productos con todas sus relaciones, en un JOIN
+   *   2. qué productos están promocionados ahora   (en paralelo con la 1)
+   *   3. qué vendedores están en vivo              (en paralelo con las tarjetas
+   *                                                 promocionadas, si las hay)
+   *
+   * O sea dos esperas, no ocho. Contra una base a 682 ms eso es la diferencia
+   * entre 3,5 segundos y menos de uno.
+   *
+   * El número es un techo, no una meta: si alguien lo baja, mejor. Lo que no
+   * puede es subir sin que alguien lo decida.
+   */
+  it('el feed no supera las 3 consultas', async () => {
+    await tiendaConProductos(5);
+
+    const n = await consultasDe(() => call('GET', '/api/v1/discover/products?limit=20'));
+
+    expect(n).toBeLessThanOrEqual(3);
+  });
+
+  /**
+   * La segunda página no necesita promocionados: promocionar en la página
+   * siete es cobrarle a alguien por un lugar que nadie ve. Así que tiene que
+   * hacer MENOS consultas que la primera, no las mismas.
+   */
+  it('con cursor se ahorra el viaje de los promocionados', async () => {
+    await tiendaConProductos(5);
+    const primera = await call('GET', '/api/v1/discover/products?limit=2');
+    const cursor = primera.body.nextCursor as string;
+
+    const nPrimera = await consultasDe(() => call('GET', '/api/v1/discover/products?limit=2'));
+    const nSegunda = await consultasDe(() =>
+      call('GET', `/api/v1/discover/products?limit=2&cursor=${cursor}`),
+    );
+
+    expect(nSegunda).toBeLessThan(nPrimera);
+  });
+
+  /**
+   * Un orden explícito tampoco lleva promocionados ni ranking: quien pidió
+   * «precio: menor a mayor» quiere eso. Y por lo tanto no paga esos viajes.
+   */
+  it('con un orden explícito se ahorran los viajes del ranking', async () => {
+    await tiendaConProductos(5);
+
+    const nRelevancia = await consultasDe(() =>
+      call('GET', '/api/v1/discover/products?limit=5'),
+    );
+    const nPrecio = await consultasDe(() =>
+      call('GET', '/api/v1/discover/products?limit=5&orden=precio_asc'),
+    );
+
+    expect(nPrecio).toBeLessThan(nRelevancia);
+  });
+});

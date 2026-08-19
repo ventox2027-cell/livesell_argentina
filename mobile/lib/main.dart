@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'app/app_shell.dart';
 import 'core/config/runtime_config.dart';
+import 'core/config/traza_de_arranque.dart';
 import 'core/design/theme.dart';
 import 'core/enlaces/navegador_de_enlaces.dart';
 import 'core/enlaces/pantallas_de_destino.dart';
@@ -20,35 +21,37 @@ Future<void> main() async {
   // La URL del backend se lee del almacenamiento local: permite reapuntar la
   // app sin recompilar, que en pruebas de campo con dos teléfonos es la
   // diferencia entre cinco segundos y veinte minutos.
+  TrazaDeArranque.instancia.empezar();
+
   await RuntimeConfig.load();
+  TrazaDeArranque.instancia.paso('config local');
 
   /**
-   * Firebase, para los avisos push.
+   * ═══════════════════════════════════════════════════════════════════════════
+   * LO QUE NO HACE FALTA PARA EL PRIMER FRAME, NO SE ESPERA
+   * ═══════════════════════════════════════════════════════════════════════════
    *
-   * ⚠️ Sólo enciende el motor: NO pide permiso ni pregunta el token. En
-   * Android 13+ el diálogo del permiso se muestra una sola vez de verdad, y
-   * gastarlo en el arranque —cuando la persona todavía no sabe qué es esto—
-   * lo convierte en un «no» casi seguro. Se pide después de la primera
-   * compra. Ver `core/push/push_service.dart`.
+   * Antes acá había dos `await` más: encender Firebase y leer el enlace
+   * inicial. Ninguno de los dos hace falta para dibujar la primera pantalla, y
+   * los dos son lentos en un arranque en frío — Firebase especialmente.
    *
-   * Si falta `google-services.json` esto no tira: registra y sigue. Un clon
-   * del repositorio tiene que poder arrancar, y los avisos son una mejora, no
-   * un requisito para vender.
-   */
-  await PushService.instance.inicializar();
-
-  /**
-   * Los enlaces de vendox.com.ar y los avisos push llevan al MISMO lugar.
+   * Mientras se esperaban, la persona miraba el logo del sistema. Medido en un
+   * teléfono real: ~3 segundos hasta ver algo.
    *
-   * Los dos pasan por `core/enlaces/destino.dart`. Con dos resolutores, el
-   * mismo producto abriría una pantalla desde WhatsApp y otra desde una
-   * notificación.
+   * Ahora arrancan DESPUÉS de `runApp`. La app dibuja, y esto se resuelve
+   * mientras tanto.
+   *
+   * ⚠️ Diferir el enlace inicial es seguro: `NavegadorDeEnlaces` lo guarda
+   * hasta que el árbol está montado —ver `listoParaNavegar()`—, justamente
+   * porque un enlace tocado con la app cerrada llega antes de que exista
+   * `Navigator`. O sea que ya estaba preparado para esto.
+   *
+   * Sólo se configura lo que es asignación pura, que no cuesta nada.
    */
   final enlaces = NavegadorDeEnlaces.instance;
   enlaces.pantallaDe = pantallaDeDestino;
   enlaces.abrirEnNavegador = abrirUrlEnNavegador;
   PushService.instance.alTocar = enlaces.manejar;
-  await enlaces.inicializar();
 
   // Barra de estado transparente: el video llega hasta arriba de todo.
   SystemChrome.setSystemUIOverlayStyle(
@@ -67,7 +70,38 @@ Future<void> main() async {
     DeviceOrientation.portraitDown,
   ]);
 
+  TrazaDeArranque.instancia.paso('orientación');
+
   runApp(const ProviderScope(child: LiveSellApp()));
+
+  TrazaDeArranque.instancia.paso('→ runApp');
+  TrazaDeArranque.instancia.informar('arranque hasta el primer frame');
+
+  /**
+   * Y ahora sí, lo lento — con la app ya dibujando.
+   *
+   * Los dos van juntos y no encadenados: son independientes, y hacer uno
+   * después del otro sumaría sus esperas sin ninguna razón.
+   *
+   * Firebase sólo ENCIENDE el motor: no pide permiso ni pregunta el token. En
+   * Android 13+ el diálogo del permiso se muestra una sola vez de verdad, y
+   * gastarlo en el arranque —cuando la persona todavía no sabe qué es esto— lo
+   * convierte en un «no» casi seguro. Se pide después de la primera compra.
+   *
+   * Si falta `google-services.json` no tira: registra y sigue. Un clon del
+   * repositorio tiene que poder arrancar, y los avisos son una mejora, no un
+   * requisito para vender.
+   */
+  await Future.wait([
+    PushService.instance.inicializar().then((_) {
+      TrazaDeArranque.instancia.paso('push (Firebase)');
+    }),
+    enlaces.inicializar().then((_) {
+      TrazaDeArranque.instancia.paso('enlaces');
+    }),
+  ]);
+
+  TrazaDeArranque.instancia.informar('lo que siguió en segundo plano');
 }
 
 class LiveSellApp extends StatelessWidget {
