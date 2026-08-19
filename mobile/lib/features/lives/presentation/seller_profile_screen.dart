@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/design/tokens.dart';
+import '../../../core/network/reintentar_al_volver_la_red.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../moderation/data/bloqueos_api.dart';
 import '../../moderation/presentation/reportar_sheet.dart';
@@ -59,6 +60,10 @@ class _SellerProfileScreenState extends ConsumerState<SellerProfileScreen> {
   /// menú diga "Desbloquear".
   bool? _loBloquee;
   bool _cargando = true;
+
+  /// El Ãºltimo error de carga. â ï¸ Nunca se muestra: sÃ³lo decide si se reintenta
+  /// solo cuando vuelve la seÃ±al.
+  Object? _errorCrudo;
   bool _alternandoFollow = false;
 
   @override
@@ -77,8 +82,15 @@ class _SellerProfileScreenState extends ConsumerState<SellerProfileScreen> {
           _cargando = false;
         });
       }
-    } catch (_) {
-      if (mounted) setState(() => _cargando = false);
+    } catch (e) {
+      // El error crudo se guarda para poder reintentar solo cuando vuelva la
+      // red. Lo que se muestra es la frase de _ErrorDePerfil, escrita a mano.
+      if (mounted) {
+        setState(() {
+          _cargando = false;
+          _errorCrudo = e;
+        });
+      }
     }
 
     /**
@@ -167,7 +179,11 @@ class _SellerProfileScreenState extends ConsumerState<SellerProfileScreen> {
       body: _cargando
           ? const Center(child: CircularProgressIndicator())
           : perfil == null
-              ? _ErrorDePerfil(onReintentar: () => unawaited(_cargar()))
+              ? ReintentarAlVolverLaRed(
+                  error: _errorCrudo,
+                  onReintentar: () => unawaited(_cargar()),
+                  child: _ErrorDePerfil(onReintentar: () => unawaited(_cargar())),
+                )
               : RefreshIndicator(
                   onRefresh: _cargar,
                   child: ListView(

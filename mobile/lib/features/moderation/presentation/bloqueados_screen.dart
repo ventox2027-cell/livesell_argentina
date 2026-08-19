@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/design/tokens.dart';
+import '../../../core/network/reintentar_al_volver_la_red.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../data/bloqueos_api.dart';
 
@@ -32,7 +33,11 @@ class BloqueadosScreen extends ConsumerWidget {
       appBar: AppBar(title: const Text('Personas bloqueadas')),
       body: bloqueos.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (_, __) => _Error(onReintentar: () => ref.invalidate(misBloqueosProvider)),
+        error: (e, __) => ReintentarAlVolverLaRed(
+          error: e,
+          onReintentar: () => ref.invalidate(misBloqueosProvider),
+          child: _Error(onReintentar: () => ref.invalidate(misBloqueosProvider)),
+        ),
         data: (lista) => lista.isEmpty
             ? const _Vacio()
             : RefreshIndicator(

@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../../core/design/tokens.dart';
+import '../../../core/network/reintentar_al_volver_la_red.dart';
 import '../../moderation/presentation/reportar_sheet.dart';
 import '../../social/data/social_api.dart';
 import '../../auth/state/auth_providers.dart';
@@ -352,7 +353,11 @@ class _LiveViewerScreenState extends ConsumerState<LiveViewerScreen> {
       body: _cargando
           ? const Center(child: CircularProgressIndicator())
           : live == null
-              ? _Error(error: _error, onReintentar: _cargar)
+              ? ReintentarAlVolverLaRed(
+                  error: _error,
+                  onReintentar: () => unawaited(_cargar()),
+                  child: _Error(error: _error, onReintentar: _cargar),
+                )
               : Stack(
                   fit: StackFit.expand,
                   children: [

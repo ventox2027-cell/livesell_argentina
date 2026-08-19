@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/design/tokens.dart';
+import '../../../core/network/reintentar_al_volver_la_red.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../data/notifications_api.dart';
 import '../domain/notification_models.dart';
@@ -44,6 +45,13 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
   bool _hayMas = true;
   String? _error;
 
+  /// El error tal como vino, sÃ³lo para decidir si se reintenta solo.
+  ///
+  /// â ï¸ Nunca se muestra: lo que lee la persona es , que es una frase
+  /// escrita a mano. Esto existe porque un fallo de red se reintenta cuando
+  /// vuelve la seÃ±al y un 409 no.
+  Object? _errorCrudo;
+
   @override
   void initState() {
     super.initState();
@@ -80,11 +88,14 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
         _hayMas = pagina.nextCursor != null;
         _cargando = false;
       });
-    } catch (_) {
+    } catch (e) {
       if (!mounted) return;
       setState(() {
         _cargando = false;
         _error = 'No pudimos traer tus avisos.';
+        // El error crudo NO se muestra: se guarda para saber si conviene
+        // reintentar solo cuando vuelva la red. Ver ReintentarAlVolverLaRed.
+        _errorCrudo = e;
       });
     }
   }
@@ -182,10 +193,14 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
     if (_cargando) return const Center(child: CircularProgressIndicator());
 
     if (_error != null) {
-      return _Centrado(
-        icono: Icons.wifi_off_rounded,
-        titulo: _error!,
-        accion: TextButton(onPressed: _cargar, child: const Text('Reintentar')),
+      return ReintentarAlVolverLaRed(
+        error: _errorCrudo,
+        onReintentar: () => unawaited(_cargar()),
+        child: _Centrado(
+          icono: Icons.wifi_off_rounded,
+          titulo: _error!,
+          accion: TextButton(onPressed: _cargar, child: const Text('Reintentar')),
+        ),
       );
     }
 

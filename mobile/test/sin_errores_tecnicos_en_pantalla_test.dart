@@ -83,6 +83,17 @@ void main() {
       'lib/features/orders/presentation/orders_screen.dart',
       'lib/features/orders/presentation/seller_orders_screen.dart',
       'lib/features/seller/presentation/seller_home_screen.dart',
+      // La segunda tanda. Estas cinco YA mostraban un texto escrito a mano —
+      // nunca filtraron un `DioException`— pero no volvían solas: había que
+      // tocar «Reintentar» aunque la señal ya hubiera vuelto.
+      //
+      // Mostrar un mensaje legible es la mitad del arreglo. La otra mitad es
+      // que la pantalla se recupere sin que nadie la toque.
+      'lib/features/lives/presentation/live_viewer_screen.dart',
+      'lib/features/lives/presentation/seller_profile_screen.dart',
+      'lib/features/moderation/presentation/bloqueados_screen.dart',
+      'lib/features/notifications/presentation/notifications_screen.dart',
+      'lib/features/support/presentation/soporte_screen.dart',
     ];
 
     for (final p in pantallas) {

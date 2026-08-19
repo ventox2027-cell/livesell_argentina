@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/design/tokens.dart';
+import '../../../core/network/reintentar_al_volver_la_red.dart';
 import '../data/soporte_api.dart';
 import 'nuevo_ticket_sheet.dart';
 import 'ticket_screen.dart';
@@ -37,7 +38,11 @@ class SoporteScreen extends ConsumerWidget {
       ),
       body: tickets.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (_, __) => _NoCargo(onReintentar: () => ref.invalidate(misTicketsProvider)),
+        error: (e, __) => ReintentarAlVolverLaRed(
+          error: e,
+          onReintentar: () => ref.invalidate(misTicketsProvider),
+          child: _NoCargo(onReintentar: () => ref.invalidate(misTicketsProvider)),
+        ),
         data: (lista) => RefreshIndicator(
           onRefresh: () async => ref.invalidate(misTicketsProvider),
           child: lista.isEmpty
