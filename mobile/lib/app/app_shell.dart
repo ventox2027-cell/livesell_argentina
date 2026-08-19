@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/config/traza_de_arranque.dart';
 import '../core/design/tokens.dart';
 import '../core/network/reconexion.dart';
 import '../features/auth/domain/session.dart';
@@ -97,6 +98,39 @@ class _NavegacionPrincipalState extends ConsumerState<_NavegacionPrincipal> {
     ProfileScreen(),
   ];
 
+  /// Qué pestañas se llegaron a abrir alguna vez.
+  ///
+  /// ═══════════════════════════════════════════════════════════════════════════
+  /// CUATRO PETICIONES QUE NADIE PIDIÓ, EN EL PEOR MOMENTO
+  /// ═══════════════════════════════════════════════════════════════════════════
+  ///
+  /// `IndexedStack` construye TODOS sus hijos, no sólo el visible. Pinta uno y
+  /// mantiene los otros vivos, que es exactamente lo que se quiere para no
+  /// perder la posición del feed ni lo escrito en el buscador.
+  ///
+  /// El precio no se veía: al arrancar la app se construían las cinco
+  /// pantallas, y cada una dispara lo suyo en el `build`.
+  ///
+  ///   · Inicio   → `GET /discover/products`   ← lo único que se está mirando
+  ///   · En vivo  → `GET /lives/active`
+  ///   · Pedidos  → `GET /orders/mine`
+  ///   · Perfil   → `GET /notifications/unread` y, si vende, `GET /sellers/me`
+  ///
+  /// Cuatro peticiones compitiendo con la única que importa, contra un backend
+  /// que está en otro continente. Es buena parte de los ~5 segundos hasta que
+  /// Inicio se puede usar.
+  ///
+  /// ─── Lo que NO se hace ───
+  ///
+  /// Cambiar `IndexedStack` por un `switch` sobre el índice: eso descarta la
+  /// pantalla al salir de la pestaña y vuelve a pedir todo al volver. El
+  /// problema no es mantenerlas vivas, es nacerlas todas juntas.
+  ///
+  /// Acá una pestaña nace la primera vez que se toca, y desde entonces se
+  /// queda. Lo mejor de los dos: arranque con una sola petición, y navegación
+  /// entre pestañas sin recargar nada.
+  final _abiertas = <int>{0};
+
   void _cambiarA(int i) {
     /**
      * Entrar a "En vivo" recarga la lista.
@@ -110,7 +144,18 @@ class _NavegacionPrincipalState extends ConsumerState<_NavegacionPrincipal> {
      * una pestaña pasa a estar visible.
      */
     if (i == _pestanaVivo) ref.invalidate(livesActivosProvider);
-    setState(() => _indice = i);
+    setState(() {
+      _abiertas.add(i);
+      _indice = i;
+    });
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    // El instante en que la app deja de mostrar el spinner de arranque y pasa a
+    // mostrar la aplicación. Lo que falta después es que llegue el feed.
+    TrazaDeArranque.instancia.paso('→ Inicio pintado');
   }
 
   @override
@@ -120,7 +165,15 @@ class _NavegacionPrincipalState extends ConsumerState<_NavegacionPrincipal> {
       // esto, el feed pierde 80 px de alto que son justo donde suele estar el
       // producto.
       extendBody: true,
-      body: IndexedStack(index: _indice, children: _pantallas),
+      body: IndexedStack(
+        index: _indice,
+        children: [
+          for (var i = 0; i < _pantallas.length; i++)
+            // Una pestaña que todavía nadie abrió ocupa su lugar sin construir
+            // nada. Ver `_abiertas`.
+            if (_abiertas.contains(i)) _pantallas[i] else const SizedBox.shrink(),
+        ],
+      ),
       bottomNavigationBar: _BarraInferior(indice: _indice, onCambio: _cambiarA),
     );
   }

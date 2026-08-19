@@ -135,6 +135,46 @@ class AuthRepository {
     return ConSesion(usuario: usuario, faltantes: _faltantes(datos['missing']));
   }
 
+  /// Lo que hay guardado en el teléfono, sin tocar la red.
+  ///
+  /// ═══════════════════════════════════════════════════════════════════════════
+  /// ESTO ES LO QUE SACA UN VIAJE A RAILWAY DE ANTES DEL PRIMER FRAME
+  /// ═══════════════════════════════════════════════════════════════════════════
+  ///
+  /// `restaurar()` hacía dos cosas en fila antes de que la app pudiera dibujar
+  /// nada: leer el llavero y **preguntarle al servidor quién sos**. La segunda
+  /// es una petición completa a un backend que está en Estados Unidos, con TLS
+  /// recién abierto y una consulta a una base que está en Brasil.
+  ///
+  /// Medido en un teléfono: ~3 segundos desde el logo hasta poder entrar. Todo
+  /// ese rato la app mostraba el spinner de `_Arranque`, teniendo en el disco
+  /// —desde la sesión anterior— exactamente el usuario que iba a mostrar.
+  ///
+  /// ⚠️ Y ese mismo dato guardado ya se usaba: el `catch` de abajo lo devuelve
+  /// cuando no hay red. O sea que confiar en él nunca fue la novedad; la
+  /// novedad es no esperar a la red para usarlo.
+  ///
+  /// ─── Por qué no debilita la sesión ───
+  ///
+  /// Porque lo que se adelanta es la PANTALLA, no el permiso. Cada petición
+  /// sigue llevando su token y el backend sigue rechazando una cuenta
+  /// suspendida o cerrada —`auth.guard.ts` exige `status: 'active'`—. Alguien
+  /// suspendido ve su nombre unos cientos de milisegundos y no puede hacer
+  /// absolutamente nada; en cuanto contesta `/auth/me` con 401 o 403, la sesión
+  /// se cierra y se limpian los tokens.
+  ///
+  /// Lo que NO se hace es dar por buena una sesión sin refresh token: si no
+  /// está, no hay nada que adelantar y se devuelve `SinSesion` igual que antes.
+  Future<EstadoSesion?> sesionGuardada() async {
+    final refresh = await _tokens.refreshToken();
+    if (refresh == null) return const SinSesion();
+
+    final guardado = await _tokens.usuario();
+    if (guardado == null) return null;
+
+    return ConSesion(usuario: Usuario.fromJson(guardado));
+  }
+
   /// Restaura la sesión al abrir la app.
   ///
   /// Se consulta al backend en vez de confiar en lo guardado: la cuenta puede

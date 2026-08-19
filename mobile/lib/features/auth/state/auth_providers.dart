@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/push/push_service.dart';
 
+import '../../../core/config/traza_de_arranque.dart';
 import '../../../core/auth/token_store.dart';
 import '../../../core/network/api_client.dart';
 import '../data/auth_repository.dart';
@@ -50,8 +51,43 @@ class SesionNotifier extends Notifier<EstadoSesion> {
 
   AuthRepository get _repo => ref.read(authRepositoryProvider);
 
+  /// Restaura la sesión en dos tiempos: primero el disco, después el servidor.
+  ///
+  /// ═══════════════════════════════════════════════════════════════════════════
+  /// EL ORDEN ES DONDE ESTABA EL PROBLEMA
+  /// ═══════════════════════════════════════════════════════════════════════════
+  ///
+  /// Antes esto era una sola línea que esperaba `restaurar()` entero, y
+  /// `restaurar()` incluye un `GET /auth/me`. O sea: la app no dibujaba nada
+  /// hasta terminar un viaje de ida y vuelta a Railway. Medido en un teléfono,
+  /// ~3 segundos de spinner con el usuario ya guardado en el disco.
+  ///
+  /// Ahora la pantalla sale con lo guardado y la comprobación va detrás, sin que
+  /// nadie la espere. Si el servidor dice que la cuenta ya no está —401, 403, o
+  /// simplemente otro perfil— el estado se corrige solo unos cientos de
+  /// milisegundos después.
+  ///
+  /// ⚠️ El resultado del servidor SIEMPRE pisa al del disco, incluso si tardó.
+  /// Es lo que evita que una cuenta suspendida se quede con la pantalla abierta.
   Future<void> restaurar() async {
+    final guardada = await _repo.sesionGuardada();
+
+    /**
+     * `null` significa «hay token pero no hay usuario guardado».
+     *
+     * Pasa una sola vez por instalación, entre que se guardan los tokens y se
+     * guarda el perfil. Ahí no hay nada que adelantar y se espera al servidor,
+     * que es lo que hacía siempre.
+     */
+    if (guardada != null) {
+      state = guardada;
+      TrazaDeArranque.instancia.paso('sesión: disco');
+    }
+
+    final desde = TrazaDeArranque.instancia.ahora;
     state = await _repo.restaurar();
+    TrazaDeArranque.instancia.tramo('auth/me (2º plano)', desdeMs: desde);
+
     _sincronizarAvisos();
   }
 

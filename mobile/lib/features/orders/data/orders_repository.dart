@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/api_client.dart';
+import '../../auth/domain/session.dart';
 import '../../auth/state/auth_providers.dart';
 import '../domain/order_models.dart';
 
@@ -305,18 +306,35 @@ final ordersRepositoryProvider = Provider<OrdersRepository>(
   (ref) => OrdersRepository(ref.watch(apiClientProvider)),
 );
 
+/// Quién está adentro, y nada más.
+///
+/// ⚠️ Existe para que nadie observe el objeto de sesión entero.
+///
+/// `ConSesion` no define igualdad, así que para Riverpod cada instancia nueva
+/// es un valor distinto. Desde que la restauración es en dos tiempos —disco
+/// primero, servidor después— el estado cambia DOS veces en cada arranque, y
+/// observar la sesión completa significaba pedir pedidos, ventas y direcciones
+/// dos veces por apertura de la app.
+///
+/// Con el id, iniciar y cerrar sesión siguen recargando —que es lo que hacía
+/// falta— y un refresco de la misma sesión no. Ver la nota larga en
+/// `FeedNotifier.build`.
+final idDeLaPersonaProvider = Provider<String?>(
+  (ref) => ref.watch(sesionProvider.select((s) => s is ConSesion ? s.usuario.id : null)),
+);
+
 final misPedidosProvider = FutureProvider<({List<Pedido> items, String? nextCursor})>((ref) async {
-  ref.watch(sesionProvider);
+  ref.watch(idDeLaPersonaProvider);
   return ref.watch(ordersRepositoryProvider).misPedidos();
 });
 
 final misVentasProvider = FutureProvider<({List<Venta> items, String? nextCursor})>((ref) async {
-  ref.watch(sesionProvider);
+  ref.watch(idDeLaPersonaProvider);
   return ref.watch(ordersRepositoryProvider).misVentas();
 });
 
 final misDireccionesProvider = FutureProvider<List<Direccion>>((ref) async {
-  ref.watch(sesionProvider);
+  ref.watch(idDeLaPersonaProvider);
   return ref.watch(ordersRepositoryProvider).direcciones();
 });
 

@@ -74,8 +74,19 @@ Future<void> main() async {
 
   runApp(const ProviderScope(child: LiveSellApp()));
 
+  /**
+   * ⚠️ Acá NO se informa nada.
+   *
+   * Antes se imprimía el reporte justo después de `runApp`, y eso contaba
+   * únicamente lo que pasa ANTES de dibujar: config local, orientación,
+   * `runApp`. Cuarenta milisegundos, siempre. Un reporte que decía que el
+   * arranque estaba perfecto mientras en el teléfono se sentían tres segundos.
+   *
+   * Lo que faltaba medir era todo lo de después: la sesión, `/auth/me`, la
+   * primera pintura, el feed. Ahora el reporte sale cuando hay algo que mirar
+   * —ver `FeedScreen`— y estas marcas quedan adentro.
+   */
   TrazaDeArranque.instancia.paso('→ runApp');
-  TrazaDeArranque.instancia.informar('arranque hasta el primer frame');
 
   /**
    * Y ahora sí, lo lento — con la app ya dibujando.

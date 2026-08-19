@@ -4,6 +4,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/config/traza_de_arranque.dart';
 import '../../../core/design/tokens.dart';
 import '../../../core/network/errores_de_red.dart';
 import '../../../core/network/reintentar_al_volver_la_red.dart';
@@ -59,6 +60,21 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
         );
       },
       data: (publicaciones) {
+        /**
+         * El final del arranque, medido donde se siente.
+         *
+         * «La app abrió» no es cuando `runApp` devuelve: es cuando hay algo que
+         * mirar. Todo lo anterior —el primer frame, la sesión, el pedido del
+         * feed— sólo importa por cuánto retrasa este momento.
+         *
+         * Se informa una sola vez: `informar` vacía las marcas, y en las
+         * recargas posteriores no queda ninguna.
+         */
+        if (TrazaDeArranque.instancia.corriendo) {
+          TrazaDeArranque.instancia.paso('→ feed visible');
+          TrazaDeArranque.instancia.informar('arranque');
+        }
+
         if (publicaciones.isEmpty) return const _FeedVacio();
 
         // El índice puede quedar fuera de rango si el feed se recarga con menos
