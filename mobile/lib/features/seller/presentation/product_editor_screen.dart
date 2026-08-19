@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 
@@ -12,12 +13,14 @@ import '../../inventory/data/inventory_repository.dart';
 import '../../inventory/presentation/stock_screen.dart';
 import '../data/borrados_en_curso.dart';
 import '../data/categorias_api.dart';
+import '../data/subidas_de_fotos.dart';
 import '../data/tasas_api.dart';
 import '../data/seller_repository.dart';
 import 'pro_screen.dart';
 import 'widgets/conectar_mp_sheet.dart';
 import 'widgets/limite_del_plan_sheet.dart';
 import '../domain/desglose_de_precio.dart';
+import '../domain/fotos_en_vuelo.dart';
 import '../domain/seller_models.dart';
 
 /// Crear y editar un producto.
@@ -134,6 +137,13 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
     try {
       final p = await ref.read(sellerRepositoryProvider).producto(widget.productoId!);
       if (!mounted) return;
+
+      // Desde acá las fotos vienen adentro del producto. Mantener además la
+      // copia de «recién subidas» sería arrastrar una segunda lista que puede
+      // quedar vieja; `armarTira` las deduplica igual, pero no tiene sentido
+      // que crezca.
+      ref.read(subidasDeFotosProvider.notifier).olvidarSubidas(p.id);
+
       setState(() {
         _producto = p;
         _nombre.text = p.name;
@@ -362,20 +372,35 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
     );
     if (elegida == null || !mounted) return;
 
-    setState(() => _guardando = true);
-    try {
-      await ref.read(sellerRepositoryProvider).subirImagen(p.id, File(elegida.path));
-      final actualizado = await ref.read(sellerRepositoryProvider).producto(p.id);
-      if (!mounted) return;
-      setState(() {
-        _producto = actualizado;
-        _huboCambios = true;
-      });
-    } catch (e) {
-      if (mounted) await _mostrarError(e);
-    } finally {
-      if (mounted) setState(() => _guardando = false);
-    }
+    /**
+     * ═══════════════════════════════════════════════════════════════════════
+     * LA FOTO SE VE AHORA. SUBE DESPUÉS.
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * Acá había `await subirImagen(...)` y después `await producto(id)`, con
+     * `_guardando = true` bloqueando la pantalla en el medio. Medido en un
+     * teléfono: ~6 segundos entre elegir la foto y verla.
+     *
+     * Y el segundo `await` era gratis de sacar: `subirImagen` YA devuelve la
+     * imagen creada. Ese `GET` traía el producto entero desde otro continente
+     * para enterarse de algo que estaba en la respuesta anterior.
+     *
+     * Ahora la miniatura sale del archivo local en el mismo frame, con su
+     * indicador de que está subiendo, y el viaje va por atrás en un servicio
+     * que sobrevive a esta pantalla — ver `SubidasDeFotos`.
+     *
+     * ⚠️ Sin `_guardando`: bloquear el formulario mientras sube una foto
+     * impide seguir cargando el producto, que es justo lo que la persona
+     * estaba haciendo.
+     */
+    setState(() => _huboCambios = true);
+
+    unawaited(
+      ref.read(subidasDeFotosProvider.notifier).subir(
+            productId: p.id,
+            archivo: File(elegida.path),
+          ),
+    );
   }
 
   Future<void> _borrarFoto(String imageId) async {
@@ -607,7 +632,7 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
 
 // ─── Secciones ──────────────────────────────────────────────────────────────
 
-class _SeccionFotos extends StatelessWidget {
+class _SeccionFotos extends ConsumerWidget {
   const _SeccionFotos({required this.producto, this.onAgregar, this.onBorrar});
 
   final Producto producto;
@@ -615,7 +640,22 @@ class _SeccionFotos extends StatelessWidget {
   final void Function(String imageId)? onBorrar;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    /**
+     * La tira junta tres orígenes que la persona no tiene por qué distinguir:
+     * las fotos que trajo el servidor, las que terminaron de subir después de
+     * eso, y las que están subiendo ahora mismo desde el archivo local.
+     *
+     * Ver `armarTira`: la deduplicación por id es lo que evita que una foto
+     * aparezca dos veces cuando el editor vuelve a pedir el producto.
+     */
+    final subidas = ref.watch(subidasDeFotosProvider);
+    final tira = armarTira(
+      delServidor: producto.images,
+      recienSubidas: subidas.subidasDe(producto.id),
+      enVuelo: subidas.deProducto(producto.id),
+    );
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -631,16 +671,27 @@ class _SeccionFotos extends StatelessWidget {
           child: ListView(
             scrollDirection: Axis.horizontal,
             children: [
-              for (final img in producto.images)
+              for (final img in tira.subidas)
                 Padding(
                   padding: const EdgeInsets.only(right: Gap.sm),
                   child: _Miniatura(
                     imagen: img,
-                    esPortada: img.position == 0,
+                    esPortada: img.position == 0 && tira.subidas.first.id == img.id,
                     onBorrar: onBorrar == null ? null : () => onBorrar!(img.id),
                   ),
                 ),
-              if (producto.images.length < 10)
+              for (final foto in tira.enVuelo)
+                Padding(
+                  padding: const EdgeInsets.only(right: Gap.sm),
+                  child: _MiniaturaEnVuelo(
+                    foto: foto,
+                    onReintentar: () =>
+                        unawaited(ref.read(subidasDeFotosProvider.notifier).reintentar(foto.clave)),
+                    onDescartar: () =>
+                        ref.read(subidasDeFotosProvider.notifier).descartar(foto.clave),
+                  ),
+                ),
+              if (tira.largo < 10)
                 InkWell(
                   onTap: onAgregar,
                   borderRadius: BorderRadius.circular(Redondeo.md),
@@ -665,6 +716,95 @@ class _SeccionFotos extends StatelessWidget {
             ],
           ),
         ),
+      ],
+    );
+  }
+}
+
+/// Una foto que todavía está subiendo, o que falló.
+///
+/// ⚠️ Se dibuja desde el ARCHIVO, no desde una URL: la del servidor todavía no
+/// existe. Es lo que hace que la foto aparezca en el mismo frame en que se
+/// eligió, en vez de a los seis segundos.
+class _MiniaturaEnVuelo extends StatelessWidget {
+  const _MiniaturaEnVuelo({
+    required this.foto,
+    required this.onReintentar,
+    required this.onDescartar,
+  });
+
+  final FotoEnVuelo foto;
+  final VoidCallback onReintentar;
+  final VoidCallback onDescartar;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(Redondeo.md),
+          child: Image.file(
+            File(foto.rutaLocal),
+            width: 96,
+            height: 96,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => Container(
+              width: 96,
+              height: 96,
+              color: AppColor.superficieAlta,
+            ),
+          ),
+        ),
+        // Un velo encima: la foto se ve, pero se entiende que todavía no está.
+        Positioned.fill(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.45),
+              borderRadius: BorderRadius.circular(Redondeo.md),
+            ),
+          ),
+        ),
+        if (foto.fallo)
+          Positioned.fill(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.cloud_off_rounded, color: Colors.white, size: 20),
+                const SizedBox(height: 2),
+                // Dos acciones y no una: reintentar es lo probable, pero quien
+                // ya intentó tres veces necesita poder sacarla de ahí.
+                GestureDetector(
+                  onTap: onReintentar,
+                  child: const Text(
+                    'Reintentar',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      decoration: TextDecoration.underline,
+                    ),
+                  ),
+                ),
+                GestureDetector(
+                  onTap: onDescartar,
+                  child: const Text(
+                    'Quitar',
+                    style: TextStyle(color: Colors.white70, fontSize: 10.5),
+                  ),
+                ),
+              ],
+            ),
+          )
+        else
+          const Positioned.fill(
+            child: Center(
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+              ),
+            ),
+          ),
       ],
     );
   }
