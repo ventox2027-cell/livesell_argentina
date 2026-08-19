@@ -1067,8 +1067,13 @@ class _DesgloseDelPrecio extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _Linea('Lo que ve quien compra', formatearPesos(d.precio)),
+            // La etiqueta viene del servidor cuando está: «Comisión VendoX
+            // Business (3,5%)» dice el plan y el porcentaje reales de este
+            // vendedor. El respaldo se arma con `tasas.comisionBps`, que
+            // también viene del servidor: no hay ningún porcentaje escrito acá.
             _Linea(
-              'Comisión de VendoX (${porcentajeLegible(tasas.comisionBps)} %)',
+              tasas.comision?.etiqueta ??
+                  'Comisión de VendoX (${porcentajeLegible(tasas.comisionBps)} %)',
               '-${formatearPesos(d.comision)}',
             ),
             _Linea(
@@ -1080,6 +1085,10 @@ class _DesgloseDelPrecio extends ConsumerWidget {
               child: Divider(height: 1, color: AppColor.borde),
             ),
             _Linea('Estimado que recibís', formatearPesos(d.netoEstimado), fuerte: true),
+            if (tasas.comision?.aviso != null) ...[
+              const SizedBox(height: Gap.sm),
+              _AvisoDeComision(detalle: tasas.comision!),
+            ],
             const SizedBox(height: Gap.sm),
             const Text(
               'El costo de Mercado Pago lo informan ellos después de cobrar, así que '
@@ -1090,6 +1099,64 @@ class _DesgloseDelPrecio extends ConsumerWidget {
             _CuantoQuerasRecibir(tasas: tasas, onUsarPrecio: onUsarPrecio),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Lo que hay que contarle al vendedor sobre su comisión.
+///
+/// ═══════════════════════════════════════════════════════════════════════════
+/// SÓLO APARECE CUANDO HAY ALGO QUE DECIR
+/// ═══════════════════════════════════════════════════════════════════════════
+///
+/// Dos casos, y los dos son novedades reales:
+///
+///   · «Tu comisión bajó por volumen de ventas.» — el descuento se ganó y el
+///     vendedor tiene que enterarse, porque si no el beneficio de Business es
+///     invisible.
+///   · Devoluciones por encima del límite — tiene el volumen pero no accede.
+///     Callarlo sería lo peor de los dos mundos: paga más y no sabe que hay
+///     algo que puede corregir.
+///
+/// El texto lo escribe el servidor. Acá no se decide nada: si esta pantalla
+/// tuviera su propio `if` sobre el motivo, habría dos reglas y la del teléfono
+/// quedaría vieja hasta la próxima versión publicada.
+class _AvisoDeComision extends StatelessWidget {
+  const _AvisoDeComision({required this.detalle});
+
+  final DetalleDeComision detalle;
+
+  @override
+  Widget build(BuildContext context) {
+    final bueno = detalle.bajoPorVolumen;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: Gap.sm, horizontal: Gap.md),
+      decoration: BoxDecoration(
+        color: bueno ? AppColor.acentoSuave : AppColor.superficieAlta,
+        borderRadius: BorderRadius.circular(Redondeo.sm),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            bueno ? Icons.trending_down : Icons.info_outline,
+            size: 15,
+            color: bueno ? AppColor.acento : AppColor.textoSuave,
+          ),
+          const SizedBox(width: Gap.sm),
+          Expanded(
+            child: Text(
+              detalle.aviso!,
+              style: TextStyle(
+                fontSize: 12,
+                height: 1.35,
+                color: bueno ? AppColor.texto : AppColor.textoSuave,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

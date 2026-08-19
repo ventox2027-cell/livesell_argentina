@@ -202,12 +202,26 @@ void main() {
       expect(p.costoDelProcesadorBps, 700);
     });
 
-    test('sin los campos usa los mismos valores que el backend por omisión', () {
+    /// ═══════════════════════════════════════════════════════════════════════
+    /// ESTE TEST FIJABA EL NÚMERO EQUIVOCADO
+    /// ═══════════════════════════════════════════════════════════════════════
+    ///
+    /// Decía 600 —la comisión vieja— y siguió pasando después de que la tasa
+    /// bajara a 4 %. No es culpa del test: es que un respaldo sólo se usa
+    /// cuando el servidor falla, así que estar mal no rompe nada visible.
+    ///
+    /// Es exactamente por eso que conviene que sea el correcto. El día que el
+    /// servidor no conteste, este número es lo único que el vendedor ve.
+    ///
+    /// ⚠️ Y tiene que ser la tasa BASE, nunca un tramo de Business: ante un
+    /// fallo no se le supone un descuento a nadie. Un desglose optimista le
+    /// haría publicar a un precio pensando que le queda más.
+    test('sin los campos usa la tasa BASE, que es el respaldo seguro', () {
       // Un servidor viejo que todavía no los manda no puede dejar el ejemplo en
       // cero: «Comisión de VendoX (0 %)» es peor que una estimación vieja.
       final p = PoliticaDeEnvioEditable.fromJson(const {'shippingMode': 'FREE'});
 
-      expect(p.comisionBps, 600);
+      expect(p.comisionBps, 400);
       expect(p.costoDelProcesadorBps, 619);
     });
 

@@ -64,7 +64,7 @@ class PoliticaDeEnvioEditable {
     required this.trasladaCostoDelProcesador,
     this.nota,
     this.recargoDisponible = false,
-    this.comisionBps = 600,
+    this.comisionBps = 400,
     this.costoDelProcesadorBps = 619,
   });
 
@@ -74,7 +74,7 @@ class PoliticaDeEnvioEditable {
         nota: j['shippingNote'] as String?,
         trasladaCostoDelProcesador: j['processorFeeMode'] == 'PASSED_TO_BUYER',
         recargoDisponible: j['recargoAlCompradorDisponible'] as bool? ?? false,
-        comisionBps: (j['comisionBps'] as num?)?.toInt() ?? 600,
+        comisionBps: (j['comisionBps'] as num?)?.toInt() ?? 400,
         costoDelProcesadorBps: (j['costoDelProcesadorBps'] as num?)?.toInt() ?? 619,
       );
 
@@ -98,12 +98,20 @@ class PoliticaDeEnvioEditable {
   /// encontrarse con que desaparecio.
   final bool recargoDisponible;
 
-  /// La comisión de VendoX, en puntos básicos. 600 = 6 %.
+  /// La comisión de ESTE vendedor, en puntos básicos. 400 = 4 %.
   ///
   /// Viene del servidor, no escrita a mano acá: es el número con el que la
-  /// pantalla arma el ejemplo, y si el servidor cambia su tasa el ejemplo tiene
-  /// que cambiar con él. El valor por omisión es el mismo que el del backend y
-  /// existe sólo para el caso en que el campo no venga.
+  /// pantalla arma el ejemplo, y si la tasa cambia el ejemplo tiene que cambiar
+  /// con ella.
+  ///
+  /// ⚠️ Ya no es una constante del negocio. Un Business con volumen paga 350 o
+  /// 300, así que el mismo campo trae valores distintos según quién pregunte.
+  /// El respaldo de 400 es la tasa BASE: ante un servidor que no contestó, no
+  /// se le supone un descuento a nadie.
+  ///
+  /// Este valor decía 600 —la comisión vieja— hasta que la tasa bajó a 4 %. No
+  /// rompió nada y nadie se enteró, porque un respaldo sólo se usa cuando el
+  /// servidor falla. Es exactamente por eso que conviene que sea el correcto.
   final int comisionBps;
 
   /// Estimación del costo de Mercado Pago, en puntos básicos.

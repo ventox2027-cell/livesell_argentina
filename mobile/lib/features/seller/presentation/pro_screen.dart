@@ -6,6 +6,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/design/tokens.dart';
 import '../data/pro_api.dart';
+import '../data/tasas_api.dart';
+import '../domain/seller_models.dart';
 
 /// VendoX Pro.
 ///
@@ -71,13 +73,14 @@ class ProScreen extends ConsumerWidget {
   }
 }
 
-class _EstadoDelPlan extends StatelessWidget {
+class _EstadoDelPlan extends ConsumerWidget {
   const _EstadoDelPlan({required this.membresia});
   final MiMembresia membresia;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final pro = membresia.esPro;
+    final tasas = ref.watch(tasasProvider).valueOrNull ?? TasasDeVendox.porOmision;
 
     return Container(
       padding: const EdgeInsets.all(Gap.lg),
@@ -105,7 +108,7 @@ class _EstadoDelPlan extends StatelessWidget {
           ),
           const SizedBox(height: Gap.md),
           Text(
-            _detalle(membresia),
+            _detalle(membresia, tasas.comisionBps),
             style: const TextStyle(fontSize: 13.5, color: AppColor.textoSuave, height: 1.4),
           ),
           if (pro && membresia.venceProximo) ...[
@@ -142,10 +145,16 @@ class _EstadoDelPlan extends StatelessWidget {
   /// Con Pro dice cuántos días quedan y de dónde salió. Lo segundo importa:
   /// alguien con Pro de cortesía que cree que lo está pagando no entiende por
   /// qué le vence.
-  String _detalle(MiMembresia m) {
+  String _detalle(MiMembresia m, int comisionBps) {
     if (!m.esPro) {
+      // El porcentaje sale del servidor. Acá decía «6 %» escrito a mano, y
+      // siguió diciéndolo después de que la comisión bajara a 4 %: no rompió
+      // nada, no falló ningún test, y le mostró al vendedor un número que le
+      // hacía calcular mal su ganancia. Es el tipo de error que sólo encuentra
+      // alguien leyendo la pantalla.
       return 'Estás usando VendoX sin costo. Publicar, transmitir y vender no '
-          'tienen cargo: la comisión del 6 % se cobra sólo cuando vendés.';
+          'tienen cargo: la comisión del ${porcentajeLegible(comisionBps)} % se '
+          'cobra sólo cuando vendés.';
     }
 
     final dias = m.diasRestantes;

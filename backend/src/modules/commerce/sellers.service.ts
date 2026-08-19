@@ -33,6 +33,9 @@ import type {
   UpdateShippingPolicyDto,
   UpdateStoreDto,
 } from './dto/commerce.dto';
+import { TasaDeComision } from '@/modules/sellers/tasa-de-comision.service';
+import type { TasaAplicable } from '@/modules/sellers/comision-por-volumen';
+
 import { OwnershipService } from './ownership.service';
 import {
   diasEfectivos,
@@ -75,6 +78,7 @@ export class SellersService {
     private readonly ownership: OwnershipService,
     private readonly audit: AuditService,
     private readonly events: DomainEventBus,
+    private readonly tasaDeComision: TasaDeComision,
   ) {}
 
   /**
@@ -271,10 +275,70 @@ export class SellersService {
      * Escritas a mano en el Dart, el día que cambie la comisión el vendedor
      * seguiría leyendo la vieja. Ya pasó una vez.
      */
+    /**
+     * ⚠️ La comisión que se devuelve es la de ESTE vendedor, no la de la
+     * configuración.
+     *
+     * Un Business con volumen paga 3 % o 3,5 %, no el 4 % del `.env`. Devolver
+     * la tasa general le mostraría al vendedor que más paga un desglose que no
+     * es el suyo — y el error saldría a la luz recién al comparar con lo que
+     * efectivamente se le cobró, que es la peor manera de descubrirlo.
+     */
+    const tasa = await this.tasaDeComision.para(store.sellerId);
+
     return {
       ...store,
-      comisionBps: env.VENDOX_PLATFORM_FEE_BPS,
+      comisionBps: tasa.bps,
       costoDelProcesadorBps: env.PROCESSOR_FEE_ESTIMATE_BPS,
+      comision: this.detalleDeLaTasa(tasa),
+    };
+  }
+
+  /**
+   * Lo que la app necesita para explicar la comisión sin recalcularla.
+   *
+   * ═══════════════════════════════════════════════════════════════════════════
+   * VIENE ARMADO DEL SERVIDOR, INCLUIDA LA ETIQUETA
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * `etiqueta` es «Comisión VendoX (4%)» o «Comisión VendoX Business (3,5%)»,
+   * ya formateada. Podría armarla Flutter con el plan y los bps, pero eso
+   * significaría un `switch` sobre motivos de tasa dentro de la app: dos copias
+   * de la misma regla, y la del teléfono desactualizada hasta que alguien
+   * publique una versión nueva.
+   *
+   * `bajoPorVolumen` es un booleano y no una comparación contra 400: la app no
+   * tiene que saber cuál es la tasa base para poder decir «tu comisión bajó».
+   */
+  private detalleDeLaTasa(tasa: TasaAplicable) {
+    const porcentaje = (tasa.bps / 100)
+      .toFixed(2)
+      .replace(/\.?0+$/, '')
+      .replace('.', ',');
+    const bajoPorVolumen = tasa.motivo === 'VOLUMEN_BUSINESS';
+
+    return {
+      bps: tasa.bps,
+      etiqueta: `Comisión VendoX${bajoPorVolumen ? ' Business' : ''} (${porcentaje}%)`,
+      bajoPorVolumen,
+      /**
+       * El aviso, cuando hay algo que avisar.
+       *
+       * `null` en el caso normal: una pantalla que siempre dice algo sobre la
+       * comisión convierte el mensaje en decoración, y cuando de verdad haya
+       * novedades nadie lo va a leer.
+       *
+       * ⚠️ En `DEVOLUCIONES_ALTAS` se le dice al vendedor **por qué** no accedió
+       * al descuento y qué hacer. Callarlo sería lo peor de los dos mundos:
+       * paga más y no sabe que hay algo que puede corregir.
+       */
+      aviso:
+        tasa.motivo === 'VOLUMEN_BUSINESS'
+          ? 'Tu comisión bajó por volumen de ventas.'
+          : tasa.motivo === 'DEVOLUCIONES_ALTAS'
+            ? 'Tenés el volumen para una comisión más baja, pero tu tasa de devoluciones ' +
+              'está por encima del límite. Cuando baje, el descuento vuelve solo.'
+            : null,
     };
   }
 
@@ -355,16 +419,32 @@ export class SellersService {
       },
     });
 
-    return this.politicaDeEnvio(actualizada);
+    // Es el camino del vendedor: acá sí viaja su comisión efectiva.
+    return this.politicaDeEnvio(actualizada, await this.tasaDeComision.para(store.sellerId));
   }
 
-  /** La política tal como la ve el vendedor y tal como la ve quien compra. */
-  private politicaDeEnvio(store: {
-    shippingMode: ShippingMode;
-    shippingFlatAmount: number;
-    shippingNote: string | null;
-    processorFeeMode: ProcessorFeeMode;
-  }) {
+  /**
+   * La política tal como la ve el vendedor y tal como la ve quien compra.
+   *
+   * ⚠️ `comisionBps` sólo viaja cuando se pide explícitamente, y sólo se pide
+   * desde el camino del vendedor.
+   *
+   * Antes salía siempre, también en la vidriera pública. Con una comisión única
+   * era información sin dueño; con tramos por volumen pasa a decir qué plan
+   * tiene cada vendedor y cuánto factura por semana — un comprador podría leer
+   * «3 %» y deducir que esa tienda vende más de cinco millones semanales.
+   *
+   * Eso no es de nadie más que del vendedor.
+   */
+  private politicaDeEnvio(
+    store: {
+      shippingMode: ShippingMode;
+      shippingFlatAmount: number;
+      shippingNote: string | null;
+      processorFeeMode: ProcessorFeeMode;
+    },
+    tasa?: TasaAplicable,
+  ) {
     const politica = { modo: store.shippingMode, montoFijo: store.shippingFlatAmount };
     return {
       shippingMode: store.shippingMode,
@@ -405,8 +485,13 @@ export class SellersService {
        * tasa real la informa Mercado Pago después de cobrar y depende del
        * plazo de acreditación y del medio de pago.
        */
-      comisionBps: env.VENDOX_PLATFORM_FEE_BPS,
-      costoDelProcesadorBps: env.PROCESSOR_FEE_ESTIMATE_BPS,
+      ...(tasa
+        ? {
+            comisionBps: tasa.bps,
+            costoDelProcesadorBps: env.PROCESSOR_FEE_ESTIMATE_BPS,
+            comision: this.detalleDeLaTasa(tasa),
+          }
+        : {}),
     };
   }
 

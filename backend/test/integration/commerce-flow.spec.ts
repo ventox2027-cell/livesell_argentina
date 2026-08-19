@@ -4652,3 +4652,236 @@ describe('El contador que ve el vendedor', () => {
     expect(r.body.catalogo.publicados).toBe(1);
   });
 });
+
+/**
+ * Lo que la app necesita para explicar la comisión.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * ESTE ES EL CONTRATO QUE FLUTTER CONSUME
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * El editor de producto arma el desglose con `comisionBps` y escribe la línea
+ * con `comision.etiqueta`. Si alguno de los dos desaparece o cambia de forma,
+ * la app cae a su respaldo —la tasa base— y le muestra al vendedor Business un
+ * número que no es el suyo, sin que nada falle.
+ *
+ * Ese es exactamente el modo de falla que estos tests existen para cortar: no
+ * un error, sino un número equivocado en una pantalla que sigue funcionando.
+ */
+describe('La comisión que ve el vendedor', () => {
+  async function conBusinessYVolumen(sellerId: string, storeId: string, userId: string, porSemana: number) {
+    await prisma.sellerMembership.create({
+      data: {
+        id: `mem_${sellerId.slice(-20)}`,
+        sellerId,
+        plan: 'BUSINESS',
+        periodo: 'MENSUAL',
+        origen: 'CORTESIA',
+        vigenteHasta: new Date(Date.now() + 30 * 86_400_000),
+      },
+    });
+
+    for (let semana = 0; semana < 4; semana += 1) {
+      const sufijo = `tr${Math.random().toString(36).slice(2, 10)}`;
+      const cuando = new Date(Date.now() - semana * 7 * 86_400_000 - 3_600_000);
+      await prisma.order.create({
+        data: {
+          id: `ord_${sufijo}`,
+          reference: `REF${sufijo.slice(-8).toUpperCase()}`,
+          buyerId: userId,
+          storeId,
+          sellerId,
+          reservationId: `rsv_${sufijo}`,
+          status: 'DELIVERED',
+          itemsSubtotal: porSemana,
+          grossAmount: porSemana,
+          platformFeeBps: 400,
+          platformFeeAmount: 0,
+          sellerNetAmount: porSemana,
+          paidAt: cuando,
+          confirmedAt: cuando,
+          createdAt: cuando,
+          shippingAddress: {},
+          buyerSnapshot: {},
+        },
+      });
+    }
+  }
+
+  it('un vendedor sin plan ve la tasa base y ningún aviso', async () => {
+    const v = await nuevoVendedor();
+
+    const r = await call('GET', '/api/v1/stores/me', { token: v.token });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.body.comisionBps).toBe(env.VENDOX_PLATFORM_FEE_BPS);
+    expect(r.body.comision.etiqueta).toBe('Comisión VendoX (4%)');
+    expect(r.body.comision.bajoPorVolumen).toBe(false);
+    expect(r.body.comision.aviso).toBeNull();
+  });
+
+  /**
+   * EL CASO QUE LE DA SENTIDO A TODO EL BLOQUE.
+   *
+   * El vendedor Business con volumen tiene que ver SU tasa, con su nombre y con
+   * el aviso de por qué bajó. Un descuento que nadie ve no motiva a nadie.
+   */
+  it('un Business con volumen ve su tasa reducida y por qué', async () => {
+    const v = await nuevoVendedor();
+    await conBusinessYVolumen(
+      v.seller.id as string,
+      v.store.id as string,
+      v.userId,
+      300_000_000,
+    );
+
+    const r = await call('GET', '/api/v1/stores/me', { token: v.token });
+
+    expect(r.body.comisionBps).toBe(350);
+    expect(r.body.comision.etiqueta).toBe('Comisión VendoX Business (3,5%)');
+    expect(r.body.comision.bajoPorVolumen).toBe(true);
+    expect(r.body.comision.aviso).toBe('Tu comisión bajó por volumen de ventas.');
+  });
+
+  it('con $5.000.000 semanales la etiqueta dice 3%', async () => {
+    const v = await nuevoVendedor();
+    await conBusinessYVolumen(
+      v.seller.id as string,
+      v.store.id as string,
+      v.userId,
+      500_000_000,
+    );
+
+    const r = await call('GET', '/api/v1/stores/me', { token: v.token });
+
+    expect(r.body.comisionBps).toBe(300);
+    expect(r.body.comision.etiqueta).toBe('Comisión VendoX Business (3%)');
+  });
+
+  /**
+   * ⛔ NO SE LE OCULTA POR QUÉ NO ACCEDIÓ.
+   *
+   * Un Business con volumen de sobra pero con devoluciones altas paga la base.
+   * Callarlo sería lo peor de los dos mundos: paga más y no sabe que hay algo
+   * que puede corregir.
+   */
+  it('⛔ con devoluciones altas se le explica por qué no accedió', async () => {
+    const v = await nuevoVendedor();
+    await conBusinessYVolumen(
+      v.seller.id as string,
+      v.store.id as string,
+      v.userId,
+      400_000_000,
+    );
+
+    // Se devuelve una de las cuatro: 25 %.
+    const orden = await prisma.order.findFirstOrThrow({
+      where: { sellerId: v.seller.id as string },
+      orderBy: { createdAt: 'desc' },
+    });
+    const sufijo = `dv${Math.random().toString(36).slice(2, 10)}`;
+    const intento = await prisma.paymentAttempt.create({
+      data: {
+        id: `pat_${sufijo}`,
+        orderId: orden.id,
+        status: 'APPROVED',
+        amount: orden.grossAmount,
+        idempotencyKey: `idem_${sufijo}`,
+        providerPaymentId: `mp_${sufijo}`,
+        approvedAt: new Date(),
+      },
+    });
+    await prisma.refund.create({
+      data: {
+        id: `ref_${sufijo}`,
+        orderId: orden.id,
+        paymentAttemptId: intento.id,
+        status: 'COMPLETED',
+        amount: orden.grossAmount,
+        reason: 'TEST',
+        completedAt: new Date(),
+      },
+    });
+
+    const r = await call('GET', '/api/v1/stores/me', { token: v.token });
+
+    expect(r.body.comisionBps).toBe(env.VENDOX_PLATFORM_FEE_BPS);
+    expect(r.body.comision.bajoPorVolumen).toBe(false);
+    expect(r.body.comision.aviso).toContain('devoluciones');
+    expect(r.body.comision.aviso).toContain('vuelve solo');
+  });
+
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * LA COMISIÓN DEL VENDEDOR NO ES DE LOS COMPRADORES
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * Antes `comisionBps` salía también en la vidriera pública. Con una comisión
+   * única era información sin dueño; con tramos por volumen pasa a decir qué
+   * plan tiene cada vendedor y cuánto factura por semana.
+   *
+   * Un comprador que lee «3 %» puede deducir que esa tienda vende más de cinco
+   * millones semanales. Eso no es de nadie más que del vendedor.
+   */
+  it('⛔ la vidriera pública NO expone la comisión del vendedor', async () => {
+    const v = await nuevoVendedor();
+    await conBusinessYVolumen(
+      v.seller.id as string,
+      v.store.id as string,
+      v.userId,
+      500_000_000,
+    );
+
+    const publica = await call('GET', `/api/v1/stores/by-slug/${v.store.slug}`);
+
+    expect(publica.status, JSON.stringify(publica.body)).toBe(200);
+    expect(publica.body.envio).toBeDefined();
+    expect(publica.body.envio.comisionBps).toBeUndefined();
+    expect(publica.body.envio.comision).toBeUndefined();
+    // Y ni siquiera aparece el número en la respuesta serializada.
+    expect(JSON.stringify(publica.body)).not.toContain('comisionBps');
+  });
+
+  it('la política de envío del vendedor sí la trae', async () => {
+    const v = await nuevoVendedor();
+    await conBusinessYVolumen(
+      v.seller.id as string,
+      v.store.id as string,
+      v.userId,
+      500_000_000,
+    );
+
+    const r = await call('PATCH', `/api/v1/stores/${v.store.id}/shipping`, {
+      token: v.token,
+      body: { shippingMode: 'FREE', processorFeeMode: 'ABSORBED' },
+    });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.body.comisionBps).toBe(300);
+    expect(r.body.comision.etiqueta).toBe('Comisión VendoX Business (3%)');
+  });
+
+  /**
+   * El formato del porcentaje, que es lo que se lee en la pantalla.
+   *
+   * «4%» y no «4.00%». Un porcentaje redondo con dos decimales se lee como si
+   * alguien hubiera dejado el número sin terminar de formatear.
+   */
+  it('el porcentaje se escribe a la argentina', async () => {
+    const v = await nuevoVendedor();
+    const base = await call('GET', '/api/v1/stores/me', { token: v.token });
+    expect(base.body.comision.etiqueta).toContain('(4%)');
+    expect(base.body.comision.etiqueta).not.toContain('4.00');
+
+    const otro = await nuevoVendedor();
+    await conBusinessYVolumen(
+      otro.seller.id as string,
+      otro.store.id as string,
+      otro.userId,
+      300_000_000,
+    );
+    const business = await call('GET', '/api/v1/stores/me', { token: otro.token });
+    // Coma decimal, no punto.
+    expect(business.body.comision.etiqueta).toContain('(3,5%)');
+  });
+});
