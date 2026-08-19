@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="es-AR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Descargar VendoX para Android</title>
+<meta name="description" content="Descargá el APK firmado de VendoX para Android.">
+<link rel="canonical" href="https://vendox.com.ar/descargar">
+<link rel="stylesheet" href="/_estilo.css">
+<style>
+  .version { margin: 2rem 0 0; }
+  .version dl {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.5rem 1.5rem;
+    margin: 0;
+    font-size: 0.94rem;
+  }
+  .version dt { color: var(--debil); }
+  .version dd { margin: 0; font-variant-numeric: tabular-nums; }
+  .pasos { padding-left: 1.15rem; color: var(--suave); }
+  .pasos li { margin-bottom: 0.55rem; }
+</style>
+</head>
+<body>
+
+<header class="barra">
+  <div class="barra-interna">
+    <a class="marca" href="/">Vendo<span>X</span></a>
+    <nav class="enlaces-barra">
+      <a href="/descargar">Descargar</a>
+      <a href="/soporte">Soporte</a>
+    </nav>
+  </div>
+</header>
+
+<main class="hoja">
+  <h1>Descargar VendoX para Android</h1>
+  <p style="color:var(--suave);margin-top:0">
+    Todavía no estamos en Google Play. Por ahora la app se instala desde el
+    archivo que publicamos acá, firmado con nuestra clave.
+  </p>
+
+  <p style="margin:2rem 0 0">
+    <a class="boton" href="/descargar/android">Descargar VendoX para Android</a>
+  </p>
+
+  <!--
+    La ficha de la versión NO está escrita a mano.
+
+    Se pide a `/descargar/android.json`, que el backend arma con lo que el
+    workflow de release dejó en R2. Un número escrito en el HTML se
+    desactualiza en la primera versión que alguien publique con apuro, y
+    entonces la página miente sobre lo que el botón entrega.
+
+    Mientras carga —o si falla— no se muestra nada. Un "cargando..." eterno o
+    un error en rojo por un dato secundario le quitan confianza a la página
+    entera; el botón funciona igual sin esto.
+  -->
+  <section class="version tarjeta" id="ficha" hidden>
+    <h2 style="margin-top:0;font-size:1.02rem">Versión disponible</h2>
+    <dl>
+      <dt>Versión</dt><dd id="v-version">—</dd>
+      <dt>Publicada</dt><dd id="v-fecha">—</dd>
+      <dt>Tamaño</dt><dd id="v-tamano">—</dd>
+      <dt>Commit</dt><dd id="v-commit">—</dd>
+    </dl>
+  </section>
+
+  <h2>Cómo instalarlo</h2>
+  <ol class="pasos">
+    <li>Tocá el botón de arriba. El archivo se baja solo.</li>
+    <li>Abrilo desde la notificación de descarga o desde tu carpeta de descargas.</li>
+    <li>
+      Android va a pedirte permiso para instalar desde esa aplicación. Es normal
+      la primera vez: es la advertencia estándar para todo lo que no viene de
+      Play.
+    </li>
+    <li>Listo. La app se actualiza bajando la versión nueva desde acá.</li>
+  </ol>
+
+  <h2>¿Es seguro?</h2>
+  <p style="color:var(--suave)">
+    El archivo está firmado con nuestra clave de publicación y se compila
+    automáticamente desde el código, sin que nadie toque el binario en el medio.
+    Si en algún momento la firma cambiara, Android te lo va a avisar y no va a
+    dejar actualizar encima de la versión anterior.
+  </p>
+</main>
+
+<footer class="hoja pie" style="padding-top:1.75rem">
+  <span>VendoX · Argentina</span>
+  <a href="/privacidad">Privacidad</a>
+  <a href="/eliminar-cuenta">Eliminar cuenta</a>
+  <a href="/soporte">Soporte</a>
+</footer>
+
+<script>
+  /*
+   * Lo único que hace JavaScript en todo el sitio, y es opcional.
+   *
+   * La página funciona sin esto: el botón de descarga es un enlace y no
+   * depende de nada. Si el script falla, la ficha simplemente no aparece.
+   */
+  (async () => {
+    try {
+      const r = await fetch('/descargar/android.json', { cache: 'no-store' });
+      if (!r.ok) return;
+      const d = await r.json();
+      if (!d || d.disponible !== true) return;
+
+      const poner = (id, valor) => {
+        if (valor) document.getElementById(id).textContent = valor;
+      };
+
+      poner('v-version', d.version);
+      poner('v-commit', typeof d.commit === 'string' ? d.commit.slice(0, 12) : null);
+
+      if (typeof d.tamanoBytes === 'number') {
+        poner('v-tamano', `${(d.tamanoBytes / 1024 / 1024).toFixed(1)} MB`);
+      }
+      if (d.publicadaEl) {
+        // Fecha argentina: 19/08/2026. Un ISO crudo no se lee.
+        poner('v-fecha', new Date(d.publicadaEl).toLocaleDateString('es-AR'));
+      }
+
+      document.getElementById('ficha').hidden = false;
+    } catch {
+      // Sin ficha. El botón sigue funcionando, que es lo que importa.
+    }
+  })();
+</script>
+
+</body>
+</html>

@@ -1,5 +1,8 @@
 import { Module } from '@nestjs/common';
 
+import { StorageModule } from '@/shared/storage/storage.module';
+
+import { DescargasController } from './descargas.controller';
 import { LandingController } from './landing.controller';
 import { LandingService } from './landing.service';
 
@@ -11,7 +14,8 @@ import { LandingService } from './landing.service';
  * para la app. Mezclarlo haria que un controlador tuviera dos contratos.
  */
 @Module({
-  controllers: [LandingController],
+  imports: [StorageModule],
+  controllers: [LandingController, DescargasController],
   providers: [LandingService],
 })
 export class LandingModule {}

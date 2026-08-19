@@ -23,7 +23,7 @@ on:
       api_base_url:
         description: 'A qué backend le habla la app'
         required: true
-        default: 'https://livesellargentina-production.up.railway.app'
+        default: 'https://api.vendox.com.ar'
       motivo:
         description: 'Para qué es esta build (aparece en el nombre del artefacto)'
         required: false
@@ -147,13 +147,13 @@ jobs:
       - name: Compilar el APK
         run: |
           flutter build apk --release \
-            --dart-define=API_BASE_URL=${{ github.event.inputs.api_base_url || 'https://livesellargentina-production.up.railway.app' }}
+            --dart-define=API_BASE_URL=${{ github.event.inputs.api_base_url || 'https://api.vendox.com.ar' }}
 
       # El AAB es lo que sube a Play. El APK es para instalar a mano.
       - name: Compilar el AAB
         run: |
           flutter build appbundle --release \
-            --dart-define=API_BASE_URL=${{ github.event.inputs.api_base_url || 'https://livesellargentina-production.up.railway.app' }}
+            --dart-define=API_BASE_URL=${{ github.event.inputs.api_base_url || 'https://api.vendox.com.ar' }}
 
       # ─── La verificación que importa ────────────────────────────────────
       #
@@ -224,6 +224,92 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
+      # ─── Publicar el release ────────────────────────────────────────────
+      #
+      # ═══════════════════════════════════════════════════════════════════
+      # SÓLO EN UN TAG, Y CON UNA URL QUE NO CAMBIA NUNCA
+      # ═══════════════════════════════════════════════════════════════════
+      #
+      # Los artefactos de arriba siguen existiendo y sirven para QA: se bajan
+      # desde la pestaña Actions y vencen a los catorce días. Lo que NO pueden
+      # ser es la URL pública de descarga — vencen, y su dirección cambia en
+      # cada corrida.
+      #
+      # Esto sube el APK a R2 en dos lugares:
+      #
+      #   releases/android/vX.Y.Z/vendox.apk   la versión, para siempre
+      #   releases/android/vendox-latest.apk   lo que entrega el botón
+      #
+      # El bucket sigue PRIVADO. La descarga sale por `/descargar/android`, que
+      # firma una URL temporal y redirige — el mismo mecanismo que las
+      # imágenes. Abrir el bucket para repartir un APK expondría también las
+      # fotos de todos los productos, incluidas las de borradores que nadie
+      # publicó.
+      - name: Subir el release a R2
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          # R2 habla S3, pero exige `auto` como región.
+          AWS_DEFAULT_REGION: auto
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          set -euo pipefail
+
+          # Falla temprano y por separado: sin esto, el `aws s3 cp` de abajo
+          # muere con un error de credenciales que no dice cuál falta.
+          for v in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY R2_ENDPOINT R2_BUCKET; do
+            if [ -z "${!v}" ]; then
+              echo "::error::Falta el secreto $v. Ver web/README.md."
+              exit 1
+            fi
+          done
+
+          VERSION="${GITHUB_REF_NAME}"
+          APK="build/app/outputs/flutter-apk/app-release.apk"
+          TAMANO=$(stat -c%s "$APK")
+
+          echo "Publicando $VERSION ($TAMANO bytes)"
+
+          # La versión, inmutable. Nunca se pisa: si alguien reetiqueta, el
+          # binario viejo tiene que seguir siendo el que se repartió.
+          aws s3 cp "$APK" \
+            "s3://${R2_BUCKET}/releases/android/${VERSION}/vendox.apk" \
+            --endpoint-url "$R2_ENDPOINT" \
+            --content-type application/vnd.android.package-archive
+
+          # Y el puntero al último. Éste SÍ se pisa: es lo que hace que el
+          # botón de la web no haya que editarlo nunca.
+          aws s3 cp "$APK" \
+            "s3://${R2_BUCKET}/releases/android/vendox-latest.apk" \
+            --endpoint-url "$R2_ENDPOINT" \
+            --content-type application/vnd.android.package-archive
+
+          # La ficha que lee la página de descarga.
+          #
+          # Se escribe DESPUÉS del APK a propósito: si la subida del binario
+          # falla, la ficha no se actualiza y la web sigue anunciando la
+          # versión anterior — que es la que efectivamente se puede bajar.
+          # Al revés, la página anunciaría una versión que no existe.
+          cat > latest.json <<JSON
+          {
+            "version": "${VERSION}",
+            "commit": "${GITHUB_SHA}",
+            "publicadaEl": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "tamanoBytes": ${TAMANO}
+          }
+          JSON
+
+          aws s3 cp latest.json \
+            "s3://${R2_BUCKET}/releases/android/latest.json" \
+            --endpoint-url "$R2_ENDPOINT" \
+            --content-type application/json \
+            --cache-control "public, max-age=60"
+
+          rm -f latest.json
+          echo "✓ $VERSION publicado"
+
       - name: Resumen
         if: always()
         run: |
@@ -232,7 +318,7 @@ jobs:
             echo ""
             echo "| | |"
             echo "|---|---|"
-            echo "| Backend | \`${{ github.event.inputs.api_base_url || 'https://livesellargentina-production.up.railway.app' }}\` |"
+            echo "| Backend | \`${{ github.event.inputs.api_base_url || 'https://api.vendox.com.ar' }}\` |"
             echo "| Commit | \`${{ github.sha }}\` |"
             echo ""
             echo "Bajalo desde **Artifacts**, acá abajo. Se puede desde el teléfono."

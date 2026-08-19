@@ -212,6 +212,41 @@ export class R2StorageProvider extends StorageProvider implements OnModuleDestro
    * No se persiste en ningún lado ni se devuelve en ninguna respuesta JSON:
    * vive lo que dura un `302`.
    */
+  /**
+   * Lee un objeto pequeño como texto.
+   *
+   * ⚠️ Para archivos CHICOS y nuestros. Trae el contenido entero a memoria, así
+   * que no sirve para las imágenes ni para el APK — esos se entregan con
+   * `urlFirmada` y una redirección, sin pasar por este proceso.
+   *
+   * Existe para un caso concreto: la ficha del último release
+   * (`releases/android/latest.json`, unos 200 bytes). Servirla desde acá evita
+   * abrir el bucket y evita poner una URL firmada dentro del HTML, que
+   * vencería antes de que alguien termine de leer la página.
+   */
+  async leerTexto(storageKey: string): Promise<string> {
+    try {
+      const salida = await this.cliente.send(
+        new GetObjectCommand({ Bucket: this.bucket, Key: storageKey }),
+      );
+      return (await salida.Body?.transformToString()) ?? '';
+    } catch (err) {
+      /**
+       * Se registra como aviso y no como error.
+       *
+       * Que el archivo no esté es un estado NORMAL: pasa entre que se crea el
+       * bucket y se publica el primer release. Marcarlo como error llenaría de
+       * ruido rojo un tablero por algo que todavía no ocurrió.
+       */
+      this.logger.warn({
+        msg: 'no se pudo leer el objeto',
+        storageKey,
+        error: err instanceof Error ? err.message : 'error desconocido',
+      });
+      throw new StorageUnavailableError();
+    }
+  }
+
   async urlFirmada(storageKey: string): Promise<string> {
     try {
       return await getSignedUrl(

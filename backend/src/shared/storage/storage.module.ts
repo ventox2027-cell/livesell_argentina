@@ -69,6 +69,17 @@ import { LocalStorageProvider, StorageProvider } from '@/shared/storage/storage.
       },
     },
   ],
-  exports: [StorageProvider, StorageMetrics],
+  /**
+   * `R2StorageProvider` se exporta para `DescargasController`.
+   *
+   * Esa ruta reparte el APK con una URL firmada — el mismo mecanismo que
+   * `/media/*`, y por el mismo motivo: el bucket es privado y tiene que seguir
+   * siéndolo.
+   *
+   * Se exporta la clase concreta y no `StorageProvider` porque `urlFirmada`
+   * sólo existe en R2: con disco local no hay nada que firmar, y el controlador
+   * lo dice con un mensaje en vez de fingir una descarga.
+   */
+  exports: [StorageProvider, StorageMetrics, R2StorageProvider],
 })
 export class StorageModule {}

@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="es-AR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VendoX · Comprar se vive. Vender también.</title>
+<meta name="description" content="Comprá y vendé en vivo. VendoX es la app de live shopping argentina: transmití, mostrá tus productos y cobrá con Mercado Pago.">
+<link rel="canonical" href="https://vendox.com.ar/">
+<meta property="og:title" content="VendoX · Comprar se vive. Vender también.">
+<meta property="og:description" content="Comprá y vendé en vivo.">
+<meta property="og:url" content="https://vendox.com.ar/">
+<meta property="og:type" content="website">
+<meta property="og:locale" content="es_AR">
+<link rel="stylesheet" href="/_estilo.css">
+<style>
+  /*
+   * Lo específico de la portada. El resto sale de `_estilo.css`.
+   *
+   * La composición es de una columna a propósito: casi todo el tráfico va a
+   * llegar desde un enlace en WhatsApp, en un teléfono, con una mano. Una
+   * grilla que se arma en escritorio y se apila en móvil es más código para
+   * que el caso raro se vea mejor.
+   */
+  .portada {
+    max-width: 60rem;
+    margin: 0 auto;
+    padding: 4.5rem 1.25rem 3rem;
+  }
+
+  .lema {
+    font-size: clamp(2.1rem, 8vw, 3.4rem);
+    line-height: 1.06;
+    letter-spacing: -0.035em;
+    font-weight: 800;
+    margin: 0 0 1rem;
+    text-wrap: balance;
+  }
+
+  /* La segunda mitad del lema, en el acento. Es la marca. */
+  .lema em {
+    font-style: normal;
+    color: var(--acento);
+  }
+
+  .bajada {
+    font-size: clamp(1.05rem, 3.5vw, 1.3rem);
+    color: var(--suave);
+    margin: 0 0 2.25rem;
+    max-width: 30rem;
+  }
+
+  .acciones {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    align-items: flex-start;
+  }
+
+  .nota-descarga {
+    color: var(--debil);
+    font-size: 0.87rem;
+    margin: 0.35rem 0 0;
+  }
+
+  .puntos {
+    list-style: none;
+    padding: 0;
+    margin: 4rem 0 0;
+    display: grid;
+    gap: 1rem;
+  }
+
+  @media (min-width: 40rem) {
+    .puntos { grid-template-columns: repeat(3, 1fr); }
+  }
+
+  .puntos h2 {
+    font-size: 1.02rem;
+    margin: 0 0 0.3rem;
+  }
+
+  .puntos p {
+    margin: 0;
+    color: var(--suave);
+    font-size: 0.94rem;
+    line-height: 1.55;
+  }
+</style>
+</head>
+<body>
+
+<header class="barra">
+  <div class="barra-interna">
+    <a class="marca" href="/">Vendo<span>X</span></a>
+    <nav class="enlaces-barra">
+      <a href="/descargar">Descargar</a>
+      <a href="/soporte">Soporte</a>
+    </nav>
+  </div>
+</header>
+
+<main class="portada">
+  <h1 class="lema">Comprar se vive.<br><em>Vender también.</em></h1>
+  <p class="bajada">Comprá y vendé en vivo.</p>
+
+  <div class="acciones">
+    <!--
+      El enlace va a `/descargar/android`, que redirige al APK más reciente.
+
+      NO apunta a un artefacto de GitHub Actions: esos vencen a los catorce
+      días y su URL cambia en cada corrida. Un botón que funciona dos semanas y
+      después tira 404 es peor que no tenerlo, porque nadie de afuera puede
+      saber que el roto es el botón.
+    -->
+    <a class="boton" href="/descargar/android">Descargar VendoX para Android</a>
+    <p class="nota-descarga">
+      APK firmado · Android 8 o superior ·
+      <a href="/descargar">ver detalles de la versión</a>
+    </p>
+  </div>
+
+  <ul class="puntos">
+    <li>
+      <h2>En vivo, de verdad</h2>
+      <p>Transmitís desde el teléfono y quien mira compra sin salir del vivo.</p>
+    </li>
+    <li>
+      <h2>Cobrás con Mercado Pago</h2>
+      <p>La plata entra en tu cuenta. VendoX cobra su comisión sólo cuando vendés.</p>
+    </li>
+    <li>
+      <h2>Sin vueltas para empezar</h2>
+      <p>Creás tu tienda en un paso. Sin papeles y sin esperar aprobación.</p>
+    </li>
+  </ul>
+</main>
+
+<footer class="hoja pie" style="padding-top:1.75rem">
+  <span>VendoX · Argentina</span>
+  <a href="/privacidad">Privacidad</a>
+  <a href="/eliminar-cuenta">Eliminar cuenta</a>
+  <a href="/soporte">Soporte</a>
+</footer>
+
+</body>
+</html>

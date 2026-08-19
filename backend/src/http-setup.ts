@@ -206,6 +206,19 @@ export function configurarPrefijoYVersionado(app: NestFastifyApplication): void 
       { path: 't/:slug', method: RequestMethod.GET },
       { path: 'u/:slug', method: RequestMethod.GET },
       { path: '.well-known/assetlinks.json', method: RequestMethod.GET },
+      /**
+       * La descarga del APK y su ficha.
+       *
+       * Van sin prefijo porque son URLs para pegar en un mensaje o poner en un
+       * botón: `vendox.com.ar/descargar/android` se lee y se dicta;
+       * `vendox.com.ar/api/v1/descargar/android` no.
+       *
+       * Y sobre todo, tiene que poder no cambiar nunca. Una URL de descarga que
+       * lleva la versión de la API adentro queda atada a que esa versión exista
+       * para siempre.
+       */
+      { path: 'descargar/android', method: RequestMethod.GET },
+      { path: 'descargar/android.json', method: RequestMethod.GET },
     ],
   });
   app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });

@@ -120,6 +120,17 @@ COPY --from=build --chown=app:app /app/dist ./dist
 COPY --from=build --chown=app:app /app/prisma ./prisma
 COPY --from=build --chown=app:app /app/package.json ./package.json
 COPY --chown=app:app scripts/arrancar.sh ./scripts/arrancar.sh
+
+# El sitio público de vendox.com.ar.
+#
+# ⚠️ Vive en `backend/web` y no en la raíz del repositorio, y no es un capricho:
+# el contexto de construcción de esta imagen ES `backend/`. Un `COPY ../web` no
+# existe en Docker — lo que está fuera del contexto no se puede copiar.
+#
+# Que esté al lado del backend además es honesto: es el backend quien lo sirve.
+# Ver el comentario de `raizDelSitio` en `main.ts` para por qué vendox.com.ar y
+# api.vendox.com.ar son el mismo servicio.
+COPY --chown=app:app web ./web
 RUN chmod +x ./scripts/arrancar.sh
 
 USER app
