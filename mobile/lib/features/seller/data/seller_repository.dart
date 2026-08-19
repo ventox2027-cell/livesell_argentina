@@ -491,7 +491,22 @@ final miPerfilVendedorProvider =
 class MisProductosNotifier extends AsyncNotifier<Pagina<Producto>> {
   @override
   Future<Pagina<Producto>> build() async {
-    ref.watch(miPerfilVendedorProvider);
+    /**
+     * ⚠️ Se observa el ID del vendedor, NO el perfil entero.
+     *
+     * El listado depende del perfil para una sola cosa: que exista. Cuando
+     * alguien crea su tienda, el id pasa de `null` a un valor y hay que ir a
+     * buscar los productos — eso sigue igual.
+     *
+     * Observando el `AsyncValue` completo, en cambio, CUALQUIER cambio del
+     * perfil recargaba el listado. Y como `reconciliar()` construye un
+     * `PerfilVendedor` nuevo en cada refresco, refrescar el perfil pedía
+     * también los productos: un refresco costaba cuatro peticiones en vez de
+     * dos, con las dos de más pisando a las buenas.
+     *
+     * Lo encontró un test que contaba peticiones, no leyendo el código.
+     */
+    ref.watch(miPerfilVendedorProvider.select((p) => p.valueOrNull?.seller.id));
     return ref.watch(sellerRepositoryProvider).misProductos();
   }
 
@@ -514,6 +529,50 @@ final misProductosProvider =
     AsyncNotifierProvider<MisProductosNotifier, Pagina<Producto>>(
   MisProductosNotifier.new,
 );
+
+/// Vuelve a pedir la tienda entera sin vaciar la pantalla.
+///
+/// ═══════════════════════════════════════════════════════════════════════════
+/// POR QUÉ NO ES `ref.invalidate`
+/// ═══════════════════════════════════════════════════════════════════════════
+///
+/// Medido en un teléfono: entrar a Mi tienda a veces era instantáneo y a veces
+/// tardaba entre 3 y 5 segundos. La diferencia no era la red: era si alguien
+/// había invalidado los providers en el camino.
+///
+/// `ref.invalidate` **descarta** el estado. El provider vuelve a `loading` sin
+/// valor anterior, y `SellerHomeScreen` muestra su spinner de cuerpo entero —o
+/// sea que la tienda que la persona estaba mirando hace dos segundos desaparece
+/// para volver a aparecer igual.
+///
+/// Y se invalidaba en todos lados: al volver del editor, al crear un producto,
+/// al guardar los ajustes, al tirar para refrescar. Cada una de esas vueltas
+/// era una pantalla en blanco esperando dos peticiones a otro continente.
+///
+/// Peor: `misProductos` observa a `miPerfil`, así que invalidar el perfil
+/// invalidaba también el listado. Un `invalidate` costaba dos.
+///
+/// `reconciliar()` pide lo mismo y deja lo anterior a la vista hasta que llega
+/// la respuesta. Si falla, no borra nada: un refresco de cortesía que no llegó
+/// no puede vaciar la tienda de alguien.
+/// Cómo leer un provider, sin importar desde dónde.
+///
+/// `WidgetRef` y `ProviderContainer` tienen los dos un `read` con esta forma
+/// pero ningún tipo en común. Recibirlo como función deja que la pantalla pase
+/// `ref.read` y que un test pase `contenedor.read` — y que el test ejecute ESTA
+/// función y no una copia suya.
+///
+/// ⚠️ No es un detalle: la primera versión de los tests reimplementaba el
+/// cuerpo de acá, así que sabotear esta función no rompía ningún test. Un test
+/// que prueba una copia de la lógica no prueba la lógica.
+typedef Leer = T Function<T>(ProviderListenable<T> provider);
+
+Future<void> recargarLaTienda(Leer leer) async {
+  await Future.wait([
+    leer(miPerfilVendedorProvider.notifier).reconciliar(),
+    leer(misProductosProvider.notifier).reconciliar(),
+  ]);
+}
 
 /// El listado como lo ve el vendedor.
 ///

@@ -60,6 +60,19 @@ class SellerHomeScreen extends ConsumerWidget {
           ),
         ],
       ),
+      /**
+       * ⚠️ El `loading` de acá es sólo el de la PRIMERA carga.
+       *
+       * Un refresco no pasa por él: `recargarLaTienda` usa `reconciliar()`, que
+       * no toca el estado hasta tener la respuesta. Es lo que saca el spinner de
+       * cuerpo entero de en medio y lo que arregla los 3 a 5 segundos que se
+       * medían al entrar — ver la nota de `recargarLaTienda`.
+       *
+       * Se intentó además reestructurar esto con `hasValue` para cubrir un
+       * `invalidate` futuro, y se sacó: ningún test podía distinguirlo, porque
+       * con `reconciliar()` el estado nunca sale de `AsyncData`. Código
+       * defensivo que nadie puede romper tampoco se puede comprobar.
+       */
       body: perfil.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) {
@@ -70,10 +83,7 @@ class SellerHomeScreen extends ConsumerWidget {
             child: _Error(mensaje: mensajeDeError(e), onReintentar: recargar),
           );
         },
-        data: (p) {
-          if (p == null) return const _SinVendedor();
-          return _Panel(perfil: p);
-        },
+        data: (p) => p == null ? const _SinVendedor() : _Panel(perfil: p),
       ),
       floatingActionButton: perfil.valueOrNull == null
           ? null
@@ -82,10 +92,7 @@ class SellerHomeScreen extends ConsumerWidget {
                 final creado = await Navigator.of(context).push<bool>(
                   MaterialPageRoute(builder: (_) => const ProductEditorScreen()),
                 );
-                if (creado == true) {
-                  ref.invalidate(misProductosProvider);
-                  ref.invalidate(miPerfilVendedorProvider);
-                }
+                if (creado == true) unawaited(recargarLaTienda(ref.read));
               },
               backgroundColor: AppColor.acento,
               icon: const Icon(Icons.add_rounded),
@@ -411,10 +418,7 @@ class _Panel extends ConsumerWidget {
     });
 
     return RefreshIndicator(
-      onRefresh: () async {
-        ref.invalidate(misProductosProvider);
-        ref.invalidate(miPerfilVendedorProvider);
-      },
+      onRefresh: () => recargarLaTienda(ref.read),
       child: ListView(
         padding: const EdgeInsets.fromLTRB(Gap.lg, 0, Gap.lg, 100),
         children: [
@@ -632,10 +636,7 @@ class _FilaProducto extends ConsumerWidget {
         final cambio = await Navigator.of(context).push<bool>(
           MaterialPageRoute(builder: (_) => ProductEditorScreen(productoId: producto.id)),
         );
-        if (cambio == true) {
-          ref.invalidate(misProductosProvider);
-          ref.invalidate(miPerfilVendedorProvider);
-        }
+        if (cambio == true) unawaited(recargarLaTienda(ref.read));
       },
       borderRadius: BorderRadius.circular(Redondeo.md),
       child: Container(

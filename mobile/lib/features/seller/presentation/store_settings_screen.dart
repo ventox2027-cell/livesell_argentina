@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -72,7 +74,7 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
       }
       await repo.actualizarVendedor(displayName: nombre, bio: _bio.text.trim());
 
-      ref.invalidate(miPerfilVendedorProvider);
+      unawaited(ref.read(miPerfilVendedorProvider.notifier).reconciliar());
       if (mounted) {
         AppSnack.exito(context, 'Guardado');
         Navigator.of(context).pop();
@@ -94,7 +96,7 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
             store.id,
             status: store.pausada ? 'ACTIVE' : 'PAUSED',
           );
-      ref.invalidate(miPerfilVendedorProvider);
+      unawaited(ref.read(miPerfilVendedorProvider.notifier).reconciliar());
       if (mounted) {
         AppSnack.exito(
           context,
@@ -218,7 +220,9 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
                     );
                     // Al volver con cambios hay que releer: la tienda que
                     // tenemos en memoria quedó vieja.
-                    if (cambio ?? false) ref.invalidate(miPerfilVendedorProvider);
+                    if (cambio ?? false) {
+                      unawaited(ref.read(miPerfilVendedorProvider.notifier).reconciliar());
+                    }
                   },
                 ),
                 const SizedBox(height: Gap.md),
