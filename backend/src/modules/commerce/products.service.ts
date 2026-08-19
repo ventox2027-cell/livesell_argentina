@@ -206,7 +206,34 @@ export class ProductsService {
    * variantes, o con la mitad de las combinaciones— sería inconsistente y no
    * habría forma de saber cuál falta.
    */
-  async create(userId: string, dto: CreateProductDto) {
+  /**
+   * Crea un producto.
+   *
+   * ═══════════════════════════════════════════════════════════════════════════
+   * `idempotencyKey` — LA MISMA ALTA DOS VECES ES UNA SOLA ALTA
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * La app manda una clave por sesión de editor. Si la respuesta se pierde y el
+   * teléfono reintenta, la segunda petición trae la misma clave y acá se
+   * devuelve el producto que ya se creó, en vez de crear otro.
+   *
+   * Es la única defensa contra el caso real: la petición LLEGÓ y lo que se
+   * perdió fue la respuesta. Para el teléfono eso es indistinguible de «no
+   * llegó», así que reintenta — y con razón.
+   *
+   * ─── Se devuelve el producto viejo, sin comparar el contenido ───
+   *
+   * `inventory.service.ts` sí compara una huella de la petición y falla si la
+   * clave se reusó con otros datos. Acá no, y la diferencia es a propósito: una
+   * reserva mal replicada le aparta stock equivocado a alguien —es plata—,
+   * mientras que un alta replicada devuelve el producto que efectivamente se
+   * creó.
+   *
+   * Si el vendedor había cambiado algo entre el envío perdido y el reintento,
+   * la app adopta el id que vuelve y el próximo guardado es un `PATCH` que
+   * aplica esos cambios. Converge, y no se pierde nada.
+   */
+  async create(userId: string, dto: CreateProductDto, idempotencyKey?: string) {
     /**
      * Interruptor de emergencia.
      *
@@ -221,6 +248,24 @@ export class ProductsService {
     exigirHabilitada('PRODUCT_UPLOAD_ENABLED');
 
     const { store } = await this.ownership.primaryStoreOf(userId, { requireActive: true });
+
+    /**
+     * La repetición se contesta ANTES de validar nada.
+     *
+     * Un reintento no tiene por qué volver a pasar por el interruptor de
+     * emergencia, ni por el bloqueo de Mercado Pago, ni por el tope del plan.
+     * Todo eso ya se evaluó cuando el producto se creó de verdad; volver a
+     * exigirlo haría que el mismo reintento fallara por una regla que cambió
+     * en el medio —el vendedor llegó al tope justamente porque este producto
+     * ya existe—.
+     */
+    if (idempotencyKey) {
+      const yaCreado = await this.prisma.product.findFirst({
+        where: { storeId: store.id, idempotencyKey },
+        select: { id: true },
+      });
+      if (yaCreado) return this.detail(userId, yaCreado.id);
+    }
 
     /**
      * Sin Mercado Pago conectado se puede crear el BORRADOR, no publicarlo.
@@ -274,6 +319,7 @@ export class ProductsService {
             compareAtPriceCents: dto.compareAtPriceCents ?? null,
             categoryId: dto.categoryId ?? null,
             status: dto.status,
+            idempotencyKey: idempotencyKey ?? null,
           },
         });
 
@@ -350,6 +396,43 @@ export class ProductsService {
       });
     } catch (err) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        /**
+         * Dos peticiones con la MISMA clave, a la vez.
+         *
+         * El chequeo de arriba no alcanza para esto: las dos leyeron «no hay
+         * nada» antes de que ninguna escribiera. Es el doble toque real, o dos
+         * reintentos que salen juntos cuando vuelve la red.
+         *
+         * El índice único las ordena: una gana y la otra llega acá. Se relee y
+         * se devuelve la que ganó, así las dos peticiones reciben el mismo
+         * producto y no queda ninguna duda de cuál es.
+         *
+         * ⚠️ Se distingue POR EL CAMPO, no por el mensaje. Este mismo `P2002`
+         * también lo tira el slug repetido, que es un error de verdad y tiene
+         * que seguir llegándole al vendedor como «ya tenés un producto con ese
+         * nombre».
+         */
+        /**
+         * ⚠️ Se pregunta por la CLAVE, no por qué índice se quejó.
+         *
+         * La primera versión miraba `err.meta.target` para ver si el choque
+         * había sido el de idempotencia. No funciona: cuando dos peticiones con
+         * la misma clave salen juntas, las dos calculan el mismo slug, y el que
+         * salta primero es el índice del SLUG. La perdedora recibía «ya tenés un
+         * producto con ese nombre» por un producto que era el suyo.
+         *
+         * La pregunta correcta no es qué índice se quejó sino si, ahora mismo,
+         * ya existe un producto con esta clave. Si existe, esta petición es la
+         * repetición de aquélla y le corresponde la misma respuesta.
+         */
+        if (idempotencyKey) {
+          const ganador = await this.prisma.product.findFirst({
+            where: { storeId: store.id, idempotencyKey },
+            select: { id: true },
+          });
+          if (ganador) return this.detail(userId, ganador.id);
+        }
+
         throw new DomainError('SLUG_TAKEN', 'Ya tenés un producto con ese nombre', { slug });
       }
       throw err;

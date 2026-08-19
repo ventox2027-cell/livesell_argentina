@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -72,7 +73,43 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
   bool _guardando = false;
   bool _huboCambios = false;
 
-  bool get _esNuevo => widget.productoId == null;
+  /// El id del producto que este editor está editando, si ya existe.
+  ///
+  /// ═══════════════════════════════════════════════════════════════════════════
+  /// EL ID QUE VALE ES EL DE AHORA, NO EL DE CUANDO SE ABRIÓ LA PANTALLA
+  /// ═══════════════════════════════════════════════════════════════════════════
+  ///
+  /// Acá decía `_esNuevo => widget.productoId == null`, y `widget.productoId` no
+  /// cambia nunca: es el parámetro con el que se abrió el editor.
+  ///
+  /// Eso creaba productos duplicados por el camino más normal que hay. Después
+  /// de crear, la pantalla NO se cierra —hay que poder subirle las fotos—, así
+  /// que `_producto` ya tiene un id pero `widget.productoId` sigue en `null`.
+  /// El botón miraba `_producto` y decía «Guardar cambios»; `_guardar()` miraba
+  /// `widget.productoId` y llamaba a `crearProducto`.
+  ///
+  /// O sea: **el botón decía una cosa y hacía otra.** Cargar un producto,
+  /// subirle fotos y volver a tocar Guardar dejaba dos filas. Publicar después
+  /// una de las dos dejaba exactamente lo reportado: un publicado y un borrador
+  /// duplicado del mismo producto.
+  ///
+  /// Con `_idActual`, en cuanto el producto existe el editor pasa a actualizar
+  /// ESE id, para siempre.
+  String? get _idActual => widget.productoId ?? _producto?.id;
+
+  bool get _esNuevo => _idActual == null;
+
+  /// La clave que identifica ESTA alta.
+  ///
+  /// Se genera una sola vez por sesión de editor y viaja en cada intento de
+  /// creación. Si la respuesta se pierde y se reintenta, el servidor reconoce la
+  /// clave y devuelve el producto que ya creó en vez de crear otro.
+  ///
+  /// Es la mitad que `_idActual` no cubre: aquello evita la segunda alta cuando
+  /// la primera respondió. Cuando la primera **no** respondió, el teléfono no
+  /// tiene forma de saber si llegó, y sólo el servidor puede decidirlo.
+  late final String _claveDeAlta = 'prd-${DateTime.now().microsecondsSinceEpoch}-'
+      '${Random().nextInt(1 << 32).toRadixString(36)}';
 
   @override
   void initState() {
@@ -133,13 +170,19 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
     try {
       final repo = ref.read(sellerRepositoryProvider);
 
-      if (_esNuevo) {
+      // ⚠️ Se lee UNA vez y se usa en todo el guardado. Leerlo de nuevo después
+      // de un `await` haría que un mismo guardado empezara como alta y
+      // terminara como edición, o al revés.
+      final id = _idActual;
+
+      if (id == null) {
         final creado = await repo.crearProducto(
           name: nombre,
           basePriceCents: centavos,
           description: _descripcion.text.trim(),
           opciones: _tieneVariantes ? _opciones : const {},
           categoryId: _categoriaId,
+          claveDeAlta: _claveDeAlta,
         );
         if (!mounted) return;
         setState(() {
@@ -149,7 +192,7 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
         AppSnack.exito(context, 'Producto creado. Ahora agregale fotos.');
       } else {
         var actualizado = await repo.actualizarProducto(
-          widget.productoId!,
+          id,
           name: nombre,
           basePriceCents: centavos,
           description: _descripcion.text.trim(),
@@ -170,7 +213,7 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
          */
         final ejes = _tieneVariantes ? _opciones : <String, List<String>>{};
         if (!_mismosEjes(ejes, actualizado)) {
-          actualizado = await repo.definirOpciones(widget.productoId!, ejes);
+          actualizado = await repo.definirOpciones(id, ejes);
         }
 
         if (!mounted) return;

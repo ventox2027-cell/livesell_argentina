@@ -125,6 +125,14 @@ class SellerRepository {
   ///
   /// `opciones` es `{ "Color": ["Negro","Blanco"] }`. Si viene vacío, el
   /// backend genera una variante DEFAULT: la app no tiene que saber nada de eso.
+  ///
+  /// ⚠️ `claveDeAlta` es lo que evita el producto duplicado cuando la respuesta
+  /// se pierde. El editor la genera una vez por sesión y la manda en cada
+  /// intento; el servidor reconoce la repetición y devuelve el producto que ya
+  /// creó. Ver `Idempotency-Key` en `commerce.controller.ts`.
+  ///
+  /// Es opcional en la firma sólo para no romper a quien llame sin ella —los
+  /// tests, sobre todo—. El editor la manda siempre.
   Future<Producto> crearProducto({
     required String name,
     required int basePriceCents,
@@ -133,8 +141,10 @@ class SellerRepository {
     Map<String, List<String>> opciones = const {},
     String status = 'DRAFT',
     String? categoryId,
+    String? claveDeAlta,
   }) async {
-    final res = await _api.post<Map<String, dynamic>>('/products', data: {
+    final res =
+        await _api.post<Map<String, dynamic>>('/products', idempotencyKey: claveDeAlta, data: {
       'name': name,
       'basePriceCents': basePriceCents,
       if (description != null && description.isNotEmpty) 'description': description,

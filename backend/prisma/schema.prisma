@@ -1427,6 +1427,26 @@ model Product {
   /// dejarlo bien ahora: después ya hay datos.
   deletedAt DateTime? @map("deleted_at")
 
+  /// La clave con la que el editor pidió ESTA alta.
+  ///
+  /// ═══════════════════════════════════════════════════════════════════════
+  /// LO QUE EVITA: DOS FILAS PARA UN SOLO PRODUCTO
+  /// ═══════════════════════════════════════════════════════════════════════
+  ///
+  /// La app manda una clave por sesión de editor. Si la respuesta se pierde
+  /// —un timeout, la pantalla que se cierra, un reintento— la segunda petición
+  /// llega con la MISMA clave y el servidor devuelve el producto que ya creó
+  /// en vez de crear otro.
+  ///
+  /// Es la única defensa que funciona cuando la petición SÍ llegó y lo que se
+  /// perdió fue la respuesta. Deshabilitar el botón no ayuda: para el teléfono,
+  /// «no me contestaron» y «no llegó» son indistinguibles.
+  ///
+  /// `null` en todo lo creado antes de esto, y en cualquier cliente que no la
+  /// mande. PostgreSQL considera cada NULL distinto de los demás, así que el
+  /// índice único de abajo no molesta a esas filas.
+  idempotencyKey String? @map("idempotency_key")
+
   store        Store                @relation(fields: [storeId], references: [id], onDelete: Cascade)
   category     Category?            @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   options      ProductOption[]
@@ -1435,6 +1455,8 @@ model Product {
   liveSessions LiveSessionProduct[]
 
   @@unique([storeId, slug])
+  /// Dos altas con la misma clave son la misma alta. Ver `idempotencyKey`.
+  @@unique([storeId, idempotencyKey])
   @@index([storeId, status, deletedAt])
   @@index([status, createdAt])
   @@map("products")

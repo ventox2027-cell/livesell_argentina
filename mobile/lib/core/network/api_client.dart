@@ -190,8 +190,27 @@ class ApiClient {
   Future<Response<T>> get<T>(String path, {Map<String, dynamic>? query, bool sinAuth = false}) =>
       _dio.get<T>(path, queryParameters: query, options: Options(extra: {'sinAuth': sinAuth}));
 
-  Future<Response<T>> post<T>(String path, {Object? data, bool sinAuth = false}) =>
-      _dio.post<T>(path, data: data, options: Options(extra: {'sinAuth': sinAuth}));
+  /// `POST`, opcionalmente idempotente.
+  ///
+  /// `idempotencyKey` viaja como cabecera `Idempotency-Key` y le dice al
+  /// servidor «esto es el mismo pedido que el anterior». Es lo único que evita
+  /// duplicar cuando la petición llegó y lo que se perdió fue la respuesta —el
+  /// caso que ningún botón deshabilitado cubre, porque para el teléfono «no me
+  /// contestaron» y «no llegó» son lo mismo.
+  Future<Response<T>> post<T>(
+    String path, {
+    Object? data,
+    bool sinAuth = false,
+    String? idempotencyKey,
+  }) =>
+      _dio.post<T>(
+        path,
+        data: data,
+        options: Options(
+          extra: {'sinAuth': sinAuth},
+          headers: idempotencyKey == null ? null : {'idempotency-key': idempotencyKey},
+        ),
+      );
 
   Future<Response<T>> patch<T>(String path, {Object? data}) => _dio.patch<T>(path, data: data);
 

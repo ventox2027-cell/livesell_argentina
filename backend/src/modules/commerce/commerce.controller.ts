@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
   Param,
   Patch,
   Post,
@@ -13,6 +14,8 @@ import {
 import type { FastifyRequest } from 'fastify';
 
 import { CurrentUser, Public, type AuthenticatedUser } from '@/modules/auth/auth.guard';
+import { IdempotencyKeySchema } from '@/modules/inventory/dto/inventory.dto';
+import { DomainError } from '@/shared/errors/domain.error';
 import { RateLimit } from '@/shared/http/rate-limit.guard';
 import { ZodValidationPipe } from '@/shared/http/zod-validation.pipe';
 import { leerArchivoSubido } from '@/shared/storage/multipart';
@@ -220,12 +223,38 @@ export class CommerceController {
     return this.products.listMine(user.id, query);
   }
 
+  /**
+   * Alta de producto.
+   *
+   * `Idempotency-Key` es OPCIONAL y no debería serlo — pero una app ya
+   * instalada no se puede actualizar desde acá, y exigirla le rompería el alta
+   * a quien todavía no actualizó. La app la manda siempre; sin ella, el alta
+   * funciona igual y vuelve a ser duplicable por un reintento.
+   *
+   * Se valida el formato con el mismo esquema que las reservas: un cliente que
+   * mande una constante —`"1"`, o peor, `"undefined"`— tiene que fallar en voz
+   * alta, no compartir una clave entre todos sus productos y recibir siempre el
+   * primero.
+   */
   @Post('products')
   createProduct(
     @CurrentUser() user: AuthenticatedUser,
     @Body(new ZodValidationPipe(CreateProductSchema)) dto: CreateProductDto,
+    @Headers('idempotency-key') idempotencyKey?: string,
   ) {
-    return this.products.create(user.id, dto);
+    let clave: string | undefined;
+    if (idempotencyKey !== undefined && idempotencyKey.trim() !== '') {
+      const parseada = IdempotencyKeySchema.safeParse(idempotencyKey);
+      if (!parseada.success) {
+        throw new DomainError(
+          'VALIDATION_FAILED',
+          parseada.error.issues[0]?.message ?? 'Clave de idempotencia inválida',
+        );
+      }
+      clave = parseada.data;
+    }
+
+    return this.products.create(user.id, dto, clave);
   }
 
   @Get('products/:id')

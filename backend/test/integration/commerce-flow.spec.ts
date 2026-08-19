@@ -4885,3 +4885,415 @@ describe('La comisión que ve el vendedor', () => {
     expect(business.body.comision.etiqueta).toContain('(3,5%)');
   });
 });
+
+/**
+ * Un alta es un producto. Aunque se pida dos veces.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * EL CASO QUE NINGÚN BOTÓN DESHABILITADO CUBRE
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * El teléfono manda `POST /products`. El servidor lo crea. La respuesta se
+ * pierde —un timeout, la red que cambia de celda, la app que pasa a segundo
+ * plano—. Para el teléfono eso es indistinguible de «no llegó», así que
+ * reintenta. Y aparece el segundo producto.
+ *
+ * Apagar el botón mientras viaja la petición no ayuda: el problema no es el
+ * segundo toque, es el segundo VIAJE.
+ */
+describe('Alta de producto idempotente', () => {
+  function clave() {
+    return `prd-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+
+  async function crear(
+    token: string,
+    nombre: string,
+    opciones: { clave?: string; status?: string } = {},
+  ) {
+    const headers: Record<string, string> = { 'content-type': 'application/json' };
+    if (opciones.clave) headers['idempotency-key'] = opciones.clave;
+
+    const res = await (app as NestFastifyApplication)
+      .getHttpAdapter()
+      .getInstance()
+      .inject({
+        method: 'POST',
+        url: '/api/v1/products',
+        headers: { ...headers, authorization: `Bearer ${token}` },
+        payload: {
+          name: nombre,
+          basePriceCents: 500_000,
+          status: opciones.status ?? 'DRAFT',
+          ...(opciones.status === 'ACTIVE' ? { categoryId: 'cat_otros' } : {}),
+        },
+      });
+
+    return { status: res.statusCode, body: res.body ? JSON.parse(res.body) : null };
+  }
+
+  async function cuantosProductos(storeId: string) {
+    return prisma.product.count({ where: { storeId, deletedAt: null } });
+  }
+
+  it('crear una vez deja una fila', async () => {
+    const v = await nuevoVendedor();
+    const r = await crear(v.token, 'Producto único', { clave: clave() });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(await cuantosProductos(v.store.id as string)).toBe(1);
+  });
+
+  /**
+   * EL TEST DEL REINTENTO.
+   *
+   * Dos peticiones idénticas con la misma clave. La segunda tiene que devolver
+   * el MISMO producto, no crear otro. Es exactamente lo que hace el teléfono
+   * cuando no le llegó la respuesta.
+   */
+  it('⛔ reintentar con la misma clave devuelve el mismo producto', async () => {
+    const v = await nuevoVendedor();
+    const k = clave();
+
+    const primera = await crear(v.token, 'Reintentado', { clave: k });
+    const segunda = await crear(v.token, 'Reintentado', { clave: k });
+
+    expect(primera.status).toBe(201);
+    expect(segunda.body.id).toBe(primera.body.id);
+    expect(await cuantosProductos(v.store.id as string)).toBe(1);
+  });
+
+  /**
+   * EL DOBLE TOQUE REAL: las dos peticiones salen a la vez.
+   *
+   * El chequeo previo no alcanza —las dos leen «no hay nada» antes de que
+   * ninguna escriba—. Lo que las ordena es el índice único, y la que pierde
+   * relee y devuelve la que ganó.
+   */
+  it('⛔ dos altas simultáneas con la misma clave dejan UNA fila', async () => {
+    const v = await nuevoVendedor();
+    const k = clave();
+
+    const [a, b] = await Promise.all([
+      crear(v.token, 'Doble toque', { clave: k }),
+      crear(v.token, 'Doble toque', { clave: k }),
+    ]);
+
+    expect(a.status, JSON.stringify(a.body)).toBe(201);
+    expect(b.status, JSON.stringify(b.body)).toBe(201);
+    expect(a.body.id).toBe(b.body.id);
+    expect(await cuantosProductos(v.store.id as string)).toBe(1);
+  });
+
+  /**
+   * El reintento devuelve el producto que se creó, aunque el vendedor haya
+   * cambiado algo en el medio.
+   *
+   * No se pierde nada: la app adopta el id que vuelve y el próximo guardado es
+   * un `PATCH` que aplica los cambios nuevos. Converge.
+   */
+  it('con la misma clave y otro nombre, sigue siendo el mismo producto', async () => {
+    const v = await nuevoVendedor();
+    const k = clave();
+
+    const primera = await crear(v.token, 'Nombre original', { clave: k });
+    const segunda = await crear(v.token, 'Nombre cambiado', { clave: k });
+
+    expect(segunda.body.id).toBe(primera.body.id);
+    expect(segunda.body.name).toBe('Nombre original');
+    expect(await cuantosProductos(v.store.id as string)).toBe(1);
+  });
+
+  it('claves distintas crean productos distintos', async () => {
+    const v = await nuevoVendedor();
+
+    const a = await crear(v.token, 'Uno', { clave: clave() });
+    const b = await crear(v.token, 'Dos', { clave: clave() });
+
+    expect(a.body.id).not.toBe(b.body.id);
+    expect(await cuantosProductos(v.store.id as string)).toBe(2);
+  });
+
+  /**
+   * La clave es POR TIENDA. Si el índice fuera global, dos vendedores que
+   * generan la misma clave —son aleatorias, pero nada lo garantiza— harían que
+   * el segundo recibiera el producto del primero.
+   */
+  it('⛔ la misma clave en dos tiendas NO comparte producto', async () => {
+    const uno = await nuevoVendedor();
+    const otro = await nuevoVendedor();
+    const k = clave();
+
+    const a = await crear(uno.token, 'De uno', { clave: k });
+    const b = await crear(otro.token, 'Del otro', { clave: k });
+
+    expect(a.body.id).not.toBe(b.body.id);
+    expect(b.body.name).toBe('Del otro');
+  });
+
+  /**
+   * Sin clave el alta funciona igual: una app vieja instalada en un teléfono no
+   * se puede actualizar desde el servidor, y romperle el alta sería peor que
+   * dejarla como estaba. Sigue pudiendo duplicar, y eso es sabido.
+   */
+  it('sin clave el alta sigue funcionando', async () => {
+    const v = await nuevoVendedor();
+    const r = await crear(v.token, 'Sin clave');
+
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+  });
+
+  /**
+   * Una clave basura tiene que fallar en voz alta. Un cliente que mande
+   * `"undefined"` como constante compartiría la misma clave entre todos sus
+   * productos y recibiría siempre el primero — un bug mucho peor y mucho más
+   * difícil de encontrar que un 400.
+   */
+  it('⛔ una clave demasiado corta se rechaza', async () => {
+    const v = await nuevoVendedor();
+    const r = await crear(v.token, 'Clave corta', { clave: 'x' });
+
+    expect(r.status).toBe(400);
+  });
+
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * DOS PRODUCTOS CON EL MISMO NOMBRE SON DOS PRODUCTOS
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * Y está bien que así sea: un vendedor puede tener dos «Buzo negro» y no le
+   * corresponde al sistema decidir que se equivocó. `slugDisponible` le busca
+   * un slug libre al segundo y los dos conviven.
+   *
+   * Se deja escrito porque es justo lo que hace que los duplicados accidentales
+   * NO se detecten solos: para la base son dos filas legítimas. La defensa
+   * tiene que ser la clave de idempotencia, no el nombre.
+   */
+  it('dos altas con el mismo nombre y claves distintas son dos productos', async () => {
+    const v = await nuevoVendedor();
+    const primero = await crear(v.token, 'Mismo nombre', { clave: clave() });
+    const segundo = await crear(v.token, 'Mismo nombre', { clave: clave() });
+
+    expect(primero.status).toBe(201);
+    expect(segundo.status, JSON.stringify(segundo.body)).toBe(201);
+    expect(segundo.body.id).not.toBe(primero.body.id);
+    expect(segundo.body.slug).not.toBe(primero.body.slug);
+    expect(await cuantosProductos(v.store.id as string)).toBe(2);
+  });
+
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * PUBLICAR UN BORRADOR CAMBIA EL ESTADO, NO CREA OTRO PRODUCTO
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * Es el recorrido normal del editor: se guarda el borrador, se le suben
+   * fotos, se publica al final. El id tiene que ser el mismo de punta a punta.
+   */
+  it('guardar borrador y publicar es el MISMO id', async () => {
+    const v = await nuevoVendedor();
+    const borrador = await crear(v.token, 'Borrador que se publica', { clave: clave() });
+    const id = borrador.body.id as string;
+
+    const publicado = await call('PATCH', `/api/v1/products/${id}`, {
+      token: v.token,
+      body: { status: 'ACTIVE', categoryId: 'cat_otros' },
+    });
+
+    expect(publicado.status, JSON.stringify(publicado.body)).toBe(200);
+    expect(publicado.body.id).toBe(id);
+    expect(publicado.body.status).toBe('ACTIVE');
+    expect(await cuantosProductos(v.store.id as string)).toBe(1);
+  });
+
+  it('editar un publicado no crea otra fila', async () => {
+    const v = await nuevoVendedor();
+    const creado = await crear(v.token, 'Publicado editable', { clave: clave(), status: 'ACTIVE' });
+    const id = creado.body.id as string;
+
+    for (const precio of [600_000, 700_000, 800_000]) {
+      const r = await call('PATCH', `/api/v1/products/${id}`, {
+        token: v.token,
+        body: { basePriceCents: precio },
+      });
+      expect(r.body.id).toBe(id);
+    }
+
+    expect(await cuantosProductos(v.store.id as string)).toBe(1);
+  });
+});
+
+/**
+ * El tope de Free bajo concurrencia.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * «CONTAR Y DESPUÉS ESCRIBIR» NO ES UNA REGLA
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Con dos publicaciones simultáneas, las dos cuentan 2, las dos concluyen que
+ * pueden, y quedan 4. El tope no se rompe por un descuido: se rompe porque la
+ * comprobación y la escritura no son la misma operación.
+ *
+ * En el resto del sistema eso se resuelve con un UPDATE condicional atómico,
+ * que acá no sirve: la condición no es sobre la fila que se escribe sino sobre
+ * cuántas OTRAS filas cumplen algo, y no hay WHERE que exprese eso.
+ *
+ * Lo que lo resuelve es `pg_advisory_xact_lock` por vendedor, tomado DENTRO de
+ * la transacción que después escribe.
+ */
+describe('Tope de Free bajo concurrencia', () => {
+  async function publicarNuevo(token: string, nombre: string) {
+    return call('POST', '/api/v1/products', {
+      token,
+      body: {
+        name: nombre,
+        basePriceCents: 500_000,
+        categoryId: 'cat_otros',
+        status: 'ACTIVE',
+      },
+    });
+  }
+
+  async function publicados(sellerId: string) {
+    return prisma.product.count({
+      where: { store: { sellerId }, status: 'ACTIVE', deletedAt: null },
+    });
+  }
+
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * EL TEST QUE PEDÍA LA AUDITORÍA
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * Free con 2 publicados dispara DOS publicaciones a la vez. Una tiene que
+   * entrar y la otra tiene que rebotar. Jamás pueden quedar 4.
+   */
+  it('⛔ con 2 publicados, dos altas simultáneas dejan 3 — nunca 4', async () => {
+    const v = await nuevoVendedor();
+    const sellerId = v.seller.id as string;
+    await publicarNuevo(v.token, 'Ocupa uno');
+    await publicarNuevo(v.token, 'Ocupa dos');
+    expect(await publicados(sellerId)).toBe(2);
+
+    const [a, b] = await Promise.all([
+      publicarNuevo(v.token, 'Carrera A'),
+      publicarNuevo(v.token, 'Carrera B'),
+    ]);
+
+    const estados = [a.status, b.status].sort();
+    expect(estados).toEqual([201, 409]);
+    expect(await publicados(sellerId)).toBe(3);
+  });
+
+  /**
+   * Y con más presión. Cuatro a la vez sobre un vendedor vacío: entran tres,
+   * rebotan las demás.
+   */
+  it('⛔ cuatro altas simultáneas desde cero dejan exactamente 3', async () => {
+    const v = await nuevoVendedor();
+    const sellerId = v.seller.id as string;
+
+    const rs = await Promise.all([
+      publicarNuevo(v.token, 'Simultáneo 1'),
+      publicarNuevo(v.token, 'Simultáneo 2'),
+      publicarNuevo(v.token, 'Simultáneo 3'),
+      publicarNuevo(v.token, 'Simultáneo 4'),
+    ]);
+
+    expect(rs.filter((r) => r.status === 201)).toHaveLength(3);
+    expect(rs.filter((r) => r.status === 409)).toHaveLength(1);
+    expect(await publicados(sellerId)).toBe(3);
+  });
+
+  /**
+   * El otro camino de publicación —editar un borrador a ACTIVE— tiene que
+   * estar igual de protegido. Es el flujo normal de la app: se arma la ficha,
+   * se suben las fotos, se publica al final.
+   */
+  it('⛔ publicar dos borradores a la vez tampoco pasa de 3', async () => {
+    const v = await nuevoVendedor();
+    const sellerId = v.seller.id as string;
+    await publicarNuevo(v.token, 'Lleno uno');
+    await publicarNuevo(v.token, 'Lleno dos');
+
+    const borradores = await Promise.all([
+      call('POST', '/api/v1/products', {
+        token: v.token,
+        body: { name: 'Borrador A', basePriceCents: 100_000, status: 'DRAFT' },
+      }),
+      call('POST', '/api/v1/products', {
+        token: v.token,
+        body: { name: 'Borrador B', basePriceCents: 100_000, status: 'DRAFT' },
+      }),
+    ]);
+
+    const [a, b] = await Promise.all(
+      borradores.map((r) =>
+        call('PATCH', `/api/v1/products/${r.body.id}`, {
+          token: v.token,
+          body: { status: 'ACTIVE', categoryId: 'cat_otros' },
+        }),
+      ),
+    );
+
+    expect([a!.status, b!.status].sort()).toEqual([200, 409]);
+    expect(await publicados(sellerId)).toBe(3);
+  });
+
+  /**
+   * El cerrojo es POR VENDEDOR. Dos vendedores publicando a la vez no se
+   * esperan entre sí: si se serializaran todos contra el mismo cerrojo, cada
+   * alta de la plataforma haría cola detrás de las demás.
+   */
+  it('dos vendedores distintos no se bloquean entre sí', async () => {
+    const uno = await nuevoVendedor();
+    const otro = await nuevoVendedor();
+
+    const [a, b] = await Promise.all([
+      publicarNuevo(uno.token, 'Del uno'),
+      publicarNuevo(otro.token, 'Del otro'),
+    ]);
+
+    expect(a.status, JSON.stringify(a.body)).toBe(201);
+    expect(b.status, JSON.stringify(b.body)).toBe(201);
+  });
+
+  /**
+   * Los borradores no ocupan lugar, tampoco bajo concurrencia. Alguien en Free
+   * tiene que poder cargar veinte fichas y elegir cuáles tres muestra.
+   */
+  it('los borradores simultáneos no consumen el tope', async () => {
+    const v = await nuevoVendedor();
+    const sellerId = v.seller.id as string;
+
+    const rs = await Promise.all(
+      [1, 2, 3, 4, 5].map((i) =>
+        call('POST', '/api/v1/products', {
+          token: v.token,
+          body: { name: `Borrador paralelo ${i}`, basePriceCents: 100_000, status: 'DRAFT' },
+        }),
+      ),
+    );
+
+    expect(rs.every((r) => r.status === 201)).toBe(true);
+    expect(await publicados(sellerId)).toBe(0);
+
+    // Y todavía puede publicar tres.
+    expect((await publicarNuevo(v.token, 'Después de los borradores')).status).toBe(201);
+  });
+
+  /**
+   * Y el tope es de Free. Un plan pago publica en paralelo sin tope: si el
+   * cerrojo los frenara igual, el beneficio no existiría.
+   */
+  it('un Pro publica cinco a la vez sin problema', async () => {
+    const v = await nuevoVendedor();
+    await darPlan(v.seller.id as string, 'PRO');
+
+    const rs = await Promise.all(
+      [1, 2, 3, 4, 5].map((i) => publicarNuevo(v.token, `Pro paralelo ${i}`)),
+    );
+
+    expect(rs.every((r) => r.status === 201), JSON.stringify(rs.map((r) => r.status))).toBe(true);
+    expect(await publicados(v.seller.id as string)).toBe(5);
+  });
+});

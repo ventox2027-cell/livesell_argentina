@@ -1405,7 +1405,7 @@ describe('Alta de tienda — el recorrido de la app', () => {
     expect(seller.userId).toBe(u.userId);
     expect(store.sellerId).toBe(seller.id);
     expect(store.isPrimary).toBe(true);
-    expect(seller.deletedAt ?? null).toBeNull();
+    expect(seller.status).toBe('ACTIVE');
   });
 
   it('el usuario pasa a seller y /auth/me lo dice', async () => {
