@@ -21,6 +21,7 @@ import '../../seller/presentation/seller_home_screen.dart';
 import '../../social/presentation/guardados_screen.dart';
 import '../../spike/presentation/home_screen.dart';
 import 'complete_profile_sheet.dart';
+import 'widgets/acceso_a_mi_tienda.dart';
 
 /// Perfil.
 ///
@@ -43,6 +44,22 @@ class ProfileScreen extends ConsumerWidget {
         children: [
           _Cabecera(usuario: u),
           const SizedBox(height: Gap.xl),
+
+          /**
+           * Mi tienda, primero de todo, para quien vende.
+           *
+           * Estaba en la fila trece bajo «Vender», debajo de Cuenta, Ayuda,
+           * Seguridad, Guardados y la política de privacidad — fuera de la
+           * pantalla en un teléfono. Ver `AccesoAMiTienda` por qué no es una
+           * pestaña.
+           *
+           * ⚠️ Sólo si `esVendedor`. Para quien compra esta pantalla es
+           * exactamente la de antes.
+           */
+          if (u.esVendedor) ...[
+            const AccesoAMiTienda(),
+            const SizedBox(height: Gap.xl),
+          ],
 
           // Lo que falta se muestra ARRIBA de todo y con acción directa. Un
           // dato pendiente escondido en un submenú no lo completa nadie.
@@ -178,16 +195,26 @@ class ProfileScreen extends ConsumerWidget {
             },
           ),
 
-          const SizedBox(height: Gap.xl),
-          const _Titulo('Vender'),
-          _Fila(
-            icono: Icons.storefront_outlined,
-            texto: u.esVendedor ? 'Mi tienda' : 'Quiero vender',
-            detalle: u.esVendedor ? 'Productos y ajustes' : 'Creala en un paso',
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(builder: (_) => const SellerHomeScreen()),
+          /**
+           * ⚠️ La sección «Vender» ya sólo existe para quien todavía NO vende.
+           *
+           * Para quien vende, este lugar mostraba una segunda entrada a lo
+           * mismo que ahora está arriba de todo. Dos filas idénticas en la
+           * misma pantalla no dan más acceso: hacen dudar de si llevan al mismo
+           * lado.
+           */
+          if (!u.esVendedor) ...[
+            const SizedBox(height: Gap.xl),
+            const _Titulo('Vender'),
+            _Fila(
+              icono: Icons.storefront_outlined,
+              texto: 'Quiero vender',
+              detalle: 'Creala en un paso',
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(builder: (_) => const SellerHomeScreen()),
+              ),
             ),
-          ),
+          ],
 
           /**
            * La sección de desarrollo NO viaja en la APK de Google Play.
