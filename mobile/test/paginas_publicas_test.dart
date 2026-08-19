@@ -12,7 +12,7 @@ import 'package:vendox/core/config/paginas_publicas.dart';
 ///
 /// La app declara dos direcciones y el repositorio tiene dos carpetas que
 /// deberían responderlas. Nada más ata una cosa con la otra: renombrar
-/// `web/privacidad/` a `web/privacy/` compila, pasa el análisis y deja el
+/// `backend/web/privacidad/` a `.../privacy/` compila, pasa el análisis y deja el
 /// enlace de la app apuntando a un 404 — que es exactamente el motivo por el
 /// que Google rechaza una publicación.
 ///
@@ -22,10 +22,14 @@ void main() {
     /// La raíz del repositorio. Los tests corren desde `mobile/`.
     final repo = Directory.current.parent;
 
-    /// `https://vendox.com.ar/privacidad` → `web/privacidad/index.html`
+    /// `https://vendox.com.ar/privacidad` → `backend/web/privacidad/index.html`
     File archivoDe(String url) {
       final ruta = Uri.parse(url).path.replaceAll(RegExp(r'^/|/$'), '');
-      return File('${repo.path}/web/$ruta/index.html');
+      // ⚠️ `backend/web`, no `web`. El sitio lo sirve el backend, y el contexto
+      // de construcción de su imagen es `backend/`: con la carpeta en la raíz
+      // del repositorio Docker no la puede copiar y el sitio devuelve 404 en
+      // producción sin que nada falle.
+      return File('${repo.path}/backend/web/$ruta/index.html');
     }
 
     test('⛔ la página de privacidad existe en el repositorio', () {

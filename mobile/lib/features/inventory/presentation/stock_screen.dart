@@ -6,9 +6,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/design/tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
+import '../data/ajustes_en_vuelo.dart';
 import '../data/inventory_repository.dart';
-import '../domain/ajustes_acumulados.dart';
 import '../domain/inventory_models.dart';
+import '../domain/stock_optimista.dart';
 
 /// Stock de un producto.
 ///
@@ -28,14 +29,82 @@ import '../domain/inventory_models.dart';
 /// campo de texto obliga a abrir el teclado numérico, borrar, escribir y
 /// cerrar, y encima admite escribir 100 donde iban 10. Para los saltos grandes
 /// está el campo directo, un toque más adentro.
-class StockScreen extends ConsumerWidget {
+class StockScreen extends ConsumerStatefulWidget {
   const StockScreen({super.key, required this.productId, required this.nombreProducto});
 
   final String productId;
   final String nombreProducto;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<StockScreen> createState() => _StockScreenState();
+}
+
+class _StockScreenState extends ConsumerState<StockScreen> {
+  /// ═══════════════════════════════════════════════════════════════════════════
+  /// ESTA PANTALLA YA NO GUARDA NADA
+  /// ═══════════════════════════════════════════════════════════════════════════
+  ///
+  /// Los toques pendientes viven en `ajustesEnVueloProvider`, que está en el
+  /// contenedor de Riverpod y sobrevive a salir del stock, entrar a Mi tienda y
+  /// volver.
+  ///
+  /// Antes vivían acá, y eso producía el bug medido en un teléfono real: subir
+  /// 10 unidades y salir enseguida tardaba ~15 segundos en verse, y una baja
+  /// posterior ~35. Al salir, el `dispose()` mandaba el delta y ahí moría todo:
+  /// no quedaba nadie para invalidar el provider cuando llegara la respuesta, y
+  /// `stockDeProductoProvider` —que no es `autoDispose`— seguía devolviendo el
+  /// valor cacheado de la primera visita.
+  ///
+  /// Lo único que queda acá es qué variante está bloqueada mientras se escribe
+  /// una cantidad exacta, que es puramente visual.
+  String? _fijando;
+
+  void _ajustar(StockVariante variante, int delta) {
+    final destino = variante.onHand + delta;
+    if (destino < 0) return;
+
+    // No se deja bajar por debajo de lo reservado desde la interfaz: el backend
+    // lo rechazaría igual, pero avisarlo acá explica POR QUÉ en vez de mostrar
+    // un error después de tocar.
+    if (destino < variante.reserved) {
+      AppSnack.info(
+        context,
+        'Hay ${variante.reserved} apartadas por compradores. No podés bajar de ahí.',
+      );
+      return;
+    }
+
+    // El toque háptico no se espera: es una respuesta al dedo, no parte del
+    // guardado. Esperarlo retrasaría la petición sin motivo.
+    unawaited(HapticFeedback.selectionClick());
+
+    ref.read(ajustesEnVueloProvider.notifier).tocar(
+          productId: widget.productId,
+          variantId: variante.variantId,
+          delta: delta,
+          destino: destino,
+        );
+  }
+
+  Future<void> _fijarCantidad(StockVariante variante, int nuevo) async {
+    setState(() => _fijando = variante.variantId);
+    try {
+      await ref.read(ajustesEnVueloProvider.notifier).fijar(
+            productId: widget.productId,
+            variantId: variante.variantId,
+            cantidad: nuevo,
+          );
+    } catch (e) {
+      if (mounted) AppSnack.error(context, e.toString());
+    } finally {
+      if (mounted) setState(() => _fijando = null);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final productId = widget.productId;
+    final nombreProducto = widget.nombreProducto;
     final stock = ref.watch(stockDeProductoProvider(productId));
 
     return Scaffold(
@@ -63,39 +132,72 @@ class StockScreen extends ConsumerWidget {
           mensaje: e.toString(),
           onReintentar: () => ref.invalidate(stockDeProductoProvider(productId)),
         ),
-        data: (s) => RefreshIndicator(
-          onRefresh: () async => ref.invalidate(stockDeProductoProvider(productId)),
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(Gap.lg, Gap.lg, Gap.lg, Gap.xxl),
-            children: [
-              _Resumen(stock: s),
-              const SizedBox(height: Gap.xl),
-              if (!s.esSimple) ...[
-                const _Titulo('Por variante'),
-                const SizedBox(height: Gap.sm),
-              ],
-              for (final v in s.variants)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: Gap.md),
-                  child: _FilaStock(
-                    productId: productId,
-                    variante: v,
-                    mostrarTitulo: !s.esSimple,
+        data: (s) {
+          /**
+           * ⚠️ ACÁ SE ARMA LA ÚNICA VERDAD DE LA PANTALLA.
+           *
+           * El resumen y las filas leen de `vista`. No pueden discrepar aunque
+           * alguien mañana se olvide de refrescar uno de los dos: no hay dos
+           * lugares de donde leer.
+           *
+           * Los ajustes de las variantes que ya no tienen trabajo pendiente se
+           * descartan —manda el servidor— pero los de las que SÍ lo tienen se
+           * conservan: si no, la respuesta de una petición anterior pisaría los
+           * toques que la persona dio mientras esa petición viajaba, y el
+           * número saltaría hacia atrás bajo el dedo.
+           */
+          final enVuelo = ref.watch(ajustesEnVueloProvider);
+          final notifier = ref.read(ajustesEnVueloProvider.notifier);
+
+          // Las claves del servicio llevan el productId adelante; acá sólo
+          // interesan las de este producto.
+          final ajustes = {
+            for (final v in s.variants)
+              if (enVuelo[claveDe(productId, v.variantId)] != null)
+                v.variantId: enVuelo[claveDe(productId, v.variantId)]!,
+          };
+
+          final vista = StockOptimista(delServidor: s, ajustes: ajustes).conDatosDelServidor(
+            s,
+            (variantId) => notifier.sigueEnCurso(productId, variantId),
+          );
+
+          return RefreshIndicator(
+            onRefresh: () async => ref.invalidate(stockDeProductoProvider(productId)),
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(Gap.lg, Gap.lg, Gap.lg, Gap.xxl),
+              children: [
+                _Resumen(vista: vista),
+                const SizedBox(height: Gap.xl),
+                if (!vista.esSimple) ...[
+                  const _Titulo('Por variante'),
+                  const SizedBox(height: Gap.sm),
+                ],
+                for (final v in vista.variantes)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: Gap.md),
+                    child: _FilaStock(
+                      variante: v,
+                      mostrarTitulo: !vista.esSimple,
+                      bloqueada: _fijando == v.variantId,
+                      onAjustar: (delta) => _ajustar(v, delta),
+                      onFijar: (cantidad) => _fijarCantidad(v, cantidad),
+                    ),
                   ),
-                ),
-              const SizedBox(height: Gap.lg),
-              const _NotaReservas(),
-            ],
-          ),
-        ),
+                const SizedBox(height: Gap.lg),
+                const _NotaReservas(),
+              ],
+            ),
+          );
+        },
       ),
     );
   }
 }
 
 class _Resumen extends StatelessWidget {
-  const _Resumen({required this.stock});
-  final StockProducto stock;
+  const _Resumen({required this.vista});
+  final StockOptimista vista;
 
   @override
   Widget build(BuildContext context) {
@@ -108,18 +210,18 @@ class _Resumen extends StatelessWidget {
       ),
       child: Row(
         children: [
-          _Dato(etiqueta: 'Total', valor: stock.totalOnHand, destacado: true),
+          _Dato(etiqueta: 'Total', valor: vista.totalOnHand, destacado: true),
           _Separador(),
           _Dato(
             etiqueta: 'Reservadas',
-            valor: stock.totalReservado,
-            color: stock.totalReservado > 0 ? AppColor.alerta : null,
+            valor: vista.totalReservado,
+            color: vista.totalReservado > 0 ? AppColor.alerta : null,
           ),
           _Separador(),
           _Dato(
             etiqueta: 'Disponibles',
-            valor: stock.totalDisponible,
-            color: stock.totalDisponible <= 0 ? AppColor.error : AppColor.exito,
+            valor: vista.totalDisponible,
+            color: vista.totalDisponible <= 0 ? AppColor.error : AppColor.exito,
           ),
         ],
       ),
@@ -173,230 +275,42 @@ class _Separador extends StatelessWidget {
 }
 
 /// Una variante con su control de stock.
-class _FilaStock extends ConsumerStatefulWidget {
+///
+/// ═══════════════════════════════════════════════════════════════════════════
+/// SIN ESTADO PROPIO, Y ESA ES LA CORRECCIÓN
+/// ═══════════════════════════════════════════════════════════════════════════
+///
+/// Antes esta fila guardaba su propio valor optimista y disparaba sus propias
+/// peticiones. Como el resumen de arriba leía los datos del servidor, la
+/// pantalla se contradecía a sí misma: la fila mostraba 14 mientras el resumen
+/// insistía con «Total 9».
+///
+/// Ahora sólo dibuja lo que recibe y avisa lo que el dedo hizo. El estado vive
+/// en `_StockScreenState`, que es lo que hace imposible que las dos partes de
+/// la misma pantalla muestren números distintos.
+class _FilaStock extends StatelessWidget {
   const _FilaStock({
-    required this.productId,
     required this.variante,
     required this.mostrarTitulo,
+    required this.bloqueada,
+    required this.onAjustar,
+    required this.onFijar,
   });
 
-  final String productId;
+  /// Ya viene con el valor optimista aplicado. Ver `StockOptimista`.
   final StockVariante variante;
   final bool mostrarTitulo;
 
-  @override
-  ConsumerState<_FilaStock> createState() => _FilaStockState();
-}
+  /// Mientras se escribe una cantidad exacta, los pasos no se pueden tocar:
+  /// mezclarlos daría un resultado que depende de qué petición llegue antes.
+  final bool bloqueada;
 
-/// Cuánto se espera antes de mandar los toques acumulados.
-///
-/// Suficiente para que una ráfaga de dedo entre en una sola petición, y poco
-/// como para que soltar el dedo y ver el número guardado se sienta inmediato.
-const _esperaAntesDeGuardar = Duration(milliseconds: 450);
-
-class _FilaStockState extends ConsumerState<_FilaStock> {
-  /// ═══════════════════════════════════════════════════════════════════════════
-  /// EL DEDO NO ESPERA A LA RED
-  /// ═══════════════════════════════════════════════════════════════════════════
-  ///
-  /// Antes el botón `+` se apagaba mientras la petición viajaba: para pasar de
-  /// 1 a 5 había que tocar, esperar el ida y vuelta a Railway, tocar, esperar.
-  /// Con la base reportando 700 ms de latencia, subir diez unidades eran diez
-  /// segundos mirando un botón gris.
-  ///
-  /// Ahora los toques se acumulan y se manda UNA petición con el total. Tocar
-  /// cinco veces rápido muestra 1→2→3→4→5 al instante y escribe `+4` una sola
-  /// vez.
-  ///
-  /// ─── Por qué es seguro consolidar ───
-  ///
-  /// El backend aplica el ajuste como `on_hand = on_hand + delta` en un UPDATE
-  /// condicional atómico. Mandar `+4` una vez y mandar `+1` cuatro veces
-  /// terminan en el mismo lugar, y PostgreSQL sigue siendo la autoridad: acá no
-  /// se decide el stock, se decide cuándo preguntar.
-  ///
-  /// ⚠️ Lo que NO cambia: las reservas. El vendedor nunca puede bajar por
-  /// debajo de lo que hay apartado, y esa comprobación la sigue haciendo la
-  /// base con `("on_hand" + delta) >= "reserved"`. Lo de acá abajo es una
-  /// cortesía para explicarlo antes, no la regla.
-
-  /// El valor que se ve. `null` = el del servidor.
-  int? _optimista;
-
-  /// Los toques que todavia no salieron. La aritmetica vive en su propio
-  /// modulo porque es donde se puede perder stock sin que se note.
-  final _acumulados = AjustesAcumulados();
-
-  Timer? _temporizador;
-
-  /// Escribiendo una cantidad absoluta.
-  ///
-  /// Eso SI bloquea los botones: mientras se fija un valor exacto, sumarle o
-  /// restarle pasos daria un resultado que depende de cual de las dos
-  /// peticiones llegue antes.
-  bool _fijando = false;
-
-  /// El repositorio, tomado una sola vez.
-  ///
-  /// Se guarda porque `dispose()` necesita mandar lo que quedó pendiente, y ahí
-  /// `ref` ya no se puede usar. Sin esto, salir de la pantalla enseguida de
-  /// tocar `+` perdería el último toque.
-  late final _repo = ref.read(inventoryRepositoryProvider);
-
-  int get _mostrado => _optimista ?? widget.variante.onHand;
-
-  /// Si todavía hay algo que mandar o algo viajando.
-  bool get _hayTrabajoPendiente => _acumulados.hayTrabajo;
-
-  @override
-  void dispose() {
-    _temporizador?.cancel();
-
-    /**
-     * Lo que quedó sin mandar se manda igual, sin esperar respuesta.
-     *
-     * Salir de la pantalla dos décimas después de tocar `+` es lo más normal
-     * del mundo, y perder ese toque haría que el stock que el vendedor vio no
-     * sea el que quedó guardado. El repositorio vive fuera de este widget, así
-     * que la petición sobrevive a la pantalla.
-     *
-     * El error se descarta: no hay ninguna interfaz donde mostrarlo, y la
-     * próxima vez que se abra el stock se va a ver el valor real del servidor.
-     */
-    final ultimo = _acumulados.alSalir();
-    if (ultimo != null) {
-      _repo
-          .ajustarStock(
-            productId: widget.productId,
-            variantId: widget.variante.variantId,
-            delta: ultimo,
-          )
-          .ignore();
-    }
-
-    super.dispose();
-  }
-
-  @override
-  void didUpdateWidget(_FilaStock anterior) {
-    super.didUpdateWidget(anterior);
-
-    /**
-     * Llegó dato nuevo del servidor: manda ese… salvo que haya toques sin
-     * mandar.
-     *
-     * Sin esa salvedad, el refresco que dispara una petición anterior pisaría
-     * los toques que la persona dio mientras esa petición viajaba, y el número
-     * saltaría hacia atrás bajo el dedo.
-     */
-    if (anterior.variante.onHand != widget.variante.onHand && !_hayTrabajoPendiente) {
-      _optimista = null;
-    }
-  }
-
-  void _ajustar(int delta) {
-    final destino = _mostrado + delta;
-    if (destino < 0) return;
-
-    // No se deja bajar por debajo de lo reservado desde la interfaz: el backend
-    // lo rechazaría igual, pero avisarlo acá explica POR QUÉ en vez de mostrar
-    // un error después de tocar.
-    if (destino < widget.variante.reserved) {
-      AppSnack.info(
-        context,
-        'Hay ${widget.variante.reserved} apartadas por compradores. No podés bajar de ahí.',
-      );
-      return;
-    }
-
-    // El toque háptico no se espera: es una respuesta al dedo, no parte del
-    // guardado. Esperarlo retrasaría la petición sin motivo.
-    unawaited(HapticFeedback.selectionClick());
-    setState(() {
-      _optimista = destino;
-      _acumulados.sumar(delta);
-    });
-
-    _programarEnvio();
-  }
-
-  void _programarEnvio() {
-    _temporizador?.cancel();
-    _temporizador = Timer(_esperaAntesDeGuardar, _enviarPendiente);
-  }
-
-  /// Manda lo acumulado, en una sola petición.
-  Future<void> _enviarPendiente() async {
-    final delta = _acumulados.tomar();
-    if (delta == null) return;
-
-    try {
-      await _repo.ajustarStock(
-        productId: widget.productId,
-        variantId: widget.variante.variantId,
-        delta: delta,
-      );
-      _acumulados.confirmar();
-      if (!mounted) return;
-      ref.invalidate(stockDeProductoProvider(widget.productId));
-    } catch (e) {
-      // El servidor rechazó el ajuste. Se vuelve a lo que él dice, se descarta
-      // lo que hubiera quedado pendiente —ver `AjustesAcumulados.fallar()`— y
-      // se avisa: la interfaz no puede quedar mostrando un número que no está
-      // guardado en ningún lado.
-      _acumulados.fallar();
-      if (!mounted) return;
-      setState(() => _optimista = null);
-      ref.invalidate(stockDeProductoProvider(widget.productId));
-      AppSnack.error(context, e.toString());
-      return;
-    }
-
-    // Llegaron más toques mientras esto viajaba: van en la próxima tanda.
-    if (_acumulados.pendiente != 0 && mounted) _programarEnvio();
-  }
-
-  Future<void> _escribirCantidad() async {
-    final nuevo = await showModalBottomSheet<int>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => _HojaCantidad(
-        titulo: widget.mostrarTitulo ? widget.variante.title : 'Stock',
-        actual: _mostrado,
-        minimo: widget.variante.reserved,
-      ),
-    );
-    if (nuevo == null || !mounted || nuevo == widget.variante.onHand) return;
-
-    // La escritura directa NO se consolida: es un valor absoluto, no un paso.
-    // Se descarta lo acumulado porque el vendedor acaba de decir cuanto hay.
-    _temporizador?.cancel();
-    setState(() {
-      _optimista = nuevo;
-      _fijando = true;
-    });
-
-    try {
-      await ref.read(inventoryRepositoryProvider).fijarStock(
-            productId: widget.productId,
-            variantId: widget.variante.variantId,
-            onHand: nuevo,
-          );
-      ref.invalidate(stockDeProductoProvider(widget.productId));
-    } catch (e) {
-      if (mounted) {
-        setState(() => _optimista = null);
-        AppSnack.error(context, e.toString());
-      }
-    } finally {
-      if (mounted) setState(() => _fijando = false);
-    }
-  }
+  final void Function(int delta) onAjustar;
+  final void Function(int cantidad) onFijar;
 
   @override
   Widget build(BuildContext context) {
-    final v = widget.variante;
-    final disponible = _mostrado - v.reserved;
+    final disponible = variante.available;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: Gap.md, vertical: Gap.md),
@@ -412,35 +326,28 @@ class _FilaStockState extends ConsumerState<_FilaStock> {
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
-                if (widget.mostrarTitulo)
+                if (mostrarTitulo)
                   Text(
-                    v.title,
+                    variante.title,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: v.activa ? AppColor.texto : AppColor.textoDebil,
-                    ),
+                    style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600),
                   )
                 else
                   const Text(
                     'Unidades',
-                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                    style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600),
                   ),
-                const SizedBox(height: 3),
-                // Sólo se menciona lo apartado cuando existe: en el 95 % de los
-                // casos es cero y el dato sería ruido.
+                const SizedBox(height: 2),
                 Text(
-                  v.reserved > 0
-                      ? '$disponible disponibles · ${v.reserved} apartadas'
-                      : (disponible <= 0 ? 'Sin stock' : '$disponible disponibles'),
+                  variante.reserved > 0
+                      ? '$disponible disponibles · ${variante.reserved} apartadas'
+                      : '$disponible disponibles',
                   style: TextStyle(
                     fontSize: 12.5,
-                    color: v.reserved > 0
-                        ? AppColor.alerta
-                        : (disponible <= 0 ? AppColor.error : AppColor.textoSuave),
+                    color: disponible <= 0 ? AppColor.error : AppColor.textoSuave,
                   ),
                 ),
               ],
@@ -448,31 +355,55 @@ class _FilaStockState extends ConsumerState<_FilaStock> {
           ),
           _BotonPaso(
             icono: Icons.remove_rounded,
-            onTap: _fijando || _mostrado <= 0 ? null : () => _ajustar(-1),
+            onTap: bloqueada || variante.onHand <= 0 ? null : () => onAjustar(-1),
           ),
           GestureDetector(
-            onTap: _fijando ? null : _escribirCantidad,
+            onTap: bloqueada ? null : () => _pedirCantidad(context),
             child: Container(
               width: 56,
               alignment: Alignment.center,
               padding: const EdgeInsets.symmetric(vertical: 4),
               child: Text(
-                '$_mostrado',
+                '${variante.onHand}',
                 style: TextStyle(
                   fontSize: 20,
                   fontWeight: FontWeight.w700,
-                  color: _fijando ? AppColor.textoDebil : AppColor.texto,
+                  color: bloqueada ? AppColor.textoDebil : AppColor.texto,
                 ),
               ),
             ),
           ),
           _BotonPaso(
             icono: Icons.add_rounded,
-            onTap: _fijando ? null : () => _ajustar(1),
+            // ⚠️ NO se apaga mientras una petición viaja. Ése era el problema
+            // original: para pasar de 1 a 5 había que tocar, esperar la red,
+            // tocar. Los toques se acumulan y salen consolidados.
+            onTap: bloqueada ? null : () => onAjustar(1),
           ),
         ],
       ),
     );
+  }
+
+  Future<void> _pedirCantidad(BuildContext context) async {
+    final nuevo = await showModalBottomSheet<int>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColor.superficieAlta,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(Redondeo.lg)),
+      ),
+      builder: (_) => _HojaCantidad(
+        titulo: mostrarTitulo ? variante.title : 'Unidades',
+        actual: variante.onHand,
+        // No se puede fijar por debajo de lo apartado: el backend lo rechaza
+        // igual, y decirlo antes evita un error despues de escribir.
+        minimo: variante.reserved,
+      ),
+    );
+
+    if (nuevo == null || nuevo == variante.onHand) return;
+    onFijar(nuevo);
   }
 }
 
