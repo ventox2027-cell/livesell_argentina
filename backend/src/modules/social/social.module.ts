@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common';
 import { SocialController } from './social.controller';
 import { StockGuardadosListener } from './stock-guardados.listener';
 import { SocialService } from './social.service';
+import { VistosRetencionService } from './vistos-retencion.service';
 
 /**
  * "Me gusta" y compartir.
@@ -16,7 +17,7 @@ import { SocialService } from './social.service';
  */
 @Module({
   controllers: [SocialController],
-  providers: [SocialService, StockGuardadosListener],
+  providers: [SocialService, StockGuardadosListener, VistosRetencionService],
   exports: [SocialService],
 })
 export class SocialModule {}

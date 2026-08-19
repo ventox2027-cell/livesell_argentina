@@ -91,8 +91,19 @@ export class ExportacionService {
       },
     });
 
-    const [identidades, direcciones, compras, ventas, resenias, tickets, avisos, vendedor] =
-      await Promise.all([
+    const [
+      identidades,
+      direcciones,
+      compras,
+      ventas,
+      resenias,
+      tickets,
+      avisos,
+      vendedor,
+      seguimientos,
+      reportes,
+      dispositivos,
+    ] = await Promise.all([
         // El proveedor con el que entra y cuándo lo usó por última vez. NO el
         // `subject`: es un identificador que sirve para hacerse pasar por ella.
         this.prisma.userIdentity.findMany({
@@ -132,6 +143,73 @@ export class ExportacionService {
           select: { id: true, type: true, title: true, body: true, createdAt: true, readAt: true },
         }),
         this.tiendaDe(userId),
+
+        /**
+         * ═══════════════════════════════════════════════════════════════════
+         * LAS TRES QUE LA POLÍTICA PROMETÍA Y LA EXPORTACIÓN NO TRAÍA
+         * ═══════════════════════════════════════════════════════════════════
+         *
+         * `vendox.com.ar/privacidad` dice, textual: «Te devuelve, en el
+         * momento, un archivo con tu cuenta, tus direcciones, tus pedidos, tus
+         * reseñas, **tus seguimientos**, **tus reportes** y **tus
+         * dispositivos**».
+         *
+         * Las tres últimas no estaban. No es un detalle de redacción: el
+         * derecho de acceso de la Ley 25.326 es sobre todos los datos, y la
+         * página estaba describiendo un archivo que no existía.
+         */
+        this.prisma.follow.findMany({
+          where: { userId },
+          take: LIMITE_POR_COLECCION,
+          orderBy: { createdAt: 'desc' },
+          select: {
+            createdAt: true,
+            seller: { select: { id: true, displayName: true, slug: true } },
+          },
+        }),
+
+        /**
+         * Los reportes que hizo esta persona.
+         *
+         * ⚠️ Sólo los que hizo, NUNCA los que recibió. Un reporte en contra
+         * lleva adentro quién lo hizo, y devolvérselo a quien fue reportado
+         * expone a quien reportó — que es exactamente la persona a la que hay
+         * que proteger para que el sistema de reportes sirva de algo.
+         */
+        this.prisma.report.findMany({
+          where: { reporterUserId: userId },
+          take: LIMITE_POR_COLECCION,
+          orderBy: { createdAt: 'desc' },
+          select: {
+            id: true,
+            targetType: true,
+            reason: true,
+            status: true,
+            createdAt: true,
+          },
+        }),
+
+        /**
+         * Los teléfonos desde los que entró.
+         *
+         * Sin el token de push: es una credencial de envío, no un dato que le
+         * sirva a nadie en un archivo, y en un archivo que la persona puede
+         * compartir sin pensarlo es una vía para mandarle avisos falsos.
+         */
+        this.prisma.device.findMany({
+          where: { userId },
+          take: LIMITE_POR_COLECCION,
+          orderBy: { lastSeenAt: 'desc' },
+          select: {
+            platform: true,
+            model: true,
+            osVersion: true,
+            appVersion: true,
+            pushEnabled: true,
+            createdAt: true,
+            lastSeenAt: true,
+          },
+        }),
       ]);
 
     /**
@@ -171,6 +249,9 @@ export class ExportacionService {
       tickets,
       avisos,
       vendedor,
+      seguimientos,
+      reportes,
+      dispositivos,
     };
   }
 

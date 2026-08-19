@@ -5,6 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 
 import { env } from '@/config/env.schema';
 import { CategoriasService } from '@/modules/commerce/categorias.service';
+import { VistosRetencionService } from '@/modules/social/vistos-retencion.service';
 import type { PrismaService } from '@/shared/prisma/prisma.service';
 import type { RedisService } from '@/shared/redis/redis.service';
 
@@ -5468,5 +5469,69 @@ describe('El feed no habla de más con la base', () => {
     );
 
     expect(nPrecio).toBeLessThan(nRelevancia);
+  });
+});
+
+/**
+ * El historial de «vistos recientemente» se BORRA a los 30 días.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * LA POLÍTICA LO PROMETÍA Y EL CÓDIGO SÓLO LO ESCONDÍA
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * `vendox.com.ar/privacidad` dice, en la tabla de retención: «Productos vistos
+ * recientemente · 30 días, y se borran solos».
+ *
+ * Lo que había era un filtro por fecha en la lectura. La fila dejaba de verse y
+ * se quedaba en la base para siempre: de alguien que mira menos de cincuenta
+ * productos —el tope por persona era la única poda— quedaba el historial de
+ * navegación completo, sin vencimiento.
+ *
+ * Es el dato más íntimo que guarda este sistema: qué estuvo mirando cada
+ * persona. Y era el único con una promesa pública que el código no cumplía.
+ *
+ * ⚠️ El test mira la BASE, no la respuesta del endpoint. Por la lectura
+ * filtrada, la respuesta se veía igual con el bug puesto y con el bug sacado —
+ * que es exactamente por qué esto sobrevivió hasta una auditoría.
+ */
+describe('Retención de «vistos recientemente»', () => {
+  async function vistoHace(dias: number): Promise<{ userId: string; id: string }> {
+    const curioso = await nuevoUsuario();
+    const producto = await nuevoVendedorConProducto();
+    const id = `vst_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+
+    await prisma.recentlyViewed.create({
+      data: {
+        id,
+        userId: curioso.userId,
+        targetType: 'PRODUCT',
+        targetId: producto.productId,
+        viewedAt: new Date(Date.now() - dias * 24 * 3_600_000),
+      },
+    });
+
+    return { userId: curioso.userId, id };
+  }
+
+  it('⛔ una vista de hace 31 días desaparece de la base', async () => {
+    const vieja = await vistoHace(31);
+
+    await app.get(VistosRetencionService).barrer();
+
+    expect(await prisma.recentlyViewed.findUnique({ where: { id: vieja.id } })).toBeNull();
+  });
+
+  /**
+   * ⛔ Y una de hace 29 se queda.
+   *
+   * Sin este test, `deleteMany({})` sin condición pasaría el de arriba y
+   * borraría el historial de todo el mundo en cada barrido.
+   */
+  it('⛔ una vista de hace 29 días se conserva', async () => {
+    const reciente = await vistoHace(29);
+
+    await app.get(VistosRetencionService).barrer();
+
+    expect(await prisma.recentlyViewed.findUnique({ where: { id: reciente.id } })).not.toBeNull();
   });
 });

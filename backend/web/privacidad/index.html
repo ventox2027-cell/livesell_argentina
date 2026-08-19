@@ -97,7 +97,7 @@
 <header>
   <div class="marca">Vendo<span>X</span></div>
   <h1>Política de privacidad</h1>
-  <p class="fechas">Vigente desde el 15 de agosto de 2026 · Última actualización: 15 de agosto de 2026</p>
+  <p class="fechas">Vigente desde el 15 de agosto de 2026 · Última actualización: 19 de agosto de 2026</p>
 </header>
 
 <div class="destacado">
@@ -160,7 +160,7 @@
   <thead><tr><th>Dato</th><th>Cuándo</th><th>Para qué</th></tr></thead>
   <tbody>
     <tr><td>Nombre y apellido</td><td>Al entrar</td><td>Identificarte ante quien te vende o te compra</td></tr>
-    <tr><td>Correo electrónico</td><td>Al entrar</td><td>Identificar la cuenta y avisarte de tus pedidos</td></tr>
+    <tr><td>Correo electrónico</td><td>Al entrar</td><td>Identificar la cuenta y responderte si escribís a privacidad. Hoy no enviamos correos: los avisos de tus pedidos llegan por notificación al teléfono</td></tr>
     <tr><td>Foto de perfil</td><td>Al entrar, si tu cuenta de Google o Apple tiene una</td><td>Mostrarte en tu perfil y en el chat</td></tr>
     <tr><td>Fecha de nacimiento</td><td>Antes de comprar o vender</td><td>Verificar que sos mayor de 18</td></tr>
     <tr><td>Teléfono</td><td>Antes de comprar</td><td>Que quien entrega el pedido pueda ubicarte</td></tr>
@@ -379,6 +379,21 @@
       <td>Las imágenes que subís</td>
     </tr>
     <tr>
+      <td><strong>Railway</strong><br><span class="sutil">Servidores</span></td>
+      <td>Correr la aplicación que responde a la app</td>
+      <td>Todo lo que pasa por el servicio, mientras lo procesa</td>
+    </tr>
+    <tr>
+      <td><strong>Neon</strong><br><span class="sutil">Base de datos</span></td>
+      <td>Guardar los datos de la aplicación</td>
+      <td>Todo lo que se guarda: tu cuenta, tus direcciones, tus pedidos</td>
+    </tr>
+    <tr>
+      <td><strong>Upstash</strong><br><span class="sutil">Cachés y colas</span></td>
+      <td>Sostener las reservas de stock y la cola de avisos</td>
+      <td>Datos temporales de operaciones en curso</td>
+    </tr>
+    <tr>
       <td><strong>Firebase Cloud Messaging</strong> (Google)<br><span class="sutil">Notificaciones</span></td>
       <td>Entregar las notificaciones al teléfono</td>
       <td>El identificador de la instalación y el texto del aviso</td>
@@ -399,7 +414,10 @@
   <p>
     Algunos de estos proveedores procesan datos <strong>fuera de la
     Argentina</strong>. Cuando eso pasa, es porque es imprescindible para
-    prestarte el servicio que pediste.
+    prestarte el servicio que pediste. Hoy los servidores de la aplicación están en
+    <strong>Estados Unidos</strong> y la base de datos en <strong>Brasil</strong>;
+    estamos evaluando mover los servidores a Sudamérica, lo que además haría la app más
+    rápida.
   </p>
 </div>
 
@@ -423,12 +441,15 @@
   <tbody>
     <tr><td>Mensajes del chat</td><td><strong>30 días</strong>, y se borran solos</td><td>Es lo que dura un ciclo de reporte</td></tr>
     <tr><td>Productos vistos recientemente</td><td><strong>30 días</strong>, y se borran solos</td><td>Después de un mes ya no te sirve para volver a encontrar algo</td></tr>
-    <tr><td>Conversaciones con Soporte</td><td>Mientras la cuenta exista</td><td>Es lo que se relee cuando volvés a escribir por lo mismo</td></tr>
-    <tr><td>Tu cuenta y tu perfil</td><td>Mientras la tengas abierta</td><td>Es el servicio</td></tr>
-    <tr><td>Sesiones y tokens</td><td>Hasta que vencen o cerrás sesión</td><td>Sostienen tu acceso</td></tr>
-    <tr><td>Pedidos, pagos y reembolsos</td><td>El plazo que exige la ley comercial e impositiva argentina</td><td>Obligaciones contables y respaldo ante un reclamo. Se conservan aunque cierres la cuenta.</td></tr>
-    <tr><td>Registros de acceso</td><td>Mientras sirvan para investigar un acceso indebido</td><td>Seguridad de las cuentas</td></tr>
-    <tr><td>Reportes y decisiones de moderación</td><td>Mientras la cuenta exista</td><td>Es lo que se mira cuando alguien reclama una decisión</td></tr>
+    <tr><td>Conversaciones con Soporte</td><td>Sin borrado automático. Sobreviven al cierre de la cuenta</td><td>Es lo que se relee cuando volvés a escribir por lo mismo, y el respaldo si reclamás por una respuesta que te dimos</td></tr>
+    <tr><td>Avisos que te mandamos</td><td>Sin borrado automático. Sobreviven al cierre de la cuenta</td><td>Es el registro de qué se te comunicó y cuándo</td></tr>
+    <tr><td>Tu cuenta y tu perfil</td><td>Mientras la tengas abierta. Al cerrarla se anonimiza, no se elimina la fila</td><td>Los pedidos apuntan ahí y tienen que seguir resolviendo</td></tr>
+    <tr><td>Sesiones y tokens</td><td>Hasta que vencen, cerrás sesión o cerrás la cuenta</td><td>Sostienen tu acceso</td></tr>
+    <tr><td>Pedidos, pagos y reembolsos</td><td><strong>10 años</strong> desde la operación</td><td>Es el plazo que fija el artículo 328 del Código Civil y Comercial para los comprobantes. Se conservan aunque cierres la cuenta.</td></tr>
+    <tr><td>Registros de acceso y bitácora de seguridad</td><td>Sin borrado automático todavía. Estamos definiendo el plazo y no queremos publicar un número que el sistema no cumpla</td><td>Investigar accesos indebidos y fraudes</td></tr>
+    <tr><td>Reportes y decisiones de moderación</td><td>Sin borrado automático. Sobreviven al cierre de la cuenta, asociados a un identificador y no a tu nombre</td><td>Es lo que se mira cuando alguien reclama una decisión</td></tr>
+    <tr><td>Verificación de vendedor: nombre legal, provincia, ciudad, huella del documento y del CUIT y sus últimos cuatro dígitos</td><td>Sin borrado automático. Sobreviven al cierre de la cuenta</td><td>Respaldo de que la identidad se verificó, y detección de una misma persona abriendo cuentas nuevas</td></tr>
+    <tr><td>Copias de seguridad</td><td>Las hace el proveedor de la base de datos. Lo que borramos puede seguir en una copia hasta que esa copia vence</td><td>Poder recuperar el servicio si algo se rompe</td></tr>
   </tbody>
 </table>
 </div>
@@ -439,8 +460,16 @@
 <h3>Ver y descargar todo lo que guardamos</h3>
 <p>
   <strong>Perfil → Descargar mis datos.</strong> Te devuelve, en el momento, un
-  archivo con tu cuenta, tus direcciones, tus pedidos, tus reseñas, tus
-  seguimientos, tus reportes y tus dispositivos.
+  archivo con tu cuenta, tus direcciones, tus compras, tus ventas, tus reseñas, tus
+  seguimientos, los reportes que hiciste, tus conversaciones con Soporte, los avisos que
+  te mandamos, tus dispositivos y —si vendés— los datos de tu tienda.
+</p>
+<p class="sutil">
+  Dos cosas no van en el archivo, a propósito. Los reportes que otras personas hicieron
+  <em>sobre</em> vos: llevan adentro quién los hizo, y devolvértelos expondría a quien
+  reportó. Y el token de notificaciones de cada teléfono: es una credencial de envío, y
+  en un archivo que puede terminar reenviado por chat es la vía para que alguien te meta
+  avisos falsos en la pantalla bloqueada.
 </p>
 
 <h3>Corregir lo que esté mal</h3>
@@ -482,7 +511,10 @@
 <h2>11 · Contacto</h2>
 <p>
   <a href="mailto:privacidad@vendox.com.ar">privacidad@vendox.com.ar</a><br>
-  <span class="sutil">Respondemos dentro de los 10 días corridos, como exige la Ley 25.326.</span>
+  <span class="sutil">La Ley 25.326 fija dos plazos distintos y los respetamos por separado:
+  <strong>10 días corridos</strong> para el derecho de acceso —pedir copia de tus datos,
+  artículo 14— y <strong>5 días hábiles</strong> para rectificarlos, actualizarlos o
+  suprimirlos, artículo 16.</span>
 </p>
 
 <footer>

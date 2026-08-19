@@ -381,6 +381,41 @@ export class SocialService {
     return { borrados: count };
   }
 
+  /**
+   * Borra de verdad los vistos que pasaron los 30 días.
+   *
+   * ═══════════════════════════════════════════════════════════════════════════
+   * LA POLÍTICA DECÍA QUE SE BORRABAN Y NO SE BORRABAN
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * `vendox.com.ar/privacidad` dice, en la tabla de retención: «Productos vistos
+   * recientemente · 30 días, y se borran solos».
+   *
+   * Lo que hacía el código era otra cosa. `misVistosRecientes` filtra por
+   * `viewedAt >= hace 30 días`, así que la fila DEJA DE VERSE — y se queda en la
+   * base para siempre. Las únicas podas que existían eran el tope de 50 por
+   * persona y el cierre de cuenta.
+   *
+   * O sea que de alguien que mira menos de cincuenta productos, el historial de
+   * navegación completo quedaba guardado sin límite de tiempo. Es el dato más
+   * íntimo que hay acá —qué estuvo mirando cada persona— y era el único con una
+   * promesa pública que el código no cumplía.
+   *
+   * Esconder no es borrar. Ahora se borra.
+   *
+   * Lo corre el worker, igual que la retención del chat. Ver
+   * `shared/app-role.ts`.
+   */
+  async borrarVistosViejos(): Promise<number> {
+    const corte = new Date(Date.now() - VISTOS_RETENCION_DIAS * 24 * 3_600_000);
+
+    const { count } = await this.prisma.recentlyViewed.deleteMany({
+      where: { viewedAt: { lt: corte } },
+    });
+
+    return count;
+  }
+
   private async verificarQueExiste(targetType: LikeTarget, targetId: string): Promise<void> {
     const existe =
       targetType === 'LIVE'

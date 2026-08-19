@@ -11,6 +11,58 @@ import { env } from '@/config/env.schema';
  * sensibles y comprueba que no salen. Un log con un número de tarjeta dentro es
  * un incidente de cumplimiento, no un descuido.
  */
+/**
+ * La URL sin los VALORES de la cadena de consulta.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * LAS BÚSQUEDAS SE ESTABAN GUARDANDO EN LOS LOGS
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * La política de privacidad publicada dice: «Las búsquedas no se guardan. Se
+ * resuelven y se descartan: no hay historial de búsqueda ni en el servidor ni
+ * en tu teléfono».
+ *
+ * La primera mitad era cierta —no hay ninguna tabla de búsquedas, el servicio
+ * sólo hace un `SELECT`— y la segunda no. El serializador registraba `req.url`
+ * entero, y la búsqueda viaja ahí:
+ *
+ *     GET /api/v1/discover/products?q=regalo+para+mi+novia&limit=20
+ *
+ * Eso es un historial de búsqueda, con fecha y hora, en el registro de la
+ * plataforma. Que no esté en una tabla no cambia lo que es.
+ *
+ * ─── Por qué se conservan los NOMBRES ───
+ *
+ * Porque el valor es el dato personal y el nombre es la información de
+ * diagnóstico. Saber que vino `?q=&categoria=&cursor=` explica una consulta
+ * lenta o una paginación rota igual de bien; saber QUÉ buscó cada persona no
+ * hace falta para nada de eso.
+ *
+ * Queda `/api/v1/discover/products?q&limit&cursor`.
+ */
+export function sinValoresDeConsulta(url: string | undefined): string | undefined {
+  if (!url) return url;
+
+  const corte = url.indexOf('?');
+  if (corte === -1) return url;
+
+  const ruta = url.slice(0, corte);
+  const consulta = url.slice(corte + 1);
+  if (consulta === '') return ruta;
+
+  const nombres = consulta
+    .split('&')
+    .map((par) => {
+      const igual = par.indexOf('=');
+      return igual === -1 ? par : par.slice(0, igual);
+    })
+    // Un parámetro sin nombre —`?=algo`— no aporta nada y no vale la pena
+    // arrastrarlo como cadena vacía.
+    .filter((nombre) => nombre !== '');
+
+  return nombres.length === 0 ? ruta : `${ruta}?${nombres.join('&')}`;
+}
+
 export const REDACT_PATHS = [
   'req.headers.authorization',
   'req.headers.cookie',
@@ -158,7 +210,7 @@ export const loggerConfig: Params = {
       // sale vacío en producción.
       req: (req: { method?: string; url?: string; headers?: Record<string, unknown> }) => ({
         method: req.method,
-        url: req.url,
+        url: sinValoresDeConsulta(req.url),
         // Nada de volcar todos los headers: es la vía más fácil a que se filtre
         // un Authorization por un cambio en la config de redacción.
         userAgent: req.headers?.['user-agent'],

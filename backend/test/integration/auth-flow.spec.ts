@@ -526,6 +526,109 @@ describe('Cierre de cuenta', () => {
     const nueva = await entrar('me-voy@test.com');
     expect(nueva.user.id).not.toBe(s.user.id);
   });
+
+  /**
+   * ⛔ LAS SESIONES QUEDAN REVOCADAS EN LA BASE, NO SÓLO INSERVIBLES.
+   *
+   * `vendox.com.ar/eliminar-cuenta` promete: «La cuenta se cierra ahí mismo y
+   * se cierran todas tus sesiones».
+   *
+   * El test de arriba comprueba que el refresh devuelva 401, y eso pasaría
+   * igual sin revocar nada: el guard rechaza a cualquiera que no esté `active`
+   * y `refresh()` revoca la familia al ver la cuenta cerrada. O sea que ese
+   * test no distingue «revocado» de «rechazado por otro motivo».
+   *
+   * Quien revoca de verdad es `deleteAccount`, que llama a `logoutAll` después
+   * de cerrar la cuenta. Este test mira la base, que es donde se ve — y es lo
+   * que impide que alguien saque esa línea creyendo que el 401 de arriba la
+   * cubre.
+   */
+  it('⛔ no queda ningún refresh token sin revocar', async () => {
+    const s = await entrar('sin-tokens-vivos@test.com');
+    await call('DELETE', '/api/v1/auth/me', { token: s.accessToken });
+
+    const vivos = await prisma.refreshToken.count({
+      where: { userId: s.user.id, revokedAt: null },
+    });
+
+    expect(vivos).toBe(0);
+  });
+});
+
+/**
+ * La exportación devuelve lo que la política dice que devuelve.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * LA PÁGINA DESCRIBÍA UN ARCHIVO QUE NO EXISTÍA
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * `vendox.com.ar/privacidad` enumera, textual: «tu cuenta, tus direcciones, tus
+ * pedidos, tus reseñas, tus seguimientos, tus reportes y tus dispositivos».
+ *
+ * Las tres últimas no venían. El derecho de acceso de la Ley 25.326 es sobre
+ * todos los datos, así que no era una diferencia de redacción.
+ *
+ * El test enumera las claves a propósito: agregar una a la política cuesta una
+ * línea y el modo real de romper esto es prometer algo nuevo sin implementarlo.
+ */
+describe('Descargar mis datos', () => {
+  it('⛔ trae todas las secciones que la política promete', async () => {
+    const s = await entrar('quiero-mis-datos@test.com');
+
+    const r = await call('GET', '/api/v1/auth/me/export', { token: s.accessToken });
+    expect(r.status).toBe(200);
+
+    const cuerpo = r.body as Record<string, unknown>;
+    for (const seccion of [
+      'usuario',
+      'direcciones',
+      'compras',
+      'ventas',
+      'resenias',
+      'seguimientos',
+      'reportes',
+      'dispositivos',
+    ]) {
+      expect(cuerpo, `falta «${seccion}», que la política promete`).toHaveProperty(seccion);
+    }
+  });
+
+  /**
+   * ⛔ Y NO trae los reportes que OTROS hicieron sobre esta persona.
+   *
+   * Un reporte en contra lleva adentro quién lo hizo. Devolvérselo a quien fue
+   * reportado expone a quien reportó, que es justamente la persona que el
+   * sistema de reportes tiene que proteger para servir de algo.
+   */
+  it('⛔ los reportes son los que hizo, no los que recibió', async () => {
+    const s = await entrar('me-reportaron@test.com');
+
+    const r = await call('GET', '/api/v1/auth/me/export', { token: s.accessToken });
+    const reportes = (r.body as { reportes: unknown[] }).reportes;
+
+    expect(Array.isArray(reportes)).toBe(true);
+    // Ninguna fila puede traer quién reportó: si vinieran los recibidos, el
+    // campo tendría que estar para que signifiquen algo.
+    for (const fila of reportes as Record<string, unknown>[]) {
+      expect(fila).not.toHaveProperty('reporterUserId');
+    }
+  });
+
+  /**
+   * ⛔ El token de push NO va en el archivo.
+   *
+   * Es una credencial de envío. En un archivo que la persona puede mandar por
+   * WhatsApp sin pensarlo, es la vía para que alguien le meta avisos falsos en
+   * la pantalla bloqueada.
+   */
+  it('⛔ los dispositivos van sin el token de push', async () => {
+    const s = await entrar('mis-telefonos@test.com');
+
+    const r = await call('GET', '/api/v1/auth/me/export', { token: s.accessToken });
+    const crudo = JSON.stringify((r.body as { dispositivos: unknown }).dispositivos);
+
+    expect(crudo).not.toContain('pushToken');
+  });
 });
 
 describe('⛔ Límite de peticiones', () => {

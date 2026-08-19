@@ -53,11 +53,11 @@ describe('El sitio público contesta en las URLs que la gente escribe', () => {
      * `/p/:id` es la previsualización que lee el robot de WhatsApp. Se imita
      * acá para no arrastrar Nest ni la base.
      */
-    servidor.get('/p/:id', async (peticion) => ({
+    servidor.get('/p/:id', (peticion) => ({
       soy: 'nest',
       id: (peticion.params as { id: string }).id,
     }));
-    servidor.get('/api/v1/categories', async () => ({ soy: 'nest' }));
+    servidor.get('/api/v1/categories', () => ({ soy: 'nest' }));
 
     /**
      * El 404 de la aplicación, en el formato que la app sabe leer.

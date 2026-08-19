@@ -247,7 +247,7 @@ export class AuthController {
    * ─── Por qué el límite es tan bajo ───
    *
    * Tres por hora. Cada llamada arma en memoria el paquete más completo de
-   * datos personales que este sistema produce y toca ocho tablas; y nadie
+   * datos personales que este sistema produce y toca once tablas; y nadie
    * necesita el suyo más seguido que eso.
    */
   @RateLimit({ limit: 3, windowSec: 3600, bucket: 'user:export' })
