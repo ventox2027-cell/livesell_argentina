@@ -1,7 +1,17 @@
 # Membresías y comisión — especificación
 
-**Estado: aprobado comercialmente, sin construir.** Se construye después de que
-Railway esté verde.
+> ## ⚠️ Este documento es de ANTES de construirlo
+>
+> Lo que está en el código hoy —planes Free/Pro/Business, tope de catálogo,
+> tramos por volumen y salvaguarda por devoluciones— se describe en
+> **[COMISION-POR-VOLUMEN.md](COMISION-POR-VOLUMEN.md)**. Cuando los dos
+> difieran, manda aquél.
+>
+> Éste se conserva porque explica **por qué** se decidió cada cosa, que es lo
+> que no se puede reconstruir leyendo el código. Las estimaciones de tamaño y
+> los «falta construir» ya no valen.
+
+**Estado: construido.** Ver los commits del bloque comercial.
 
 Este documento existe para que la decisión no viva en un chat. Cada bloque dice
 qué hay hoy en el código, qué falta, y qué riesgo tiene.
