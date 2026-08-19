@@ -11,9 +11,11 @@ import {
   OrigenDeMembresia,
   Periodo,
   Plan,
+  PlanPago,
   beneficiosDe,
   calcularVencimiento,
   diasRestantes,
+  esPago,
   limitesDe,
   planVigente,
   tieneBeneficio,
@@ -114,16 +116,16 @@ export class MembresiasService {
       plan,
       beneficios: beneficiosDe(fila),
       limites: limitesDe(fila),
-      vigenteHasta: plan === 'PRO' ? (fila?.vigenteHasta ?? null) : null,
+      vigenteHasta: esPago(plan) ? (fila?.vigenteHasta ?? null) : null,
       diasRestantes: diasRestantes(fila),
-      periodo: plan === 'PRO' ? (fila?.periodo ?? null) : null,
+      periodo: esPago(plan) ? (fila?.periodo ?? null) : null,
       /**
        * Si lo que tiene fue un regalo o una prueba.
        *
        * El vendedor tiene derecho a saberlo: alguien con Pro de cortesía que
        * cree que lo está pagando no entiende por qué le vence.
        */
-      origen: plan === 'PRO' ? (fila?.origen ?? 'GRATIS') : 'GRATIS',
+      origen: esPago(plan) ? (fila?.origen ?? 'GRATIS') : 'GRATIS',
       /**
        * ⚠️ Deliberadamente ausente: el sello de identidad verificada.
        *
@@ -149,21 +151,34 @@ export class MembresiasService {
   }
 
   /**
-   * Otorga o renueva Pro.
+   * Otorga o renueva un plan pago.
    *
    * Renovar temprano SUMA al final en vez de reemplazar: alguien con dos
    * semanas por delante no puede perderlas por renovar antes de tiempo. Ver
    * `calcularVencimiento`.
+   *
+   * ⚠️ `plan` es opcional y cae en `PRO`.
+   *
+   * No es pereza: cuando existía un solo plan pago, todas las llamadas —el
+   * panel de admin, los tests, el endpoint de cortesía— decían "dale Pro" sin
+   * nombrarlo. Con el parámetro obligatorio habría que tocar cada una en el
+   * mismo commit que agrega Business, y cualquier llamador que se pasara por
+   * alto rompería en compilación... o peor, en un `any`.
+   *
+   * Con omisión explícita, agregar Business no cambia el comportamiento de
+   * nada que ya existía. Quien quiera Business lo pide.
    */
   async otorgar(
     sellerId: string,
     datos: {
       periodo: Periodo;
       origen: Exclude<OrigenDeMembresia, 'GRATIS'>;
+      plan?: PlanPago;
       nota?: string;
       otorgadoPor?: string;
     },
   ) {
+    const plan: PlanPago = datos.plan ?? 'PRO';
     // El vendedor tiene que existir: otorgarle Pro a un id inventado dejaría
     // una fila huérfana que nadie va a mirar nunca.
     const vendedor = await this.prisma.seller.findUnique({
@@ -180,7 +195,7 @@ export class MembresiasService {
       create: {
         id: newId('mem'),
         sellerId,
-        plan: 'PRO',
+        plan,
         periodo: datos.periodo,
         origen: datos.origen,
         nota: datos.nota ?? null,
@@ -188,7 +203,7 @@ export class MembresiasService {
         vigenteHasta,
       },
       update: {
-        plan: 'PRO',
+        plan,
         periodo: datos.periodo,
         origen: datos.origen,
         nota: datos.nota ?? null,
@@ -212,7 +227,7 @@ export class MembresiasService {
       entityId: sellerId,
       actorId: datos.otorgadoPor ?? null,
       after: {
-        plan: 'PRO',
+        plan,
         periodo: datos.periodo,
         origen: datos.origen,
         nota: datos.nota ?? null,

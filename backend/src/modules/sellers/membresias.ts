@@ -38,7 +38,22 @@
  */
 
 /** Los planes que existen. */
-export type Plan = 'FREE' | 'PRO';
+export type Plan = 'FREE' | 'PRO' | 'BUSINESS';
+
+/**
+ * Los planes que se pagan.
+ *
+ * Existe para que nadie escriba `plan !== 'FREE'` por todos lados: el día que
+ * haya un cuarto plan, se agrega acá y el resto del archivo no se toca.
+ */
+export const PLANES_PAGOS = ['PRO', 'BUSINESS'] as const satisfies readonly Plan[];
+
+/** Un plan que se puede otorgar. `FREE` no se otorga: es lo que hay sin nada. */
+export type PlanPago = (typeof PLANES_PAGOS)[number];
+
+export function esPago(plan: Plan): boolean {
+  return (PLANES_PAGOS as readonly Plan[]).includes(plan);
+}
 
 /**
  * Cada cuánto se renueva.
@@ -87,12 +102,56 @@ export type Beneficio =
   /** El embudo del vivo: vistas, toques, reservas, ventas. */
   | 'ANALITICA_AVANZADA'
   /** La insignia Pro en el perfil. NO es el sello de identidad verificada. */
-  | 'INSIGNIA_PRO';
+  | 'INSIGNIA_PRO'
+  /**
+   * Los tickets de este vendedor van arriba en la bandeja del equipo.
+   *
+   * Está cableado en `support.service.ts::bandeja()`, no es una promesa: el
+   * orden de la bandeja lo mira de verdad. Si alguien saca ese cableado, el
+   * beneficio se saca de acá el mismo día.
+   */
+  | 'SOPORTE_PRIORITARIO'
+  /**
+   * La comisión baja por tramos según el volumen.
+   *
+   * Lo aplica `comision-por-volumen.ts`. Acá está para que la pantalla de
+   * planes lo pueda mostrar sin saber cómo se calcula.
+   */
+  | 'COMISION_POR_VOLUMEN';
 
-/** Qué habilita cada plan. */
+/**
+ * Qué habilita cada plan.
+ *
+ * ─── Business incluye todo lo de Pro, escrito y no heredado ───
+ *
+ * Podría ser `[...BENEFICIOS_POR_PLAN.PRO, ...]`. Está enumerado porque la
+ * pregunta «¿qué tiene Business?» se tiene que poder responder leyendo una
+ * línea, y porque el día que un beneficio de Pro NO deba ir en Business, una
+ * herencia implícita lo habría llevado igual sin que nadie lo decidiera.
+ *
+ * ⚠️ Lo que NO está acá, y por qué:
+ *
+ *   · **Exportaciones/reportes.** El único export que existe es el de la Ley
+ *     25.326 —acceso a los propios datos—, que es un derecho legal, gratuito y
+ *     de toda persona. No se puede vender. Ver `exportacion.service.ts`.
+ *   · **Más créditos de promoción.** El libro mayor de créditos existe, pero
+ *     hoy sólo los otorga un admin a mano: no hay otorgamiento recurrente por
+ *     plan. Prometerlo sería vender algo que nadie entrega.
+ *   · **Multiusuario, roles, sucursales.** No existen.
+ *
+ * El catálogo ilimitado no está en esta lista porque no es un sí/no: es un
+ * límite, y vive en `LIMITES_POR_PLAN`.
+ */
 const BENEFICIOS_POR_PLAN: Record<Plan, readonly Beneficio[]> = {
   FREE: [],
   PRO: ['CUPONES', 'ANALITICA_AVANZADA', 'INSIGNIA_PRO'],
+  BUSINESS: [
+    'CUPONES',
+    'ANALITICA_AVANZADA',
+    'INSIGNIA_PRO',
+    'SOPORTE_PRIORITARIO',
+    'COMISION_POR_VOLUMEN',
+  ],
 };
 
 /**
@@ -112,6 +171,15 @@ export interface LimitesDelPlan {
 const LIMITES_POR_PLAN: Record<Plan, LimitesDelPlan> = {
   FREE: { cuponesActivos: 0, diasDeHistorial: 30 },
   PRO: { cuponesActivos: 20, diasDeHistorial: 365 },
+  /**
+   * Dos años de historial, no «infinito».
+   *
+   * Un número concreto se puede sostener: la consulta tiene un techo conocido y
+   * el índice sirve. «Todo» significa que la pantalla de métricas se pone más
+   * lenta cada mes que pasa, y el vendedor que más paga es el que primero lo
+   * nota.
+   */
+  BUSINESS: { cuponesActivos: 50, diasDeHistorial: 730 },
 };
 
 /** Lo que hay guardado sobre un vendedor. */
@@ -132,10 +200,18 @@ export interface MembresiaGuardada {
 export function planVigente(m: MembresiaGuardada | null, ahora: Date = new Date()): Plan {
   if (!m) return 'FREE';
   if (m.plan === 'FREE') return 'FREE';
-  // Pro sin fecha sería Pro para siempre. No se otorga así, pero si una fila
+  // Un plan pago sin fecha sería eterno. No se otorga así, pero si una fila
   // quedara en ese estado, se trata como vencida en vez de como eterna.
   if (!m.vigenteHasta) return 'FREE';
-  return m.vigenteHasta.getTime() > ahora.getTime() ? 'PRO' : 'FREE';
+  /**
+   * Devuelve `m.plan`, no `'PRO'`.
+   *
+   * Acá decía `'PRO'` literal, y con dos planes daba lo mismo. Con tres, esa
+   * línea le habría dado Pro a todos los Business —silenciosamente, sin error—
+   * y el vendedor que paga el plan caro habría perdido su comisión por volumen
+   * sin que nada lo registrara.
+   */
+  return m.vigenteHasta.getTime() > ahora.getTime() ? m.plan : 'FREE';
 }
 
 /** Si el plan vigente incluye este beneficio. */
@@ -188,7 +264,9 @@ export function calcularVencimiento(
  * y "te quedan 0 días" con veinte horas por delante no lo es.
  */
 export function diasRestantes(m: MembresiaGuardada | null, ahora: Date = new Date()): number | null {
-  if (planVigente(m, ahora) !== 'PRO' || !m?.vigenteHasta) return null;
+  // `esPago` y no `!== 'PRO'`: si no, un Business vigente devolvería `null` y
+  // nunca se le avisaría que está por vencer.
+  if (!esPago(planVigente(m, ahora)) || !m?.vigenteHasta) return null;
   return Math.ceil((m.vigenteHasta.getTime() - ahora.getTime()) / (24 * 60 * 60 * 1000));
 }
 

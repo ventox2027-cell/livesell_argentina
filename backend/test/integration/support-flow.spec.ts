@@ -467,3 +467,153 @@ describe('El asunto', () => {
     expect(r.status).toBe(400);
   });
 });
+
+/**
+ * El soporte prioritario de Business.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * UN BENEFICIO QUE NO SE PUEDE VERIFICAR ES PUBLICIDAD
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * `SOPORTE_PRIORITARIO` figura en la lista de beneficios de Business. Estos
+ * tests son la única razón por la que esa línea se puede escribir: sin ellos
+ * sería una promesa en una pantalla de precios, y el ticket del vendedor que
+ * paga el plan caro seguiría exactamente en el mismo lugar de la cola.
+ */
+async function vendedorConPlan(plan: 'FREE' | 'PRO' | 'BUSINESS', vigenteHasta: Date | null) {
+  const u = await nuevoUsuario();
+  await limpiarLimites();
+
+  const s = await call('POST', '/api/v1/sellers', {
+    token: u.token,
+    body: { displayName: `Vendedor ${plan} ${n}`, storeName: `Local ${plan} ${n}` },
+  });
+  expect(s.status, s.texto).toBe(201);
+  const sellerId = s.body.seller.id as string;
+
+  if (plan !== 'FREE') {
+    await prisma.sellerMembership.create({
+      data: {
+        id: `mem_${sellerId.slice(-20)}`,
+        sellerId,
+        plan,
+        periodo: 'MENSUAL',
+        origen: 'CORTESIA',
+        vigenteHasta,
+      },
+    });
+  }
+
+  return { ...u, sellerId };
+}
+
+async function idsDeLaBandeja(tokenAdmin: string): Promise<string[]> {
+  const r = await call('GET', '/api/v1/admin/support/tickets', { token: tokenAdmin });
+  expect(r.status, r.texto).toBe(200);
+  return (r.body.items as Array<{ id: string }>).map((t) => t.id);
+}
+
+describe('Soporte prioritario (Business)', () => {
+  it('el ticket de un Business va arriba aunque haya llegado último', async () => {
+    const admin = await nuevoUsuario('admin');
+    await prisma.supportTicket.deleteMany({});
+
+    // Primero el común, después el de Business. Por antigüedad iría al revés:
+    // ese es justamente el orden que la prioridad tiene que romper.
+    const comun = await nuevoUsuario();
+    const primero = await abrir(comun.token, { mensaje: 'me cobraron dos veces', categoria: 'PAGOS' });
+
+    const business = await vendedorConPlan('BUSINESS', new Date(Date.now() + 30 * 86_400_000));
+    const segundo = await abrir(business.token, { mensaje: 'me cobraron dos veces', categoria: 'PAGOS' });
+
+    const ids = await idsDeLaBandeja(admin.token);
+
+    expect(ids[0]).toBe(segundo.body.id);
+    expect(ids).toContain(primero.body.id);
+  });
+
+  /**
+   * La prioridad adelanta en la cola; no habilita a colarse entre iguales. Dos
+   * Business se siguen atendiendo por orden de espera, que es lo justo.
+   */
+  it('entre dos Business sigue mandando quién esperó más', async () => {
+    const admin = await nuevoUsuario('admin');
+    await prisma.supportTicket.deleteMany({});
+
+    const uno = await vendedorConPlan('BUSINESS', new Date(Date.now() + 30 * 86_400_000));
+    const viejo = await abrir(uno.token, { mensaje: 'me cobraron dos veces', categoria: 'PAGOS' });
+
+    const otro = await vendedorConPlan('BUSINESS', new Date(Date.now() + 30 * 86_400_000));
+    const nuevo = await abrir(otro.token, { mensaje: 'me cobraron dos veces', categoria: 'PAGOS' });
+
+    const ids = await idsDeLaBandeja(admin.token);
+
+    expect(ids.indexOf(viejo.body.id)).toBeLessThan(ids.indexOf(nuevo.body.id));
+  });
+
+  /**
+   * ESTE ES EL TEST QUE PROTEGE LA PLATA DEL OTRO LADO.
+   *
+   * La fila sigue diciendo BUSINESS hasta que algo la actualice —es lo que
+   * explica `planVigente()`—. Sin comprobar la fecha en la consulta, alguien
+   * que dejó de pagar hace seis meses seguiría saltando la cola para siempre.
+   */
+  it('⛔ un Business vencido NO tiene prioridad', async () => {
+    const admin = await nuevoUsuario('admin');
+    await prisma.supportTicket.deleteMany({});
+
+    const comun = await nuevoUsuario();
+    const primero = await abrir(comun.token, { mensaje: 'me cobraron dos veces', categoria: 'PAGOS' });
+
+    const vencido = await vendedorConPlan('BUSINESS', new Date(Date.now() - 86_400_000));
+    const segundo = await abrir(vencido.token, { mensaje: 'me cobraron dos veces', categoria: 'PAGOS' });
+
+    const ids = await idsDeLaBandeja(admin.token);
+
+    expect(ids[0]).toBe(primero.body.id);
+    expect(ids.indexOf(segundo.body.id)).toBeGreaterThan(0);
+  });
+
+  /**
+   * Que Pro NO tenga prioridad es la mitad de lo que hace que Business valga.
+   * Si la tuviera, el beneficio no distinguiría un plan del otro.
+   */
+  it('⛔ un Pro vigente NO tiene prioridad', async () => {
+    const admin = await nuevoUsuario('admin');
+    await prisma.supportTicket.deleteMany({});
+
+    const comun = await nuevoUsuario();
+    const primero = await abrir(comun.token, { mensaje: 'me cobraron dos veces', categoria: 'PAGOS' });
+
+    const pro = await vendedorConPlan('PRO', new Date(Date.now() + 30 * 86_400_000));
+    const segundo = await abrir(pro.token, { mensaje: 'me cobraron dos veces', categoria: 'PAGOS' });
+
+    const ids = await idsDeLaBandeja(admin.token);
+
+    expect(ids[0]).toBe(primero.body.id);
+    expect(ids.indexOf(segundo.body.id)).toBeGreaterThan(0);
+  });
+
+  /**
+   * Que los demás no desaparezcan es tan importante como que Business suba. Un
+   * corte mal hecho podría dejar la bandeja con sólo los prioritarios, y los
+   * tickets de todos los demás no los vería nadie.
+   */
+  it('los tickets no prioritarios siguen estando', async () => {
+    const admin = await nuevoUsuario('admin');
+    await prisma.supportTicket.deleteMany({});
+
+    const a = await nuevoUsuario();
+    const b = await nuevoUsuario();
+    const t1 = await abrir(a.token, { mensaje: 'me cobraron dos veces', categoria: 'PAGOS' });
+    const t2 = await abrir(b.token, { mensaje: 'me cobraron dos veces', categoria: 'PAGOS' });
+
+    const business = await vendedorConPlan('BUSINESS', new Date(Date.now() + 30 * 86_400_000));
+    const t3 = await abrir(business.token, { mensaje: 'me cobraron dos veces', categoria: 'PAGOS' });
+
+    const ids = await idsDeLaBandeja(admin.token);
+
+    expect(ids).toHaveLength(3);
+    for (const t of [t1, t2, t3]) expect(ids).toContain(t.body.id);
+  });
+});

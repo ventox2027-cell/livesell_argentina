@@ -193,3 +193,119 @@ describe('El aviso de que vence', () => {
     expect(tocaAvisarQueVence(FREE, AHORA)).toBe(false);
   });
 });
+
+/**
+ * VendoX Business.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * EL BUG QUE ESTOS TESTS EXISTEN PARA EVITAR
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * `planVigente` devolvía `'PRO'` literal. Con dos planes daba lo mismo; con
+ * tres, esa línea le habría dado Pro a todos los Business, sin error, sin log y
+ * sin que nadie lo notara — salvo el vendedor que paga el plan caro y no
+ * recibe su comisión por volumen.
+ *
+ * Es el tipo de bug que no rompe nada: simplemente cobra de más, todos los
+ * días, en silencio.
+ */
+const BUSINESS_VIGENTE = { plan: 'BUSINESS' as const, vigenteHasta: enDias(20) };
+const BUSINESS_VENCIDO = { plan: 'BUSINESS' as const, vigenteHasta: enDias(-1) };
+
+describe('El plan Business', () => {
+  it('un Business vigente es BUSINESS, no PRO', () => {
+    expect(planVigente(BUSINESS_VIGENTE, AHORA)).toBe('BUSINESS');
+  });
+
+  it('⛔ un Business vencido cae a FREE, no a PRO', () => {
+    expect(planVigente(BUSINESS_VENCIDO, AHORA)).toBe('FREE');
+  });
+
+  it('⛔ un Business sin fecha se trata como vencido', () => {
+    expect(planVigente({ plan: 'BUSINESS' as const, vigenteHasta: null }, AHORA)).toBe('FREE');
+  });
+
+  it('un Pro vigente sigue siendo PRO', () => {
+    expect(planVigente(PRO_VIGENTE, AHORA)).toBe('PRO');
+  });
+});
+
+describe('Los beneficios de Business', () => {
+  it('incluye todo lo de Pro', () => {
+    const business = beneficiosDe(BUSINESS_VIGENTE, AHORA);
+    for (const beneficio of beneficiosDe(PRO_VIGENTE, AHORA)) {
+      expect(business).toContain(beneficio);
+    }
+  });
+
+  it('agrega soporte prioritario y comisión por volumen', () => {
+    expect(tieneBeneficio(BUSINESS_VIGENTE, 'SOPORTE_PRIORITARIO', AHORA)).toBe(true);
+    expect(tieneBeneficio(BUSINESS_VIGENTE, 'COMISION_POR_VOLUMEN', AHORA)).toBe(true);
+  });
+
+  /**
+   * Que Pro NO los tenga es la mitad del valor de Business. Si Pro los tuviera,
+   * nadie tendría razón para pagar más.
+   */
+  it('⛔ Pro NO tiene soporte prioritario ni comisión por volumen', () => {
+    expect(tieneBeneficio(PRO_VIGENTE, 'SOPORTE_PRIORITARIO', AHORA)).toBe(false);
+    expect(tieneBeneficio(PRO_VIGENTE, 'COMISION_POR_VOLUMEN', AHORA)).toBe(false);
+  });
+
+  it('⛔ un Business vencido no conserva ningún beneficio', () => {
+    expect(beneficiosDe(BUSINESS_VENCIDO, AHORA)).toEqual([]);
+    expect(tieneBeneficio(BUSINESS_VENCIDO, 'COMISION_POR_VOLUMEN', AHORA)).toBe(false);
+  });
+
+  it('⛔ un Free no tiene nada', () => {
+    expect(beneficiosDe(FREE, AHORA)).toEqual([]);
+  });
+});
+
+describe('Los límites de Business', () => {
+  it('más cupones y más historial que Pro', () => {
+    const business = limitesDe(BUSINESS_VIGENTE, AHORA);
+    const pro = limitesDe(PRO_VIGENTE, AHORA);
+
+    expect(business.cuponesActivos).toBeGreaterThan(pro.cuponesActivos);
+    expect(business.diasDeHistorial).toBeGreaterThan(pro.diasDeHistorial);
+  });
+
+  /**
+   * El historial es un número concreto, no «infinito». Ver el comentario en
+   * `LIMITES_POR_PLAN`: «todo» hace que la pantalla de métricas se ponga más
+   * lenta cada mes, y el vendedor que más paga es el primero que lo nota.
+   */
+  it('el historial es finito y conocido', () => {
+    expect(limitesDe(BUSINESS_VIGENTE, AHORA).diasDeHistorial).toBe(730);
+  });
+
+  it('⛔ un Business vencido vuelve a los límites de Free', () => {
+    expect(limitesDe(BUSINESS_VENCIDO, AHORA)).toEqual(limitesDe(FREE, AHORA));
+  });
+});
+
+describe('El aviso de vencimiento también alcanza a Business', () => {
+  /**
+   * `diasRestantes` preguntaba `planVigente() !== 'PRO'`. Con esa condición un
+   * Business vigente devolvía `null`, y nunca se le habría avisado que estaba
+   * por vencer: se le habrían cortado los cupones en medio de un vivo sin un
+   * solo aviso previo.
+   */
+  it('un Business vigente informa cuántos días le quedan', () => {
+    expect(diasRestantes(BUSINESS_VIGENTE, AHORA)).toBe(20);
+  });
+
+  it('a un Business por vencer se le avisa', () => {
+    const porVencer = {
+      plan: 'BUSINESS' as const,
+      vigenteHasta: enDias(DIAS_DE_AVISO_ANTES_DE_VENCER - 1),
+    };
+
+    expect(tocaAvisarQueVence(porVencer, AHORA)).toBe(true);
+  });
+
+  it('⛔ a un Business con tiempo de sobra no se le avisa', () => {
+    expect(tocaAvisarQueVence(BUSINESS_VIGENTE, AHORA)).toBe(false);
+  });
+});

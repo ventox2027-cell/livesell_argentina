@@ -1,0 +1,30 @@
+-- El tercer plan: VendoX Business.
+--
+-- ═══════════════════════════════════════════════════════════════════════════
+-- AGREGAR UN VALOR A UN ENUM ES BARATO. SACARLO NO.
+-- ═══════════════════════════════════════════════════════════════════════════
+--
+-- Esta migración agrega un valor y no toca una sola fila. Ningún vendedor
+-- cambia de plan, ninguna membresía existente se modifica, y `FREE` sigue
+-- siendo el valor por omisión.
+--
+-- Eso importa porque la vuelta atrás no es simétrica: PostgreSQL no deja quitar
+-- un valor de un enum sin recrear el tipo y reescribir la tabla. Si esto
+-- hubiera migrado datos, revertirlo sería un operativo. Así, revertir es
+-- desplegar el commit anterior: el valor queda en el tipo sin que nadie lo use.
+--
+-- ─── Por qué se puede correr dentro de una transacción ───
+--
+-- Desde PostgreSQL 12, `ALTER TYPE ... ADD VALUE` funciona dentro de una
+-- transacción siempre que el valor nuevo no se USE en esa misma transacción.
+-- Acá sólo se agrega. Prisma envuelve cada migración en una transacción, así
+-- que la distinción no es teórica: usar 'BUSINESS' en un UPDATE de este mismo
+-- archivo fallaría con "unsafe use of new value of enum type".
+--
+-- Es también la razón por la que el arreglo de la restricción
+-- `seller_memberships_free_sin_periodo` —que enumeraba los planes de memoria y
+-- no conocía BUSINESS— vive en la migración siguiente y no acá.
+--
+-- `IF NOT EXISTS` para que reaplicar esto sobre una base que ya lo tiene no
+-- rompa el despliegue.
+ALTER TYPE "MembershipPlan" ADD VALUE IF NOT EXISTS 'BUSINESS';

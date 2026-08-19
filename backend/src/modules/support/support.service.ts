@@ -376,19 +376,70 @@ export class SupportService {
    * ilusión de que alguna de las dos capas es opcional.
    */
   async bandeja(params: { status?: SupportStatus } = {}) {
-    const items = await this.prisma.supportTicket.findMany({
-      where: { status: params.status ?? 'ESCALADO' },
-      // Lo más viejo arriba: quien espera hace más rato se atiende primero.
-      orderBy: { lastMessageAt: 'asc' },
-      take: 100,
-      select: {
-        ...TICKET_SELECT,
-        escalationReason: true,
-        assignedToUserId: true,
-        user: { select: { id: true, firstName: true, lastName: true, email: true } },
+    const estado = params.status ?? 'ESCALADO';
+    const ahora = new Date();
+
+    /**
+     * ═══════════════════════════════════════════════════════════════════════
+     * SOPORTE PRIORITARIO: DOS CONSULTAS, NO UN ORDENAMIENTO EN MEMORIA
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * Business tiene `SOPORTE_PRIORITARIO` y esto es lo que lo hace real. Sin
+     * este cableado sería una línea en una pantalla de precios: alguien pagaría
+     * el plan caro y su ticket seguiría exactamente en el mismo lugar de la
+     * cola.
+     *
+     * ─── Por qué dos consultas y no traer 100 y ordenar acá ───
+     *
+     * Porque el `take` corta ANTES de ordenar. Con una sola consulta, un ticket
+     * de Business que cayera en la posición 101 no entraría en el resultado, y
+     * subirlo dentro de los 100 que sí entraron no lo arregla: el prioritario
+     * de verdad quedó afuera. El bug aparecería sólo con la bandeja llena, que
+     * es justo cuando la prioridad importa.
+     *
+     * Así, los prioritarios se buscan sobre la tabla entera y siempre entran.
+     *
+     * ─── La fecha se comprueba en la consulta ───
+     *
+     * `vigenteHasta > ahora` y no sólo `plan = BUSINESS`. Una membresía vencida
+     * sigue diciendo BUSINESS en su fila hasta que algo la actualice —es lo que
+     * explica `planVigente()`—, y sin este corte un Business que venció hace
+     * seis meses seguiría saltando la cola.
+     */
+    const esBusinessVigente = {
+      user: {
+        seller: {
+          membership: { plan: 'BUSINESS' as const, vigenteHasta: { gt: ahora } },
+        },
       },
-    });
-    return { items };
+    };
+
+    const seleccion = {
+      ...TICKET_SELECT,
+      escalationReason: true,
+      assignedToUserId: true,
+      user: { select: { id: true, firstName: true, lastName: true, email: true } },
+    };
+
+    const [prioritarios, resto] = await Promise.all([
+      this.prisma.supportTicket.findMany({
+        where: { status: estado, ...esBusinessVigente },
+        // Dentro de los prioritarios sigue mandando la espera: la prioridad
+        // adelanta en la cola, no habilita a colarse entre iguales.
+        orderBy: { lastMessageAt: 'asc' },
+        take: 100,
+        select: seleccion,
+      }),
+      this.prisma.supportTicket.findMany({
+        where: { status: estado, NOT: esBusinessVigente },
+        // Lo más viejo arriba: quien espera hace más rato se atiende primero.
+        orderBy: { lastMessageAt: 'asc' },
+        take: 100,
+        select: seleccion,
+      }),
+    ]);
+
+    return { items: [...prioritarios, ...resto].slice(0, 100) };
   }
 
   /** Una persona del equipo contesta. */

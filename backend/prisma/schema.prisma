@@ -1204,6 +1204,7 @@ enum PromotionType {
 enum MembershipPlan {
   FREE
   PRO
+  BUSINESS
 }
 
 enum MembershipPeriod {
