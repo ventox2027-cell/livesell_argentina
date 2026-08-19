@@ -12,6 +12,7 @@ import '../../seller/data/seller_repository.dart';
 import '../data/broadcaster_api.dart';
 import '../../seller/presentation/widgets/conectar_mp_sheet.dart';
 import '../data/broadcaster_room.dart';
+import '../domain/tramos_del_vivo.dart';
 import 'seller_live_screen.dart';
 
 /// Preparar la transmisión antes de que la vea nadie.
@@ -44,6 +45,14 @@ class _PrepareLiveScreenState extends ConsumerState<PrepareLiveScreen> {
 
   bool _preparando = false;
   bool _saliendo = false;
+
+  /// Cuánto tarda cada tramo de salir al aire.
+  ///
+  /// «Iniciar live es lento» no se puede arreglar: no dice cuál de los cinco
+  /// tramos se lleva el tiempo, y son cosas muy distintas —peticiones a
+  /// Railway, un WebSocket a LiveKit, el hardware de la cámara—. Arreglar el
+  /// equivocado cuesta un día y no cambia nada.
+  final _tramos = TramosDelVivo();
 
   @override
   void initState() {
@@ -84,30 +93,76 @@ class _PrepareLiveScreenState extends ConsumerState<PrepareLiveScreen> {
     }
 
     setState(() => _preparando = true);
+    _tramos.empezar();
 
     try {
       final api = ref.read(broadcasterApiProvider);
       final vivo = await api.preparar(titulo: titulo, productIds: _elegidos);
+      _tramos.paso('preparar (backend)');
 
       if (!vivo.puedeConectar) {
         if (mounted) AppSnack.error(context, 'No pudimos preparar la transmisión.');
         return;
       }
 
-      // La bandeja se guarda aparte: `preparar` es idempotente y devuelve el
-      // vivo que ya existía si había uno, con SU bandeja vieja.
-      if (_elegidos.isNotEmpty) {
-        await api.guardarBandeja(vivo.id, _elegidos);
-      }
+      /**
+       * ═══════════════════════════════════════════════════════════════════════
+       * LA BANDEJA Y LA CONEXIÓN NO SE NECESITAN ENTRE SÍ
+       * ═══════════════════════════════════════════════════════════════════════
+       *
+       * Estaban en fila: primero `PUT /live/:id/products` —un viaje a
+       * Railway— y recién después el WebSocket a LiveKit. Uno guarda qué
+       * productos van a estar en la bandeja; el otro abre el video. No
+       * comparten nada.
+       *
+       * Ahora salen juntos y el tramo dura lo que dure el más lento en vez de
+       * la suma de los dos.
+       *
+       * La bandeja se guarda aparte de `preparar` porque `preparar` es
+       * idempotente: si ya había un vivo abierto devuelve ESE, con SU bandeja
+       * vieja.
+       */
+      final desde = _tramos.ahora;
+      final resultados = await Future.wait([
+        if (_elegidos.isNotEmpty)
+          api.guardarBandeja(vivo.id, _elegidos).then((_) => true)
+        else
+          Future.value(true),
+        _sala.conectar(wsUrl: vivo.wsUrl, token: vivo.token),
+      ]);
+      _tramos.tramo('bandeja + LiveKit', desdeMs: desde);
 
-      final conectado = await _sala.conectar(wsUrl: vivo.wsUrl, token: vivo.token);
+      final conectado = resultados.last;
       if (!conectado) {
         if (mounted) AppSnack.error(context, _sala.error ?? 'No pudimos conectar.');
         return;
       }
 
-      await api.iniciar(vivo.id);
-      final publicando = await _sala.salirAlAire();
+      /**
+       * ═══════════════════════════════════════════════════════════════════════
+       * MARCAR EL VIVO Y PUBLICAR LA CÁMARA TAMPOCO
+       * ═══════════════════════════════════════════════════════════════════════
+       *
+       * `iniciar` es un `POST` a Railway que pasa el vivo a LIVE; publicar es
+       * una operación de LiveKit sobre una sala que ya está conectada. También
+       * estaban en fila.
+       *
+       * ⚠️ Se esperan los DOS antes de navegar. Es la diferencia entre
+       * paralelizar y fingir: nadie ve la pantalla del vivo hasta que el
+       * backend confirmó el estado Y la cámara está publicando. Publicar unos
+       * milisegundos antes de que el backend diga LIVE no adelanta nada para
+       * nadie —todavía no hay espectadores, justamente porque el backend no lo
+       * dijo—.
+       */
+      final desdeAlAire = _tramos.ahora;
+      final alAire = await Future.wait([
+        api.iniciar(vivo.id).then((_) => true),
+        _sala.salirAlAire(),
+      ]);
+      _tramos.tramo('iniciar + publicar', desdeMs: desdeAlAire);
+      _tramos.informar();
+
+      final publicando = alAire.last;
       if (!publicando) {
         if (mounted) AppSnack.error(context, _sala.error ?? 'No pudimos publicar tu cámara.');
         return;
