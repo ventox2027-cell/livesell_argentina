@@ -12,6 +12,7 @@ import '../../auth/state/auth_providers.dart';
 import '../data/broadcaster_api.dart';
 import '../data/broadcaster_room.dart';
 import '../data/live_realtime.dart';
+import '../domain/destacado_optimista.dart';
 import '../domain/broadcaster_models.dart';
 import 'widgets/chat_overlay.dart';
 import 'widgets/composer.dart';
@@ -48,6 +49,13 @@ class SellerLiveScreen extends ConsumerStatefulWidget {
 
 class _SellerLiveScreenState extends ConsumerState<SellerLiveScreen> {
   PanelDelVivo? _panel;
+
+  /// Qué está mostrando el vivo, según el vendedor.
+  ///
+  /// Se separa del panel porque el panel es lo que dice el servidor y esto es
+  /// lo que el vendedor acaba de pedir. Mientras no coincidan, manda esto.
+  /// Ver la nota larga de DestacadoOptimista.
+  DestacadoOptimista _destacado = const DestacadoOptimista();
   Timer? _refresco;
   Timer? _reloj;
   int _segundos = 0;
@@ -164,19 +172,64 @@ class _SellerLiveScreenState extends ConsumerState<SellerLiveScreen> {
     _composer.clear();
   }
 
+  /// Destacar se ve ahora. Viaja después.
+  ///
+  /// ═══════════════════════════════════════════════════════════════════════════
+  /// DOS VIAJES EN SERIE ANTES DE QUE CAMBIARA NADA
+  /// ═══════════════════════════════════════════════════════════════════════════
+  ///
+  /// Acá había `await destacar(...)` y después `await _cargarPanel()`: dos
+  /// viajes a Railway en fila antes de que cambiara nada en la pantalla del
+  /// vendedor. En medio de un vivo, con gente mirando, eso es una eternidad —
+  /// el vendedor dice «mirá este» y su propia pantalla no lo acompaña.
+  ///
+  /// El segundo viaje además era innecesario: el panel se refresca solo cada
+  /// cinco segundos.
+  ///
+  /// Ahora la elección se ve en el mismo frame y la petición va por atrás. Ver
+  /// `DestacadoOptimista` para el problema difícil, que no es la velocidad sino
+  /// el orden: con red lenta, la respuesta de A puede llegar después de la de B.
   Future<void> _destacar(ProductoEnBandeja producto) async {
     final variante = producto.variantePorDefecto;
     if (variante == null) return;
 
-    setState(() => _bandejaAbierta = false);
+    final elegido = _destacado.elegir(variante.id);
+    final miIntento = elegido.secuencia;
+
+    setState(() {
+      _bandejaAbierta = false;
+      _destacado = elegido;
+    });
 
     try {
       await ref.read(broadcasterApiProvider).destacar(widget.liveId, variante.id);
+      if (!mounted) return;
+
+      /**
+       * El panel se pide para confirmar, y NO se espera para mostrar nada.
+       *
+       * Hasta que llegue diciendo lo mismo, sigue mandando la elección local:
+       * soltarla antes dejaría ver el destacado anterior hasta el próximo
+       * refresco.
+       */
       await _cargarPanel();
-      if (mounted) AppSnack.exito(context, 'Mostrando ${producto.nombre}');
+      if (!mounted) return;
+      setState(() {
+        _destacado = _destacado.confirmado(delServidor: _panel?.destacadoVariantId);
+      });
     } catch (_) {
-      if (mounted) {
-        AppSnack.error(context, 'No pudimos destacarlo. ¿Sigue publicado?');
+      if (!mounted) return;
+      setState(() => _destacado = _destacado.fallo(deSecuencia: miIntento));
+
+      /**
+       * ⚠️ El aviso también depende de la secuencia.
+       *
+       * Si el vendedor ya eligió otra cosa, un error de la elección anterior no
+       * describe lo que está pasando: le diría que falló algo que ya no está
+       * intentando.
+       */
+      if (miIntento == _destacado.secuencia) {
+        AppSnack.error(context, 'No pudimos mostrarlo. ¿Sigue publicado?');
       }
     }
   }
@@ -290,6 +343,9 @@ class _SellerLiveScreenState extends ConsumerState<SellerLiveScreen> {
                   if (panel != null && !tecladoAbierto)
                     _DestacadoAhora(
                       panel: panel,
+                      // Lo que el vendedor eligió recién, si el servidor
+                      // todavía no lo confirmó. Ver DestacadoOptimista.
+                      destacadoVariantId: _destacado.mostrado(panel.destacadoVariantId),
                       onCambiar: () => setState(() => _bandejaAbierta = true),
                     ),
 
@@ -326,6 +382,7 @@ class _SellerLiveScreenState extends ConsumerState<SellerLiveScreen> {
             if (_bandejaAbierta && panel != null)
               _Bandeja(
                 panel: panel,
+                destacadoVariantId: _destacado.mostrado(panel.destacadoVariantId),
                 onElegir: _destacar,
                 onCerrar: () => setState(() => _bandejaAbierta = false),
               ),
@@ -427,15 +484,24 @@ class _Chip extends StatelessWidget {
 
 /// Qué producto están viendo ahora los compradores.
 class _DestacadoAhora extends StatelessWidget {
-  const _DestacadoAhora({required this.panel, required this.onCambiar});
+  const _DestacadoAhora({
+    required this.panel,
+    required this.destacadoVariantId,
+    required this.onCambiar,
+  });
 
   final PanelDelVivo panel;
+
+  /// Qué se muestra. NO se lee del panel: mientras hay una elección sin
+  /// confirmar, manda ella. Ver DestacadoOptimista.
+  final String? destacadoVariantId;
+
   final VoidCallback onCambiar;
 
   @override
   Widget build(BuildContext context) {
     final destacado = panel.bandeja
-        .where((p) => p.variantes.any((v) => v.id == panel.destacadoVariantId))
+        .where((p) => p.variantes.any((v) => v.id == destacadoVariantId))
         .firstOrNull;
 
     return Padding(
@@ -613,9 +679,17 @@ class _BotonLateral extends StatelessWidget {
 
 /// La bandeja: un toque para cambiar de producto.
 class _Bandeja extends StatelessWidget {
-  const _Bandeja({required this.panel, required this.onElegir, required this.onCerrar});
+  const _Bandeja({
+    required this.panel,
+    required this.destacadoVariantId,
+    required this.onElegir,
+    required this.onCerrar,
+  });
 
   final PanelDelVivo panel;
+
+  /// Cuál queda resaltado en la lista. Ver _DestacadoAhora.
+  final String? destacadoVariantId;
   final void Function(ProductoEnBandeja) onElegir;
   final VoidCallback onCerrar;
 
@@ -670,7 +744,7 @@ class _Bandeja extends StatelessWidget {
                           itemCount: panel.bandeja.length,
                           itemBuilder: (_, i) {
                             final p = panel.bandeja[i];
-                            final activo = p.variantes.any((v) => v.id == panel.destacadoVariantId);
+                            final activo = p.variantes.any((v) => v.id == destacadoVariantId);
                             return _FilaBandeja(
                               producto: p,
                               activo: activo,
