@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/design/componentes.dart';
 import '../../../core/design/tokens.dart';
+import '../../../core/network/errores_de_red.dart';
+import '../../../core/network/reintentar_al_volver_la_red.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../../shared/widgets/aviso_de_pausa.dart';
 import '../../auth/data/banderas.dart';
@@ -59,11 +61,14 @@ class SellerHomeScreen extends ConsumerWidget {
       ),
       body: perfil.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => _Error(
-            mensaje: e.toString(),
-            onReintentar: () {
-              ref.invalidate(miPerfilVendedorProvider);
-            }),
+        error: (e, _) {
+          void recargar() => ref.invalidate(miPerfilVendedorProvider);
+          return ReintentarAlVolverLaRed(
+            error: e,
+            onReintentar: recargar,
+            child: _Error(mensaje: mensajeDeError(e), onReintentar: recargar),
+          );
+        },
         data: (p) {
           if (p == null) return const _SinVendedor();
           return _Panel(perfil: p);
@@ -219,7 +224,7 @@ class _SinVendedorState extends ConsumerState<_SinVendedor> {
 
       AppSnack.error(context, e.mensaje);
     } catch (e) {
-      if (mounted) AppSnack.error(context, e.toString());
+      if (mounted) AppSnack.error(context, mensajeDeError(e));
     } finally {
       if (mounted) setState(() => _creando = false);
     }
@@ -475,10 +480,14 @@ class _Panel extends ConsumerWidget {
               padding: EdgeInsets.symmetric(vertical: Gap.xxl),
               child: Center(child: CircularProgressIndicator()),
             ),
-            error: (e, _) => _Error(
-              mensaje: e.toString(),
-              onReintentar: () => ref.invalidate(misProductosProvider),
-            ),
+            error: (e, _) {
+              void recargar() => ref.invalidate(misProductosProvider);
+              return ReintentarAlVolverLaRed(
+                error: e,
+                onReintentar: recargar,
+                child: _Error(mensaje: mensajeDeError(e), onReintentar: recargar),
+              );
+            },
             data: (pagina) {
               final catalogo = pagina.catalogo;
               if (pagina.items.isEmpty) {

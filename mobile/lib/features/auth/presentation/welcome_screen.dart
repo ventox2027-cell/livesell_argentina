@@ -6,6 +6,7 @@ import '../../../core/config/entorno.dart';
 import '../../../core/config/paginas_publicas.dart';
 import '../../../core/config/runtime_config.dart';
 import '../../../core/design/tokens.dart';
+import '../../../core/network/errores_de_red.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../data/auth_config.dart';
 import '../domain/session.dart';
@@ -37,7 +38,7 @@ class _WelcomeScreenState extends ConsumerState<WelcomeScreen> {
     try {
       await accion();
     } catch (e) {
-      if (mounted) AppSnack.error(context, e.toString());
+      if (mounted) AppSnack.error(context, mensajeDeError(e));
     } finally {
       if (mounted) setState(() => _ocupado = false);
     }

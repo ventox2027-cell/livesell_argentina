@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/design/tokens.dart';
+import '../../../core/network/errores_de_red.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../orders/domain/order_models.dart';
 import '../../orders/presentation/checkout_sheet.dart';
@@ -209,7 +210,7 @@ class _ReserveSheetState extends ConsumerState<ReserveSheet> with WidgetsBinding
         Navigator.of(context).pop();
       }
     } catch (e) {
-      if (mounted) AppSnack.error(context, e.toString());
+      if (mounted) AppSnack.error(context, mensajeDeError(e));
     } finally {
       if (mounted) setState(() => _reservando = false);
     }
@@ -257,7 +258,7 @@ class _ReserveSheetState extends ConsumerState<ReserveSheet> with WidgetsBinding
       });
       AppSnack.info(context, 'Soltaste la reserva');
     } catch (e) {
-      if (mounted) AppSnack.error(context, e.toString());
+      if (mounted) AppSnack.error(context, mensajeDeError(e));
     } finally {
       if (mounted) setState(() => _reservando = false);
     }

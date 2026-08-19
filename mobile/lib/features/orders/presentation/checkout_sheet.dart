@@ -10,6 +10,7 @@ import '../../../core/config/runtime_config.dart';
 import '../../../core/design/componentes.dart';
 import '../../../core/design/tokens.dart';
 import '../../../core/push/permiso_de_avisos.dart';
+import '../../../core/network/errores_de_red.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../auth/presentation/widgets/fecha_de_nacimiento_sheet.dart';
 import '../data/orders_repository.dart';
@@ -175,7 +176,7 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = e.toString();
+        _error = mensajeDeError(e);
         _paso = _Paso.resultado;
       });
     }
@@ -284,7 +285,7 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = e.toString();
+        _error = mensajeDeError(e);
         _paso = _Paso.resultado;
       });
     }

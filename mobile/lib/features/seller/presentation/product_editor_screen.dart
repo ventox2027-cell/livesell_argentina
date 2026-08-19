@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../../core/design/tokens.dart';
+import '../../../core/network/errores_de_red.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../inventory/data/inventory_repository.dart';
 import '../../inventory/presentation/stock_screen.dart';
@@ -275,7 +276,7 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
       if (fueAConectar && mounted && reintentar != null) await reintentar();
       return;
     }
-    if (mounted) AppSnack.error(context, e.toString());
+    if (mounted) AppSnack.error(context, mensajeDeError(e));
   }
 
   /// ¿Los ejes en pantalla son los mismos que ya tiene el producto?

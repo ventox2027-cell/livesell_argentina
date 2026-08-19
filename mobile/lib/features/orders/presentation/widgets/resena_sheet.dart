@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/design/tokens.dart';
+import '../../../../core/network/errores_de_red.dart';
 import '../../../../shared/widgets/app_snack.dart';
 import '../../data/orders_repository.dart';
 
@@ -80,7 +81,7 @@ class _ResenaSheetState extends ConsumerState<ResenaSheet> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _enviando = false);
-      AppSnack.error(context, e.toString());
+      AppSnack.error(context, mensajeDeError(e));
     }
   }
 

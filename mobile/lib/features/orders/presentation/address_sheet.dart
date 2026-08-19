@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/design/tokens.dart';
+import '../../../core/network/errores_de_red.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../data/orders_repository.dart';
 import '../domain/order_models.dart';
@@ -103,7 +104,7 @@ class _AddressSheetState extends ConsumerState<AddressSheet> {
       ref.invalidate(misDireccionesProvider);
       if (mounted) Navigator.of(context).pop(direccion);
     } catch (e) {
-      if (mounted) AppSnack.error(context, e.toString());
+      if (mounted) AppSnack.error(context, mensajeDeError(e));
     } finally {
       if (mounted) setState(() => _guardando = false);
     }

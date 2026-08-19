@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/design/tokens.dart';
+import '../core/network/reconexion.dart';
 import '../features/auth/domain/session.dart';
 import '../features/auth/presentation/welcome_screen.dart';
 import '../features/auth/state/auth_providers.dart';
@@ -17,6 +18,22 @@ class AppShell extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    /**
+     * El vigía de la red se enciende acá, y no donde se usa.
+     *
+     * Si naciera con la primera pantalla que falla, se perdería la caída que la
+     * hizo fallar. Peor: entre que la petición se cae y el widget de error se
+     * monta pasan unos milisegundos, y si la red vuelve justo ahí, el aviso
+     * llega antes de que haya nadie escuchando y se pierde para siempre.
+     *
+     * Encendido desde la raíz, escucha desde el primer momento.
+     *
+     * Se usa `listen` con un callback vacío a propósito: hace falta que exista,
+     * no que `AppShell` se reconstruya cada vez que vuelve la red — eso sería
+     * redibujar la app entera para nada.
+     */
+    ref.listen<int>(reconexionProvider, (_, __) {});
+
     final sesion = ref.watch(sesionProvider);
 
     return switch (sesion) {

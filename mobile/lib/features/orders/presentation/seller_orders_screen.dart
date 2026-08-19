@@ -5,6 +5,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/design/tokens.dart';
+import '../../../core/network/errores_de_red.dart';
+import '../../../core/network/reintentar_al_volver_la_red.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../seller/domain/seller_models.dart';
 import '../data/orders_repository.dart';
@@ -38,25 +40,29 @@ class SellerOrdersScreen extends ConsumerWidget {
       appBar: AppBar(title: const Text('Mis ventas')),
       body: ventas.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(
-          child: Padding(
-            padding: const EdgeInsets.all(Gap.xl),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.cloud_off_rounded, size: 32, color: AppColor.textoDebil),
-                const SizedBox(height: Gap.md),
-                Text(
-                  e.toString(),
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: AppColor.textoSuave, fontSize: 14),
-                ),
-                const SizedBox(height: Gap.lg),
-                OutlinedButton(
-                  onPressed: () => ref.invalidate(misVentasProvider),
-                  child: const Text('Reintentar'),
-                ),
-              ],
+        error: (e, _) => ReintentarAlVolverLaRed(
+          error: e,
+          onReintentar: () => ref.invalidate(misVentasProvider),
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(Gap.xl),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.cloud_off_rounded, size: 32, color: AppColor.textoDebil),
+                  const SizedBox(height: Gap.md),
+                  Text(
+                    mensajeDeError(e),
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: AppColor.textoSuave, fontSize: 14),
+                  ),
+                  const SizedBox(height: Gap.lg),
+                  OutlinedButton(
+                    onPressed: () => ref.invalidate(misVentasProvider),
+                    child: const Text('Reintentar'),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -173,7 +179,7 @@ class _TarjetaDeVentaState extends ConsumerState<_TarjetaDeVenta> {
       unawaited(HapticFeedback.selectionClick());
       ref.invalidate(misVentasProvider);
     } catch (e) {
-      if (mounted) AppSnack.error(context, e.toString());
+      if (mounted) AppSnack.error(context, mensajeDeError(e));
     } finally {
       if (mounted) setState(() => _guardando = false);
     }

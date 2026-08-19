@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/design/tokens.dart';
+import '../../../../core/network/errores_de_red.dart';
 import '../../../../shared/widgets/app_snack.dart';
 import '../../data/orders_repository.dart';
 
@@ -93,7 +94,7 @@ class _ConfirmarEntregaSheetState extends ConsumerState<ConfirmarEntregaSheet> {
         // El backend ya manda el motivo en castellano: "El código no coincide"
         // o "Demasiados intentos". Repetirlo acá con otras palabras haría que
         // la misma falla se cuente de dos formas.
-        _error = e.toString();
+        _error = mensajeDeError(e);
       });
     }
   }

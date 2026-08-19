@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/design/tokens.dart';
+import '../../../core/network/errores_de_red.dart';
+import '../../../core/network/reintentar_al_volver_la_red.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../auth/state/auth_providers.dart';
 import '../../inventory/presentation/reserve_sheet.dart';
@@ -48,10 +50,14 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
 
     return feed.when(
       loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => _ErrorDeFeed(
-        mensaje: e.toString(),
-        onReintentar: () => ref.read(feedProvider.notifier).recargar(),
-      ),
+      error: (e, _) {
+        void recargar() => ref.read(feedProvider.notifier).recargar();
+        return ReintentarAlVolverLaRed(
+          error: e,
+          onReintentar: recargar,
+          child: _ErrorDeFeed(mensaje: mensajeDeError(e), onReintentar: recargar),
+        );
+      },
       data: (publicaciones) {
         if (publicaciones.isEmpty) return const _FeedVacio();
 

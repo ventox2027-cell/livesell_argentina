@@ -6,6 +6,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/design/componentes.dart';
 import '../../../core/design/tokens.dart';
+import '../../../core/network/errores_de_red.dart';
+import '../../../core/network/reintentar_al_volver_la_red.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../seller/domain/seller_models.dart';
 import '../data/orders_repository.dart';
@@ -36,10 +38,14 @@ class OrdersScreen extends ConsumerWidget {
       appBar: AppBar(title: const Text('Mis pedidos')),
       body: pedidos.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => _Error(
-          mensaje: e.toString(),
-          onReintentar: () => ref.invalidate(misPedidosProvider),
-        ),
+        error: (e, _) {
+          void recargar() => ref.invalidate(misPedidosProvider);
+          return ReintentarAlVolverLaRed(
+            error: e,
+            onReintentar: recargar,
+            child: _Error(mensaje: mensajeDeError(e), onReintentar: recargar),
+          );
+        },
         data: (pagina) {
           if (pagina.items.isEmpty) return const _SinPedidos();
 
@@ -157,10 +163,14 @@ class OrderDetailScreen extends ConsumerWidget {
       appBar: AppBar(title: const Text('Pedido')),
       body: pedido.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => _Error(
-          mensaje: e.toString(),
-          onReintentar: () => ref.invalidate(pedidoProvider(orderId)),
-        ),
+        error: (e, _) {
+          void recargar() => ref.invalidate(pedidoProvider(orderId));
+          return ReintentarAlVolverLaRed(
+            error: e,
+            onReintentar: recargar,
+            child: _Error(mensaje: mensajeDeError(e), onReintentar: recargar),
+          );
+        },
         data: (p) => RefreshIndicator(
           onRefresh: () async => ref.invalidate(pedidoProvider(orderId)),
           child: ListView(
@@ -387,7 +397,7 @@ class OrderDetailScreen extends ConsumerWidget {
       ref.invalidate(misPedidosProvider);
       if (context.mounted) AppSnack.info(context, 'Pedido cancelado');
     } catch (e) {
-      if (context.mounted) AppSnack.error(context, e.toString());
+      if (context.mounted) AppSnack.error(context, mensajeDeError(e));
     }
   }
 }

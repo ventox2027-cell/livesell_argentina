@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/design/tokens.dart';
+import '../../../core/network/errores_de_red.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../data/seller_repository.dart';
 import '../domain/seller_models.dart';
@@ -77,7 +78,7 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
         Navigator.of(context).pop();
       }
     } catch (e) {
-      if (mounted) AppSnack.error(context, e.toString());
+      if (mounted) AppSnack.error(context, mensajeDeError(e));
     } finally {
       if (mounted) setState(() => _guardando = false);
     }
@@ -101,7 +102,7 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
         );
       }
     } catch (e) {
-      if (mounted) AppSnack.error(context, e.toString());
+      if (mounted) AppSnack.error(context, mensajeDeError(e));
     } finally {
       if (mounted) setState(() => _guardando = false);
     }
@@ -119,7 +120,7 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
           child: Padding(
             padding: const EdgeInsets.all(Gap.xl),
             child: Text(
-              e.toString(),
+              mensajeDeError(e),
               textAlign: TextAlign.center,
               style: const TextStyle(color: AppColor.textoSuave),
             ),

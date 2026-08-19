@@ -5,6 +5,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/design/tokens.dart';
+import '../../../core/network/errores_de_red.dart';
+import '../../../core/network/reintentar_al_volver_la_red.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../data/ajustes_en_vuelo.dart';
 import '../data/inventory_repository.dart';
@@ -95,7 +97,7 @@ class _StockScreenState extends ConsumerState<StockScreen> {
             cantidad: nuevo,
           );
     } catch (e) {
-      if (mounted) AppSnack.error(context, e.toString());
+      if (mounted) AppSnack.error(context, mensajeDeError(e));
     } finally {
       if (mounted) setState(() => _fijando = null);
     }
@@ -128,10 +130,14 @@ class _StockScreenState extends ConsumerState<StockScreen> {
       ),
       body: stock.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => _Error(
-          mensaje: e.toString(),
-          onReintentar: () => ref.invalidate(stockDeProductoProvider(productId)),
-        ),
+        error: (e, _) {
+          void recargar() => ref.invalidate(stockDeProductoProvider(productId));
+          return ReintentarAlVolverLaRed(
+            error: e,
+            onReintentar: recargar,
+            child: _Error(mensaje: mensajeDeError(e), onReintentar: recargar),
+          );
+        },
         data: (s) {
           /**
            * ⚠️ ACÁ SE ARMA LA ÚNICA VERDAD DE LA PANTALLA.

@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/design/tokens.dart';
+import '../../../core/network/errores_de_red.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../auth/domain/session.dart';
 import '../../auth/state/auth_providers.dart';
@@ -68,7 +69,7 @@ class _CompleteProfileSheetState extends ConsumerState<CompleteProfileSheet> {
       Navigator.pop(context);
       AppSnack.exito(context, 'Listo, guardamos tus datos.');
     } catch (e) {
-      if (mounted) AppSnack.error(context, e.toString());
+      if (mounted) AppSnack.error(context, mensajeDeError(e));
     } finally {
       if (mounted) setState(() => _guardando = false);
     }
