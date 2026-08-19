@@ -120,7 +120,24 @@ jobs:
 
       - uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          # ⚠️ VERSIÓN FIJA, no `channel: stable`.
+          #
+          # `stable` instala la última, que va cambiando sola. Y el 18 de agosto
+          # una Dart más nueva empezó a rechazar `livekit_client 2.5.4` con un
+          # error de compilación DENTRO del paquete: no promociona
+          # `VideoPublishOptions?` a través de un `await`.
+          #
+          # El síntoma es de los peores: la app compila perfecto en la máquina de
+          # quien la escribió y falla sólo en CI, sin que nadie haya tocado nada.
+          # El culpable no está en el repositorio ni en el lockfile.
+          #
+          # Se fija la misma que se usa para desarrollar, que es lo que CI tiene
+          # que reproducir. Subirla es una decisión, no algo que pase solo un
+          # martes.
+          #
+          # Para actualizar: subir esta línea Y comprobar que `livekit_client`
+          # compile con esa Dart. Ver docs/COMPILAR-EN-LA-NUBE.md.
+          flutter-version: '3.44.9'
           cache: true
 
       - name: Instalar

@@ -126,3 +126,42 @@ Nada, para iterar. Queda pendiente, y no depende de esto:
 | Distribuir a testers sin bajar un zip | Play Console (prueba interna) o Firebase App Distribution |
 | Páginas de privacidad y eliminación | publicarlas en Cloudflare Pages |
 | `vendox.com.ar` | tu socio |
+
+---
+
+## La versión de Flutter está fija, y no es un descuido
+
+Los workflows usan `flutter-version: '3.44.9'`, no `channel: stable`.
+
+La primera corrida falló por esto. `stable` instala la última versión, que
+cambia sola, y una Dart más nueva empezó a rechazar `livekit_client 2.5.4` con
+un error de compilación **dentro del paquete**:
+
+```
+Property 'videoCodec' cannot be accessed on 'VideoPublishOptions?'
+because it is potentially null.
+Variable 'publishOptions' could not be promoted due to an 'await' or 'yield'.
+```
+
+Nada de eso es código nuestro. Es una regla de promoción de tipos que Dart
+endureció, sobre una dependencia que todavía no se actualizó.
+
+El síntoma es de los peores que hay: **la app compila perfecto en la máquina de
+quien la escribió y falla sólo en CI, sin que nadie haya tocado nada.** El
+culpable no está en el repositorio ni en el lockfile — está en qué versión del
+compilador le tocó al runner ese día.
+
+Fijarla hace que CI reproduzca lo local, que es su único trabajo. Subirla pasa a
+ser una decisión con su propia prueba, no algo que ocurre solo un martes.
+
+### Cuándo y cómo subirla
+
+Cuando haga falta una función nueva de Flutter, o cuando `livekit_client`
+publique una versión compatible con las Dart nuevas.
+
+1. Actualizar Flutter local y correr `flutter test` y `flutter build apk`
+2. Si `livekit_client` sigue rompiendo, subirlo también: `flutter pub upgrade
+   livekit_client`
+3. Recién ahí, subir `flutter-version` en **los dos** workflows
+
+Está en `ci.yml` y en `build-apk.yml`. Los dos.
