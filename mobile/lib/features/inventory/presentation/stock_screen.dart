@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/design/tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../data/inventory_repository.dart';
+import '../domain/ajustes_acumulados.dart';
 import '../domain/inventory_models.dart';
 
 /// Stock de un producto.
@@ -187,26 +188,113 @@ class _FilaStock extends ConsumerStatefulWidget {
   ConsumerState<_FilaStock> createState() => _FilaStockState();
 }
 
-class _FilaStockState extends ConsumerState<_FilaStock> {
-  bool _guardando = false;
+/// Cuánto se espera antes de mandar los toques acumulados.
+///
+/// Suficiente para que una ráfaga de dedo entre en una sola petición, y poco
+/// como para que soltar el dedo y ver el número guardado se sienta inmediato.
+const _esperaAntesDeGuardar = Duration(milliseconds: 450);
 
-  /// Valor que se ve mientras la petición viaja.
+class _FilaStockState extends ConsumerState<_FilaStock> {
+  /// ═══════════════════════════════════════════════════════════════════════════
+  /// EL DEDO NO ESPERA A LA RED
+  /// ═══════════════════════════════════════════════════════════════════════════
   ///
-  /// Sin esto, tocar `+` no hace nada visible hasta que responde el servidor, y
-  /// la persona toca otra vez. Se muestra el valor optimista y se corrige si el
-  /// backend dice otra cosa.
+  /// Antes el botón `+` se apagaba mientras la petición viajaba: para pasar de
+  /// 1 a 5 había que tocar, esperar el ida y vuelta a Railway, tocar, esperar.
+  /// Con la base reportando 700 ms de latencia, subir diez unidades eran diez
+  /// segundos mirando un botón gris.
+  ///
+  /// Ahora los toques se acumulan y se manda UNA petición con el total. Tocar
+  /// cinco veces rápido muestra 1→2→3→4→5 al instante y escribe `+4` una sola
+  /// vez.
+  ///
+  /// ─── Por qué es seguro consolidar ───
+  ///
+  /// El backend aplica el ajuste como `on_hand = on_hand + delta` en un UPDATE
+  /// condicional atómico. Mandar `+4` una vez y mandar `+1` cuatro veces
+  /// terminan en el mismo lugar, y PostgreSQL sigue siendo la autoridad: acá no
+  /// se decide el stock, se decide cuándo preguntar.
+  ///
+  /// ⚠️ Lo que NO cambia: las reservas. El vendedor nunca puede bajar por
+  /// debajo de lo que hay apartado, y esa comprobación la sigue haciendo la
+  /// base con `("on_hand" + delta) >= "reserved"`. Lo de acá abajo es una
+  /// cortesía para explicarlo antes, no la regla.
+
+  /// El valor que se ve. `null` = el del servidor.
   int? _optimista;
 
+  /// Los toques que todavia no salieron. La aritmetica vive en su propio
+  /// modulo porque es donde se puede perder stock sin que se note.
+  final _acumulados = AjustesAcumulados();
+
+  Timer? _temporizador;
+
+  /// Escribiendo una cantidad absoluta.
+  ///
+  /// Eso SI bloquea los botones: mientras se fija un valor exacto, sumarle o
+  /// restarle pasos daria un resultado que depende de cual de las dos
+  /// peticiones llegue antes.
+  bool _fijando = false;
+
+  /// El repositorio, tomado una sola vez.
+  ///
+  /// Se guarda porque `dispose()` necesita mandar lo que quedó pendiente, y ahí
+  /// `ref` ya no se puede usar. Sin esto, salir de la pantalla enseguida de
+  /// tocar `+` perdería el último toque.
+  late final _repo = ref.read(inventoryRepositoryProvider);
+
   int get _mostrado => _optimista ?? widget.variante.onHand;
+
+  /// Si todavía hay algo que mandar o algo viajando.
+  bool get _hayTrabajoPendiente => _acumulados.hayTrabajo;
+
+  @override
+  void dispose() {
+    _temporizador?.cancel();
+
+    /**
+     * Lo que quedó sin mandar se manda igual, sin esperar respuesta.
+     *
+     * Salir de la pantalla dos décimas después de tocar `+` es lo más normal
+     * del mundo, y perder ese toque haría que el stock que el vendedor vio no
+     * sea el que quedó guardado. El repositorio vive fuera de este widget, así
+     * que la petición sobrevive a la pantalla.
+     *
+     * El error se descarta: no hay ninguna interfaz donde mostrarlo, y la
+     * próxima vez que se abra el stock se va a ver el valor real del servidor.
+     */
+    final ultimo = _acumulados.alSalir();
+    if (ultimo != null) {
+      _repo
+          .ajustarStock(
+            productId: widget.productId,
+            variantId: widget.variante.variantId,
+            delta: ultimo,
+          )
+          .ignore();
+    }
+
+    super.dispose();
+  }
 
   @override
   void didUpdateWidget(_FilaStock anterior) {
     super.didUpdateWidget(anterior);
-    // Llegó dato nuevo del servidor: manda ese.
-    if (anterior.variante.onHand != widget.variante.onHand) _optimista = null;
+
+    /**
+     * Llegó dato nuevo del servidor: manda ese… salvo que haya toques sin
+     * mandar.
+     *
+     * Sin esa salvedad, el refresco que dispara una petición anterior pisaría
+     * los toques que la persona dio mientras esa petición viajaba, y el número
+     * saltaría hacia atrás bajo el dedo.
+     */
+    if (anterior.variante.onHand != widget.variante.onHand && !_hayTrabajoPendiente) {
+      _optimista = null;
+    }
   }
 
-  Future<void> _ajustar(int delta) async {
+  void _ajustar(int delta) {
     final destino = _mostrado + delta;
     if (destino < 0) return;
 
@@ -226,24 +314,46 @@ class _FilaStockState extends ConsumerState<_FilaStock> {
     unawaited(HapticFeedback.selectionClick());
     setState(() {
       _optimista = destino;
-      _guardando = true;
+      _acumulados.sumar(delta);
     });
 
+    _programarEnvio();
+  }
+
+  void _programarEnvio() {
+    _temporizador?.cancel();
+    _temporizador = Timer(_esperaAntesDeGuardar, _enviarPendiente);
+  }
+
+  /// Manda lo acumulado, en una sola petición.
+  Future<void> _enviarPendiente() async {
+    final delta = _acumulados.tomar();
+    if (delta == null) return;
+
     try {
-      await ref.read(inventoryRepositoryProvider).ajustarStock(
-            productId: widget.productId,
-            variantId: widget.variante.variantId,
-            delta: delta,
-          );
+      await _repo.ajustarStock(
+        productId: widget.productId,
+        variantId: widget.variante.variantId,
+        delta: delta,
+      );
+      _acumulados.confirmar();
+      if (!mounted) return;
       ref.invalidate(stockDeProductoProvider(widget.productId));
     } catch (e) {
-      if (mounted) {
-        setState(() => _optimista = null);
-        AppSnack.error(context, e.toString());
-      }
-    } finally {
-      if (mounted) setState(() => _guardando = false);
+      // El servidor rechazó el ajuste. Se vuelve a lo que él dice, se descarta
+      // lo que hubiera quedado pendiente —ver `AjustesAcumulados.fallar()`— y
+      // se avisa: la interfaz no puede quedar mostrando un número que no está
+      // guardado en ningún lado.
+      _acumulados.fallar();
+      if (!mounted) return;
+      setState(() => _optimista = null);
+      ref.invalidate(stockDeProductoProvider(widget.productId));
+      AppSnack.error(context, e.toString());
+      return;
     }
+
+    // Llegaron más toques mientras esto viajaba: van en la próxima tanda.
+    if (_acumulados.pendiente != 0 && mounted) _programarEnvio();
   }
 
   Future<void> _escribirCantidad() async {
@@ -258,9 +368,12 @@ class _FilaStockState extends ConsumerState<_FilaStock> {
     );
     if (nuevo == null || !mounted || nuevo == widget.variante.onHand) return;
 
+    // La escritura directa NO se consolida: es un valor absoluto, no un paso.
+    // Se descarta lo acumulado porque el vendedor acaba de decir cuanto hay.
+    _temporizador?.cancel();
     setState(() {
       _optimista = nuevo;
-      _guardando = true;
+      _fijando = true;
     });
 
     try {
@@ -276,7 +389,7 @@ class _FilaStockState extends ConsumerState<_FilaStock> {
         AppSnack.error(context, e.toString());
       }
     } finally {
-      if (mounted) setState(() => _guardando = false);
+      if (mounted) setState(() => _fijando = false);
     }
   }
 
@@ -335,10 +448,10 @@ class _FilaStockState extends ConsumerState<_FilaStock> {
           ),
           _BotonPaso(
             icono: Icons.remove_rounded,
-            onTap: _guardando || _mostrado <= 0 ? null : () => _ajustar(-1),
+            onTap: _fijando || _mostrado <= 0 ? null : () => _ajustar(-1),
           ),
           GestureDetector(
-            onTap: _guardando ? null : _escribirCantidad,
+            onTap: _fijando ? null : _escribirCantidad,
             child: Container(
               width: 56,
               alignment: Alignment.center,
@@ -348,14 +461,14 @@ class _FilaStockState extends ConsumerState<_FilaStock> {
                 style: TextStyle(
                   fontSize: 20,
                   fontWeight: FontWeight.w700,
-                  color: _guardando ? AppColor.textoDebil : AppColor.texto,
+                  color: _fijando ? AppColor.textoDebil : AppColor.texto,
                 ),
               ),
             ),
           ),
           _BotonPaso(
             icono: Icons.add_rounded,
-            onTap: _guardando ? null : () => _ajustar(1),
+            onTap: _fijando ? null : () => _ajustar(1),
           ),
         ],
       ),
