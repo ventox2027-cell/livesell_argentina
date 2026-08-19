@@ -267,21 +267,38 @@ class AuthRepository {
     );
   }
 
-  Future<void> cerrarSesion() async {
+  /// Le avisa al servidor que esta sesión se cierra.
+  ///
+  /// Separado de borrar los tokens locales a propósito: son dos cosas con
+  /// tiempos muy distintos —una es un viaje a Railway, la otra es escribir en
+  /// el llavero— y meterlas en la misma función obligaba a esperar la lenta
+  /// para hacer la rápida. Ver `SesionNotifier.cerrarSesion`.
+  Future<void> avisarDelCierre() async {
     final refresh = await _tokens.refreshToken();
-    if (refresh != null) {
-      try {
-        await _api.post<Map<String, dynamic>>(
-          '/auth/logout',
-          data: {'refreshToken': refresh},
-          sinAuth: true,
-        );
-      } on DioException {
-        // Si no hay red, igual se limpia local: la persona pidió salir y la
-        // app tiene que obedecer. El token de servidor vence solo.
-      }
+    if (refresh == null) return;
+
+    try {
+      await _api.post<Map<String, dynamic>>(
+        '/auth/logout',
+        data: {'refreshToken': refresh},
+        sinAuth: true,
+      );
+    } on DioException {
+      // Si no hay red, igual se cierra local: la persona pidió salir y la app
+      // tiene que obedecer. El token del servidor vence solo.
     }
-    await _tokens.limpiar();
+  }
+
+  /// Borra los tokens del teléfono.
+  ///
+  /// ⚠️ ESTO es lo que cierra la sesión de verdad del lado del dispositivo. Sin
+  /// esto, matar la app en el momento justo dejaría los tokens en el disco y el
+  /// próximo arranque restauraría la sesión que la persona pidió cerrar.
+  Future<void> limpiarLocal() => _tokens.limpiar();
+
+  Future<void> cerrarSesion() async {
+    await avisarDelCierre();
+    await limpiarLocal();
   }
 
   Future<void> cerrarTodasLasSesiones() async {

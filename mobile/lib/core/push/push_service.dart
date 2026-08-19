@@ -186,22 +186,51 @@ class PushService {
   /// Se avisa al backend ANTES de borrar el token local: si se borra primero y
   /// la red falla, no queda nada que mandar y el vínculo sobrevive.
   Future<void> desvincular() async {
-    _ultimoTokenEnviado = null;
+    await desvincularEnElServidor();
+    await olvidarEnFirebase();
+  }
 
+  /// Le dice a NUESTRO backend que este teléfono ya no es de esa cuenta.
+  ///
+  /// Es lo que evita que quien use este teléfono después reciba «tu pedido
+  /// salió» de pedidos que no son suyos. Necesita la sesión todavía viva, así
+  /// que corre ANTES de borrar los tokens.
+  Future<void> desvincularEnElServidor() async {
+    _ultimoTokenEnviado = null;
     try {
       await registrarToken?.call(null);
     } catch (e) {
-      // Sin red no se puede avisar. Se borra local igual —la persona pidió
-      // salir— y el token queda huérfano hasta que el backend lo declare
-      // muerto en el primer envío fallido.
+      // Sin red no se puede avisar. Se cierra igual —la persona pidió salir— y
+      // el token queda huérfano hasta que el backend lo declare muerto en el
+      // primer envío fallido.
       debugPrint('Push: no se pudo desvincular en el servidor. $e');
     }
+  }
 
+  /// Le pide a Firebase que tire el token de esta instalación.
+  ///
+  /// ═══════════════════════════════════════════════════════════════════════════
+  /// LO MÁS LENTO DE CERRAR SESIÓN, Y NADIE TENÍA QUE ESPERARLO
+  /// ═══════════════════════════════════════════════════════════════════════════
+  ///
+  /// `deleteToken()` sale a los servidores de Google. No es nuestra red, no es
+  /// nuestro tiempo de respuesta, y en un teléfono con señal regular tarda
+  /// segundos.
+  ///
+  /// Estaba en el medio del camino de cerrar sesión, con dos `await` de red
+  /// antes: la persona tocaba «Cerrar sesión» y miraba la pantalla unos cinco
+  /// segundos.
+  ///
+  /// No hace falta esperarlo para nada. Nuestro backend ya sabe que este
+  /// teléfono se desvinculó —eso es `desvincularEnElServidor`— así que aunque
+  /// esto falle no se manda ningún aviso. Borrar el token de Firebase es
+  /// higiene, no seguridad.
+  Future<void> olvidarEnFirebase() async {
     if (!_inicializado) return;
     try {
       await FirebaseMessaging.instance.deleteToken();
     } catch (_) {
-      // Idem: no puede impedir cerrar sesión.
+      // No puede impedir cerrar sesión.
     }
   }
 

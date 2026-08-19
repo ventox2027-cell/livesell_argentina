@@ -150,20 +150,59 @@ class SesionNotifier extends Notifier<EstadoSesion> {
     );
   }
 
+  /// Cerrar sesión.
+  ///
+  /// ═══════════════════════════════════════════════════════════════════════════
+  /// ERAN TRES OPERACIONES DE RED, UNA DETRÁS DE OTRA
+  /// ═══════════════════════════════════════════════════════════════════════════
+  ///
+  /// Medido en un teléfono: ~5 segundos mirando la pantalla después de tocar
+  /// «Cerrar sesión». El orden era éste, y todo se esperaba antes de que la UI
+  /// se moviera:
+  ///
+  ///   1. `PATCH /auth/push-token` — desvincular el teléfono. A Railway.
+  ///   2. `FirebaseMessaging.deleteToken()` — a los servidores de Google.
+  ///   3. `POST /auth/logout` — a Railway otra vez.
+  ///   4. Borrar el llavero.
+  ///   5. Recién ahí, salir.
+  ///
+  /// ═══════════════════════════════════════════════════════════════════════════
+  /// QUÉ SE PUEDE MOVER Y QUÉ NO
+  /// ═══════════════════════════════════════════════════════════════════════════
+  ///
+  /// El paso 2 no lo espera nadie más: borrar el token de Firebase es higiene,
+  /// no seguridad. Nuestro backend ya sabe que este teléfono se desvinculó por
+  /// el paso 1, así que aunque falle no se manda ningún aviso. Se va al fondo.
+  ///
+  /// Los pasos 1 y 3 son independientes entre sí. Estaban en fila por costumbre
+  /// y ahora salen juntos.
+  ///
+  /// ⚠️ Lo que NO se mueve: el paso 1 tiene que correr con la sesión viva —el
+  /// `PATCH` necesita el token—, y el paso 4 tiene que correr ANTES de que la
+  /// pantalla cambie. Si la app muere entre salir y borrar el llavero, el
+  /// próximo arranque restaura la sesión que la persona acaba de cerrar.
+  ///
+  /// Por eso esto sigue esperando un viaje de red y no cero. Lo que se saca son
+  /// los otros dos.
   Future<void> cerrarSesion() async {
+    unawaited(PushService.instance.olvidarEnFirebase());
+
     /**
-     * El token se desvincula ANTES de cerrar la sesión.
+     * ⚠️ Nada de lo de arriba puede impedir salir.
      *
-     * Después ya no hay con qué autenticar el `PATCH`, y el dispositivo
-     * quedaría asociado a la cuenta anterior: quien entre después en este
-     * teléfono recibiría «tu pedido salió» de pedidos que no son suyos.
+     * `avisarDelCierre` sólo atrapa errores de Dio; cualquier otra cosa —un
+     * fallo al leer el llavero, un timeout raro— subiría por `Future.wait` y
+     * dejaría `limpiarLocal()` sin ejecutar. O sea: la persona toca «Cerrar
+     * sesión», ve un error, y sigue adentro con los tokens intactos.
      *
-     * Si falla —sin red— se cierra igual. La persona pidió salir y la app
-     * obedece; el token queda huérfano hasta que el backend lo declare muerto
-     * en el primer envío fallido, que es un mecanismo que ya existe.
+     * Cerrar sesión es una orden, no una operación que pueda negociar.
      */
-    await PushService.instance.desvincular();
-    await _repo.cerrarSesion();
+    await Future.wait([
+      PushService.instance.desvincularEnElServidor(),
+      _repo.avisarDelCierre().catchError((_) {}),
+    ]);
+
+    await _repo.limpiarLocal();
     state = const SinSesion();
   }
 
