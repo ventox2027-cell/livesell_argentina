@@ -117,12 +117,58 @@ class _SinVendedorState extends ConsumerState<_SinVendedor> {
     setState(() => _creando = true);
     try {
       await ref.read(sellerRepositoryProvider).crearVendedor(displayName: nombre);
-      // La sesión se refresca también: el rol del usuario pasó a `seller` en la
-      // base y la app lo lee de ahí para habilitar pantallas. Sin esto, el
-      // vendedor recién creado seguiría viendo "Quiero vender" hasta reabrir.
-      await ref.read(sesionProvider.notifier).restaurar();
+      if (!mounted) return;
+
+      /**
+       * ═══════════════════════════════════════════════════════════════════════
+       * PRIMERO EL PERFIL, Y SIN ESPERAR A NADA MÁS
+       * ═══════════════════════════════════════════════════════════════════════
+       *
+       * Esta línea es lo único que hace cambiar la pantalla. Todo lo que venga
+       * después es mejora; esto es la diferencia entre ver tu tienda y seguir
+       * viendo el formulario que acabás de completar.
+       *
+       * Antes iba DESPUÉS de `await restaurar()`, y esa espera es un segundo
+       * viaje a la red que puede fallar solo: un arranque en frío, latencia
+       * alta, un corte de un segundo. Cuando fallaba, la excepción saltaba
+       * acá y el refresco **nunca ocurría**.
+       *
+       * El resultado era el peor modo de falla que puede tener esta pantalla:
+       * la tienda quedaba creada en la base, y la persona seguía viendo
+       * «Empezá a vender». Si volvía a tocar el botón, recién ahí recibía un
+       * error diciendo que ya tiene una tienda — que no puede ver por ningún
+       * lado. La conclusión razonable es que la app no funciona.
+       *
+       * Ahora el refresco va primero y no depende de que nada más salga bien.
+       */
       ref.invalidate(miPerfilVendedorProvider);
-      if (mounted) AppSnack.exito(context, '¡Listo! Ya podés cargar productos.');
+
+      /**
+       * Y la sesión se refresca aparte, sin `await` y sin poder romper nada.
+       *
+       * El rol del usuario pasó a `seller` en la base y la app lo lee de ahí
+       * para habilitar el resto de las pantallas. Importa, pero no para ESTA:
+       * si falla, se corrige sola la próxima vez que la app pregunte quién es.
+       *
+       * El notifier vive en el contenedor de Riverpod, no en este widget, así
+       * que sigue existiendo aunque la pantalla ya se haya reemplazado por el
+       * panel de la tienda —que es justamente lo que acaba de pasar—.
+       *
+       * ⚠️ El error se descarta EXPLÍCITAMENTE y no con un `unawaited` pelado.
+       * Un `Future` sin await que lanza termina en el manejador de errores de
+       * la zona: un rojo en producción por algo que ya está resuelto, y en los
+       * tests una falla en el caso de al lado. Que no importe hay que decirlo,
+       * no dejarlo implícito.
+       */
+      unawaited(
+        ref.read(sesionProvider.notifier).restaurar().catchError((Object _) {
+          // Sin red para refrescar el rol. La tienda ya está creada y la
+          // pantalla ya cambió; el rol se pone al día solo en el próximo
+          // arranque o en la próxima llamada a `/auth/me`.
+        }),
+      );
+
+      AppSnack.exito(context, '¡Listo! Ya podés cargar productos.');
     } on ComercioException catch (e) {
       if (!mounted) return;
 

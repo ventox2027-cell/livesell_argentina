@@ -1322,3 +1322,268 @@ describe('Compartir', () => {
     expect(r.status).toBe(400);
   });
 });
+
+/**
+ * Crear la tienda, exactamente como lo hace la app.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * POR QUÉ ESTE ARCHIVO REPITE PASOS QUE YA ESTABAN PROBADOS
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * `nuevoVendedor()` acá arriba crea vendedores todo el tiempo y funciona. Pero
+ * primero declara la fecha de nacimiento y después crea la tienda, porque es lo
+ * que le conviene al test.
+ *
+ * La app hace lo contrario: alguien entra con Google, toca «Quiero vender» y
+ * escribe el nombre de su tienda **sin haber declarado nada**. Ese orden —el
+ * real— nunca estaba cubierto.
+ *
+ * Y es el único orden que existe en una base limpia: ahí no hay una sola
+ * persona con la fecha ya cargada.
+ */
+describe('Alta de tienda — el recorrido de la app', () => {
+  /** Un usuario recién llegado por Google: sin fecha de nacimiento. */
+  async function reciénLlegado() {
+    n += 1;
+    const r = await call('POST', '/api/v1/auth/dev', {
+      body: {
+        email: `alta${n}-${Date.now()}@test.com`,
+        firstName: 'Recién',
+        lastName: `Llegado${n}`,
+        device: {
+          installId: `install-alta-${n}-${Date.now()}`,
+          platform: 'android',
+          appVersion: '1.0.0',
+          osVersion: '14',
+        },
+      },
+    });
+    expect([200, 201], JSON.stringify(r.body)).toContain(r.status);
+    return { token: r.body.accessToken as string, userId: r.body.user.id as string };
+  }
+
+  it('crear la tienda y pedirla enseguida devuelve esa tienda', async () => {
+    const u = await reciénLlegado();
+    await call('PATCH', '/api/v1/auth/me', {
+      token: u.token,
+      body: { birthDate: NACIMIENTO_ADULTO_ISO },
+    });
+
+    const creada = await call('POST', '/api/v1/sellers', {
+      token: u.token,
+      body: { displayName: 'Tejidos del Sur' },
+    });
+    expect(creada.status, JSON.stringify(creada.body)).toBe(201);
+
+    // Exactamente lo que hace la app después: volver a preguntar.
+    const perfil = await call('GET', '/api/v1/sellers/me', { token: u.token });
+
+    expect(perfil.status, JSON.stringify(perfil.body)).toBe(200);
+    expect(perfil.body.seller.id).toBe(creada.body.seller.id);
+    expect(perfil.body.store.id).toBe(creada.body.store.id);
+    expect(perfil.body.store.name).toBe('Tejidos del Sur');
+  });
+
+  it('la tienda queda relacionada con ESE usuario en la base', async () => {
+    const u = await reciénLlegado();
+    await call('PATCH', '/api/v1/auth/me', {
+      token: u.token,
+      body: { birthDate: NACIMIENTO_ADULTO_ISO },
+    });
+    const creada = await call('POST', '/api/v1/sellers', {
+      token: u.token,
+      body: { displayName: 'Relación correcta' },
+    });
+
+    const seller = await prisma.seller.findUniqueOrThrow({
+      where: { id: creada.body.seller.id as string },
+    });
+    const store = await prisma.store.findUniqueOrThrow({
+      where: { id: creada.body.store.id as string },
+    });
+
+    expect(seller.userId).toBe(u.userId);
+    expect(store.sellerId).toBe(seller.id);
+    expect(store.isPrimary).toBe(true);
+    expect(seller.deletedAt ?? null).toBeNull();
+  });
+
+  it('el usuario pasa a seller y /auth/me lo dice', async () => {
+    const u = await reciénLlegado();
+    await call('PATCH', '/api/v1/auth/me', {
+      token: u.token,
+      body: { birthDate: NACIMIENTO_ADULTO_ISO },
+    });
+    await call('POST', '/api/v1/sellers', {
+      token: u.token,
+      body: { displayName: 'Rol nuevo' },
+    });
+
+    // La app llama a esto —`restaurar()`— justo después de crear.
+    const yo = await call('GET', '/api/v1/auth/me', { token: u.token });
+
+    expect(yo.status, JSON.stringify(yo.body)).toBe(200);
+    expect(yo.body.role).toBe('seller');
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: u.userId } })).role).toBe('seller');
+  });
+
+  it('`GET /stores/me` también encuentra la tienda recién creada', async () => {
+    const u = await reciénLlegado();
+    await call('PATCH', '/api/v1/auth/me', {
+      token: u.token,
+      body: { birthDate: NACIMIENTO_ADULTO_ISO },
+    });
+    const creada = await call('POST', '/api/v1/sellers', {
+      token: u.token,
+      body: { displayName: 'Mi tienda directa' },
+    });
+
+    const tienda = await call('GET', '/api/v1/stores/me', { token: u.token });
+
+    expect(tienda.status, JSON.stringify(tienda.body)).toBe(200);
+    expect(tienda.body.id).toBe(creada.body.store.id);
+  });
+
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * EL RECORRIDO QUE SÓLO EXISTE EN UNA BASE LIMPIA
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * Alguien que acaba de entrar con Google NO tiene fecha de nacimiento, y
+   * vender en VendoX es 18+. El backend lo rechaza con `BIRTH_DATE_REQUIRED`,
+   * la app abre la hoja de fecha y reintenta sola.
+   *
+   * En una base con historia esto casi no se ve: quien prueba ya declaró la
+   * fecha hace semanas. En una base limpia es el ÚNICO recorrido posible, y por
+   * eso es el que hay que tener cubierto.
+   */
+  it('⛔ sin fecha de nacimiento el alta se rechaza con un código accionable', async () => {
+    const u = await reciénLlegado();
+
+    const r = await call('POST', '/api/v1/sellers', {
+      token: u.token,
+      body: { displayName: 'Sin fecha' },
+    });
+
+    expect(r.status).toBe(422);
+    // La app se apoya en este código exacto para abrir la hoja y reintentar.
+    expect(r.body.error.code).toBe('BIRTH_DATE_REQUIRED');
+
+    // Y no dejó nada a medias.
+    expect(await prisma.seller.count({ where: { userId: u.userId } })).toBe(0);
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: u.userId } })).role).toBe('buyer');
+  });
+
+  it('declarar la fecha y reintentar completa el alta', async () => {
+    const u = await reciénLlegado();
+
+    const primero = await call('POST', '/api/v1/sellers', {
+      token: u.token,
+      body: { displayName: 'Reintento' },
+    });
+    expect(primero.body.error.code).toBe('BIRTH_DATE_REQUIRED');
+
+    await call('PATCH', '/api/v1/auth/me', {
+      token: u.token,
+      body: { birthDate: NACIMIENTO_ADULTO_ISO },
+    });
+
+    const segundo = await call('POST', '/api/v1/sellers', {
+      token: u.token,
+      body: { displayName: 'Reintento' },
+    });
+    expect(segundo.status, JSON.stringify(segundo.body)).toBe(201);
+
+    const perfil = await call('GET', '/api/v1/sellers/me', { token: u.token });
+    expect(perfil.status).toBe(200);
+    expect(perfil.body.store.name).toBe('Reintento');
+  });
+
+  /**
+   * Crear dos veces no crea dos tiendas. El código tiene que ser reconocible:
+   * la app lo va a usar para mandar a la pantalla de la tienda en vez de
+   * mostrar un error rojo por algo que ya está hecho.
+   */
+  it('⛔ crear dos veces devuelve SELLER_EXISTS y no duplica', async () => {
+    const u = await reciénLlegado();
+    await call('PATCH', '/api/v1/auth/me', {
+      token: u.token,
+      body: { birthDate: NACIMIENTO_ADULTO_ISO },
+    });
+
+    const primera = await call('POST', '/api/v1/sellers', {
+      token: u.token,
+      body: { displayName: 'Una sola vez' },
+    });
+    expect(primera.status).toBe(201);
+
+    const segunda = await call('POST', '/api/v1/sellers', {
+      token: u.token,
+      body: { displayName: 'Una sola vez' },
+    });
+
+    expect(segunda.status).toBe(409);
+    expect(segunda.body.error.code).toBe('SELLER_EXISTS');
+    expect(await prisma.seller.count({ where: { userId: u.userId } })).toBe(1);
+    expect(await prisma.store.count({ where: { sellerId: primera.body.seller.id as string } })).toBe(1);
+  });
+
+  /**
+   * Dos nombres iguales de dos personas distintas no pueden chocar. El slug se
+   * deriva del nombre y tiene índice único: si el alta no lo resolviera, la
+   * segunda persona que quiera llamarse «Tejidos del Sur» no podría vender.
+   */
+  it('dos tiendas con el mismo nombre conviven', async () => {
+    const a = await reciénLlegado();
+    const b = await reciénLlegado();
+    for (const u of [a, b]) {
+      await call('PATCH', '/api/v1/auth/me', {
+        token: u.token,
+        body: { birthDate: NACIMIENTO_ADULTO_ISO },
+      });
+    }
+
+    const uno = await call('POST', '/api/v1/sellers', {
+      token: a.token,
+      body: { displayName: 'Nombre Repetido' },
+    });
+    const otro = await call('POST', '/api/v1/sellers', {
+      token: b.token,
+      body: { displayName: 'Nombre Repetido' },
+    });
+
+    expect(uno.status, JSON.stringify(uno.body)).toBe(201);
+    expect(otro.status, JSON.stringify(otro.body)).toBe(201);
+    expect(otro.body.seller.slug).not.toBe(uno.body.seller.slug);
+
+    // Y cada uno ve la suya.
+    const perfilA = await call('GET', '/api/v1/sellers/me', { token: a.token });
+    const perfilB = await call('GET', '/api/v1/sellers/me', { token: b.token });
+    expect(perfilA.body.seller.id).toBe(uno.body.seller.id);
+    expect(perfilB.body.seller.id).toBe(otro.body.seller.id);
+  });
+
+  /**
+   * La forma de la respuesta del alta tiene que servirle a la app para armar el
+   * perfil sin volver a pedirlo. Si `POST /sellers` devolviera algo distinto de
+   * lo que `GET /sellers/me` devuelve, la pantalla mostraría datos a medias en
+   * el instante siguiente a crear.
+   */
+  it('la respuesta del alta trae seller y store completos', async () => {
+    const u = await reciénLlegado();
+    await call('PATCH', '/api/v1/auth/me', {
+      token: u.token,
+      body: { birthDate: NACIMIENTO_ADULTO_ISO },
+    });
+
+    const creada = await call('POST', '/api/v1/sellers', {
+      token: u.token,
+      body: { displayName: 'Forma completa' },
+    });
+
+    expect(creada.body.seller).toMatchObject({ displayName: 'Forma completa' });
+    expect(typeof creada.body.seller.slug).toBe('string');
+    expect(creada.body.store).toMatchObject({ name: 'Forma completa', isPrimary: true });
+    expect(typeof creada.body.store.slug).toBe('string');
+  });
+});

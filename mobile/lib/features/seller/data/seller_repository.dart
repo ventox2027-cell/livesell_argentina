@@ -21,10 +21,36 @@ class SellerRepository {
 
   // ─── Vendedor ─────────────────────────────────────────────────────────────
 
-  /// Perfil propio. `null` si el usuario todavía no es vendedor.
+  /// El perfil de vendedor, o `null` si esta persona todavía no lo es.
+  ///
+  /// ═══════════════════════════════════════════════════════════════════════════
+  /// `null` SIGNIFICA UNA SOLA COSA, Y NO ES «CUALQUIER 404»
+  /// ═══════════════════════════════════════════════════════════════════════════
+  ///
+  /// Acá decía `if (res.statusCode == 404) return null;` y eso metía en la
+  /// misma bolsa dos respuestas muy distintas:
+  ///
+  ///   · `SELLER_NOT_FOUND` — «todavía no tenés perfil de vendedor». Es la
+  ///     respuesta correcta y la que hace que la app ofrezca crear la tienda.
+  ///   · Cualquier otro 404 — una ruta que el servidor no sirve, una función
+  ///     apagada, un 404 del borde antes de llegar a la aplicación.
+  ///
+  /// El segundo caso quedaba traducido a «no tenés tienda», y la pantalla le
+  /// ofrecía crear una que ya existe. Es el peor modo de falla posible: sin
+  /// error, sin log, y con la persona convencida de que su tienda se perdió.
+  ///
+  /// Ahora sólo el código del dominio significa «no sos vendedor». Todo lo
+  /// demás es un error de verdad y se muestra como tal, con su botón de
+  /// reintentar.
   Future<PerfilVendedor?> miPerfil() async {
     final res = await _api.get<Map<String, dynamic>>('/sellers/me');
-    if (res.statusCode == 404) return null;
+
+    if (res.statusCode == 404) {
+      final e = _error(res);
+      if (e.codigo == 'SELLER_NOT_FOUND') return null;
+      throw e;
+    }
+
     if (res.statusCode != 200 || res.data == null) throw _error(res);
     return PerfilVendedor.fromJson(res.data!);
   }
