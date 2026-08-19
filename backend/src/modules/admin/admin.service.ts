@@ -6,6 +6,7 @@ import { AuditService } from '@/shared/audit/audit.service';
 import { urlPublicaDe } from '@/shared/storage/url-publica';
 import { DomainError } from '@/shared/errors/domain.error';
 import { PrismaService } from '@/shared/prisma/prisma.service';
+import { ventasConfirmadasDe } from '@/modules/sellers/volumen';
 
 import { AdminMetrics } from './admin.metrics';
 import {
@@ -320,9 +321,19 @@ export class AdminService {
        * Sumar órdenes en cualquier estado inflaría el número con carritos
        * abandonados y pagos rechazados. Para juzgar a un vendedor —que es para
        * lo que se mira esto— sólo cuenta lo que efectivamente se vendió.
+       *
+       * Qué es «vendido» lo decide `volumen.ts`, que es el único lugar donde
+       * está escrita esa lista. Antes estaba acá copiada a mano, igual que en
+       * `risk.service.ts`: agregar un estado al ciclo de vida obligaba a
+       * acordarse de los dos.
+       *
+       * ⚠️ Se sigue sumando `grossAmount` y no la base de comisión. Son
+       * preguntas distintas: acá el admin quiere saber cuánta plata movió este
+       * vendedor —envío incluido—, no sobre cuánto se le cobra comisión.
+       * Cambiarlo movería un número que el admin ya viene mirando.
        */
       this.prisma.order.aggregate({
-        where: { sellerId: id, status: { in: ['CONFIRMED', 'PREPARING', 'READY_TO_SHIP', 'SHIPPED', 'DELIVERED'] } },
+        where: ventasConfirmadasDe(id),
         _count: true,
         _sum: { grossAmount: true, sellerNetAmount: true },
       }),

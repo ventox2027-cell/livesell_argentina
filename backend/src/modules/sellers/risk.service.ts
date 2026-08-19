@@ -4,6 +4,7 @@ import { env } from '@/config/env.schema';
 import { PrismaService } from '@/shared/prisma/prisma.service';
 
 import { evaluarRiesgo, type NivelDeRiesgo, type SenalesDeRiesgo } from './risk.rules';
+import { ventasConfirmadasDe } from './volumen';
 
 /**
  * Mide las señales y aplica las reglas.
@@ -139,12 +140,12 @@ export class RiskService {
       brutoSemanaAnterior,
       documentoDuplicado,
     ] = await Promise.all([
-      this.prisma.order.count({
-        where: {
-          sellerId,
-          status: { in: ['CONFIRMED', 'PREPARING', 'READY_TO_SHIP', 'SHIPPED', 'DELIVERED'] },
-        },
-      }),
+      /**
+       * Qué cuenta como venta lo decide `volumen.ts`. Antes esta lista estaba
+       * escrita a mano acá y otra igual en `admin.service.ts`, sin que nada
+       * garantizara que siguieran coincidiendo.
+       */
+      this.prisma.order.count({ where: ventasConfirmadasDe(sellerId) }),
       this.prisma.order.count({
         where: { sellerId, status: 'CANCELLED', cancelledAt: { gte: hace30 } },
       }),
