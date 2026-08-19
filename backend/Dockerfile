@@ -119,6 +119,8 @@ COPY --from=build --chown=app:app /app/node_modules ./node_modules
 COPY --from=build --chown=app:app /app/dist ./dist
 COPY --from=build --chown=app:app /app/prisma ./prisma
 COPY --from=build --chown=app:app /app/package.json ./package.json
+COPY --chown=app:app scripts/arrancar.sh ./scripts/arrancar.sh
+RUN chmod +x ./scripts/arrancar.sh
 
 USER app
 
@@ -138,4 +140,17 @@ EXPOSE 3000
 #
 # El apagado ordenado está en `src/shutdown.ts`: drena, cierra Prisma y Redis,
 # detiene los reconciliadores y devuelve los jobs tomados.
-CMD ["node", "dist/main.js"]
+#
+# ─── Y por qué entonces el CMD es un script de shell ───
+#
+# Porque `arrancar.sh` termina con `exec node dist/main.js`. `exec` REEMPLAZA el
+# proceso del shell por Node en vez de dejarlo como padre, así que Node vuelve a
+# ser el PID 1 y recibe SIGTERM directo. Todo lo de arriba sigue valiendo.
+#
+# Sin ese `exec`, el shell quedaría de PID 1 sin reenviar señales — el caso que
+# el comentario describe.
+#
+# El script aplica las migraciones pendientes antes de servir. Vive en la imagen
+# y no en un campo de texto del proveedor: uno se lee en un diff y se prueba, el
+# otro no. Ver la nota de `scripts/arrancar.sh`.
+CMD ["./scripts/arrancar.sh"]
