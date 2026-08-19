@@ -10,6 +10,7 @@ import '../../../core/network/errores_de_red.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../inventory/data/inventory_repository.dart';
 import '../../inventory/presentation/stock_screen.dart';
+import '../data/borrados_en_curso.dart';
 import '../data/categorias_api.dart';
 import '../data/tasas_api.dart';
 import '../data/seller_repository.dart';
@@ -581,12 +582,26 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
     );
     if (confirma != true || !mounted) return;
 
-    try {
-      await ref.read(sellerRepositoryProvider).borrarProducto(p.id);
-      if (mounted) Navigator.of(context).pop(true);
-    } catch (e) {
-      if (mounted) await _mostrarError(e);
-    }
+    /**
+     * ═══════════════════════════════════════════════════════════════════════
+     * SE CIERRA PRIMERO, SE BORRA DESPUÉS
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * Acá había un `await borrarProducto(...)` antes del `pop`. Medido en un
+     * teléfono, eso eran unos cuatro segundos con el editor abierto, el
+     * producto a la vista y el botón que ya se tocó — la lectura natural es
+     * que no funcionó, y el segundo toque es lo que sigue.
+     *
+     * Ahora la pantalla se va en el mismo frame y el borrado viaja por atrás,
+     * en un servicio que sobrevive a este `State`. Si falla, el producto
+     * reaparece en Mi tienda con su explicación; ver `BorradoDeProductos`.
+     *
+     * ⚠️ No se espera el `Future`, a propósito. Esperarlo acá no serviría de
+     * nada: para cuando conteste, este `context` ya no existe.
+     */
+    Navigator.of(context).pop(false);
+
+    ref.read(borradosEnCursoProvider.notifier).borrar(id: p.id, nombre: p.name).ignore();
   }
 }
 

@@ -94,6 +94,24 @@ String mensajeDeError(Object e) {
   }
 
   /**
+   * ⚠️ Un `Error` de Dart NUNCA se muestra, diga lo que diga.
+   *
+   * `Error` y `Exception` no son lo mismo: `Exception` es algo previsto que
+   * pasó, `Error` es un defecto del programa. `StateError`, `RangeError`,
+   * `TypeError`.
+   *
+   * La comprobación por texto de más abajo no alcanza para estos, y el caso
+   * que lo demostró es feo: `StateError('Connection closed before full header
+   * was received')` se convierte en «Bad state: Connection closed before full
+   * header was received». No dice «Exception», no dice «errno», no dice nada
+   * que una lista de marcas pueda atrapar — y le aparece entero a la persona.
+   *
+   * El tipo lo resuelve de raíz: el texto de un `Error` está escrito para
+   * quien programa, siempre.
+   */
+  if (e is Error) return 'No pudimos completar la operación. Probá de nuevo.';
+
+  /**
    * Cualquier otra cosa.
    *
    * Se usa `toString()` sólo si el mensaje NO parece técnico. Las excepciones

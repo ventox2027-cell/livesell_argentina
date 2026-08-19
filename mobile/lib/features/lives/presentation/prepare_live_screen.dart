@@ -148,7 +148,9 @@ class _PrepareLiveScreenState extends ConsumerState<PrepareLiveScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final productos = ref.watch(misProductosProvider);
+    // El listado visible: un producto que se está borrando no puede ofrecerse
+    // para destacar en el vivo.
+    final productos = ref.watch(misProductosVisiblesProvider);
 
     return Scaffold(
       backgroundColor: Colors.black,

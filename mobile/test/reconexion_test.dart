@@ -479,6 +479,31 @@ void main() {
     test('un mensaje de dominio se muestra tal cual', () {
       expect(mensajeDeError(_ErrorDeDominio()), 'No te alcanza el stock.');
     });
+
+    /// ⛔ UN `Error` DE DART NO SE MUESTRA, DIGA LO QUE DIGA.
+    ///
+    /// Lo encontró el test del borrado optimista, no éste: «Bad state:
+    /// Connection closed before full header was received» no contiene ninguna
+    /// de las marcas que busca la heurística —ni «Exception», ni «errno», ni
+    /// «Error:»— y salía entero a la pantalla.
+    ///
+    /// La lista de marcas nunca va a estar completa. El tipo sí: el texto de un
+    /// `Error` está escrito para quien programa.
+    test('⛔ un Error de Dart no llega a la pantalla aunque su texto parezca inocente', () {
+      final casos = <Object>[
+        StateError('Connection closed before full header was received'),
+        ArgumentError('id'),
+        RangeError('index'),
+      ];
+
+      for (final caso in casos) {
+        expect(
+          mensajeDeError(caso),
+          'No pudimos completar la operación. Probá de nuevo.',
+          reason: '$caso se filtró a la pantalla',
+        );
+      }
+    });
   });
 
   group('Qué cuenta como fallo de red', () {

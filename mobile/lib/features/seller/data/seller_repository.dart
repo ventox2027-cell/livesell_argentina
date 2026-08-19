@@ -7,7 +7,9 @@ import 'package:http_parser/http_parser.dart';
 import '../../../core/network/api_client.dart';
 import '../../auth/domain/session.dart';
 import '../../auth/state/auth_providers.dart';
+import '../domain/borrado_optimista.dart';
 import '../domain/seller_models.dart';
+import 'borrados_en_curso.dart';
 
 /// Cliente del bloque comercial.
 ///
@@ -475,7 +477,51 @@ final miPerfilVendedorProvider =
   PerfilVendedorNotifier.new,
 );
 
-final misProductosProvider = FutureProvider<Pagina<Producto>>((ref) async {
-  ref.watch(miPerfilVendedorProvider);
-  return ref.watch(sellerRepositoryProvider).misProductos();
+/// El listado de productos tal como lo devolvió el servidor.
+///
+/// ⚠️ Las pantallas NO observan esto: observan [misProductosVisiblesProvider],
+/// que además esconde lo que se está borrando. Acá vive la verdad del servidor,
+/// sin retoques.
+///
+/// Es un `AsyncNotifier` y no un `FutureProvider` por [reconciliar]: hace falta
+/// poder volver a pedir el listado **sin** dejarlo en `loading`. Con
+/// `ref.invalidate` la pantalla muestra su spinner de cuerpo entero, y para un
+/// refresco de fondo eso es un parpadeo que borra lo que la persona está
+/// mirando.
+class MisProductosNotifier extends AsyncNotifier<Pagina<Producto>> {
+  @override
+  Future<Pagina<Producto>> build() async {
+    ref.watch(miPerfilVendedorProvider);
+    return ref.watch(sellerRepositoryProvider).misProductos();
+  }
+
+  /// Vuelve a pedir el listado sin borrar lo que ya se ve.
+  ///
+  /// Si falla, se conserva lo anterior: un refresco de cortesía que no llegó no
+  /// puede vaciar la pantalla.
+  Future<void> reconciliar() async {
+    final anterior = state.valueOrNull;
+    final nuevo = await AsyncValue.guard(
+      () => ref.read(sellerRepositoryProvider).misProductos(),
+    );
+
+    if (nuevo.hasError && anterior != null) return;
+    state = nuevo;
+  }
+}
+
+final misProductosProvider =
+    AsyncNotifierProvider<MisProductosNotifier, Pagina<Producto>>(
+  MisProductosNotifier.new,
+);
+
+/// El listado como lo ve el vendedor.
+///
+/// Es lo que observan las pantallas. La resta de los que se están borrando es
+/// pura —ver `sinLosQueSeBorran`— así que esconder una fila no cuesta ninguna
+/// petición: es el mismo dato del servidor, filtrado.
+final misProductosVisiblesProvider = Provider<AsyncValue<Pagina<Producto>>>((ref) {
+  final pagina = ref.watch(misProductosProvider);
+  final borrados = ref.watch(borradosEnCursoProvider);
+  return pagina.whenData((p) => sinLosQueSeBorran(p, borrados));
 });

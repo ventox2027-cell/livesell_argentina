@@ -15,6 +15,7 @@ import '../../auth/state/auth_providers.dart';
 import '../../lives/data/broadcaster_api.dart';
 import '../../lives/presentation/prepare_live_screen.dart';
 import '../../orders/presentation/seller_orders_screen.dart';
+import '../data/borrados_en_curso.dart';
 import '../data/seller_repository.dart';
 import '../domain/seller_models.dart';
 import 'interesados_screen.dart';
@@ -377,8 +378,37 @@ class _Panel extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final productos = ref.watch(misProductosProvider);
+    /**
+     * ⚠️ El listado VISIBLE, no el del servidor.
+     *
+     * La diferencia son los productos que se están borrando: desaparecen de la
+     * pantalla apenas se confirma, sin esperar al `DELETE`. Ver
+     * `borrado_optimista.dart`.
+     */
+    final productos = ref.watch(misProductosVisiblesProvider);
     final aviso = perfil.seller.avisoDeEstado;
+
+    /**
+     * ═══════════════════════════════════════════════════════════════════════
+     * QUIEN AVISA QUE UN BORRADO FALLÓ ES ESTA PANTALLA
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * El editor ya se cerró cuando llega la respuesta, así que no puede avisar
+     * nada. Y sin aviso, un borrado fallido se ve como un producto que
+     * desaparece y vuelve solo — que es peor que no haberlo escondido.
+     *
+     * Se nombra el producto: «Volvió a aparecer X» le dice a la persona qué
+     * mirar. «Algo falló» no.
+     */
+    ref.listen(borradosEnCursoProvider.select((s) => s.fallo), (_, fallo) {
+      if (fallo == null) return;
+      AppSnack.error(
+        context,
+        'No pudimos borrar «${fallo.nombre}». Volvió a tu tienda. '
+        '${mensajeDeError(fallo.error)}',
+      );
+      ref.read(borradosEnCursoProvider.notifier).reconocerFallo();
+    });
 
     return RefreshIndicator(
       onRefresh: () async {
