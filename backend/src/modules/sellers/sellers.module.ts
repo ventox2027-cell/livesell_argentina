@@ -9,6 +9,7 @@ import {
   TaxVerificationProvider,
 } from './identity.provider';
 import { LimiteDeCatalogo } from './limite-de-catalogo';
+import { TasaDeComision } from './tasa-de-comision.service';
 import { MembresiasController } from './membresias.controller';
 import { MembresiasService } from './membresias.service';
 import { RiskService } from './risk.service';
@@ -35,6 +36,7 @@ import { VerificationService } from './verification.service';
     RiskService,
     MembresiasService,
     LimiteDeCatalogo,
+    TasaDeComision,
     AuditService,
     { provide: IdentityVerificationProvider, useClass: ManualIdentityProvider },
     { provide: TaxVerificationProvider, useClass: ManualTaxProvider },
@@ -44,6 +46,6 @@ import { VerificationService } from './verification.service';
    * cupones, métricas, y cualquier cosa que sea Pro. Que la respuesta salga de
    * un solo lugar es lo que evita que dos módulos definan "ser Pro" distinto.
    */
-  exports: [VerificationService, RiskService, MembresiasService, LimiteDeCatalogo],
+  exports: [VerificationService, RiskService, MembresiasService, LimiteDeCatalogo, TasaDeComision],
 })
 export class SellersModule {}

@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common';
 import { CommerceModule } from '@/modules/commerce/commerce.module';
 import { InventoryModule } from '@/modules/inventory/inventory.module';
 import { SellerOAuthModule } from '@/modules/payments/seller-oauth.module';
+import { SellersModule } from '@/modules/sellers/sellers.module';
 import { MercadoPagoService } from '@/modules/payments/mp.client';
 import { AuditService } from '@/shared/audit/audit.service';
 import { DomainEventBus } from '@/shared/events/domain-events';
@@ -41,7 +42,7 @@ import { OrdersWebhookService } from './webhook.service';
   // `SellerOAuthModule` para poder cobrar en la cuenta del vendedor. La
   // dirección de la flecha importa: órdenes conoce la conexión de pago, nunca
   // al revés.
-  imports: [CommerceModule, InventoryModule, SellerOAuthModule],
+  imports: [CommerceModule, InventoryModule, SellerOAuthModule, SellersModule],
   controllers: [OrdersController, OrdersWebhookController, CheckoutPageController],
   providers: [
     OrdersService,

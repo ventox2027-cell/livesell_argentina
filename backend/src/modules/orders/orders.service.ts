@@ -12,6 +12,7 @@ import { DomainEvent, DomainEventBus } from '@/shared/events/domain-events';
 import { leerLlave } from '@/shared/crypto/secretos';
 import { MetricsService } from '@/shared/observability/metrics.service';
 import { SellerOAuthService } from '@/modules/payments/seller-oauth.service';
+import { TasaDeComision } from '@/modules/sellers/tasa-de-comision.service';
 import { exigirMayoriaDeEdad } from '@/modules/users/edad';
 import { PrismaService } from '@/shared/prisma/prisma.service';
 import { newId } from '@/shared/utils/id';
@@ -145,6 +146,7 @@ export class OrdersService {
     private readonly metrics: MetricsService,
     private readonly sellerOAuth: SellerOAuthService,
     private readonly cupones: CuponesService,
+    private readonly tasaDeComision: TasaDeComision,
   ) {}
 
   /**
@@ -411,6 +413,28 @@ export class OrdersService {
     });
 
     /**
+     * La comisión de ESTE vendedor, resuelta una sola vez.
+     *
+     * ═══════════════════════════════════════════════════════════════════════
+     * SE CALCULA ACÁ Y SE CONGELA EN LA ORDEN
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * Business puede tener una tasa más baja según su volumen de las últimas
+     * cuatro semanas. Como la ventana es móvil, la misma consulta mañana da
+     * otro número — por eso el resultado se guarda en la orden y no se vuelve a
+     * mirar nunca, igual que `platformFeeBps` desde siempre.
+     *
+     * Se resuelve UNA vez y se usa en los dos caminos de precio —con cupón y
+     * sin cupón—. Consultarlo dos veces abriría la puerta a que una orden se
+     * calcule con una tasa y se guarde con otra.
+     *
+     * `evaluadaEl` se fija acá, antes de la transacción, para que la ventana
+     * medida y la que se registra sean exactamente la misma.
+     */
+    const evaluadaEl = new Date();
+    const tasa = await this.tasaDeComision.para(tienda.seller.id, evaluadaEl);
+
+    /**
      * El precio SIN cupón.
      *
      * El descuento no se puede calcular todavía: tomar el cupo de un cupón es
@@ -426,7 +450,7 @@ export class OrdersService {
       // mostrar una línea por concepto. Meterlo adentro del envío haría que el
       // comprador viera "Envío $4.200" cuando el vendedor cobra $3.500.
       processorSurchargeAmount: recargo,
-      platformFeeBps: env.VENDOX_PLATFORM_FEE_BPS,
+      platformFeeBps: tasa.bps,
     });
 
     const orderId = newId('ord');
@@ -475,7 +499,7 @@ export class OrdersService {
               shippingAmount: envio,
               processorSurchargeAmount: recargo,
               discountAmount: cupon.descuentoCentavos,
-              platformFeeBps: env.VENDOX_PLATFORM_FEE_BPS,
+              platformFeeBps: tasa.bps,
             })
           : precioSinCupon;
 
@@ -507,6 +531,23 @@ export class OrdersService {
             shippingModeSnapshot: tienda.shippingMode,
             processorFeeModeSnapshot: tienda.processorFeeMode,
             pickupSelected: retira && permiteRetiro(tienda.shippingMode),
+
+            /**
+             * Por qué se cobró ese porcentaje, y con qué se decidió.
+             *
+             * `precio.platformFeeBps` ya dice CUÁNTO. Esto dice POR QUÉ: sin
+             * ello, dentro de seis meses una orden al 3 % y otra al 4 % del
+             * mismo vendedor son indistinguibles de un error.
+             *
+             * Las tres últimas son las ENTRADAS de la decisión, congeladas
+             * junto con ella. La ventana de volumen es móvil: recalcularla
+             * mañana da otro número, así que sin guardarlas no hay forma de
+             * reconstruir por qué esta orden cayó en el tramo que cayó.
+             */
+            platformFeeReason: tasa.motivo,
+            platformFeeWeeklyVolume: tasa.promedioSemanal,
+            platformFeeRefundRateBps: tasa.tasaDeDevolucionBps,
+            platformFeeEvaluatedAt: evaluadaEl,
 
             /**
              * De dónde vino la compra y a qué precio estaba en lista.

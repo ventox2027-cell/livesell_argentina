@@ -590,6 +590,37 @@ export const envSchema = z
     VENDOX_PLATFORM_FEE_BPS: z.coerce.number().int().min(0).max(5_000).default(400),
 
     /**
+     * Techo de devoluciones para acceder a la comision reducida de Business.
+     *
+     * Un vendedor Business cuya tasa de devolucion supere este valor NO accede
+     * a los tramos de 3,5 % ni 3 %: paga la tasa base hasta que vuelva a estar
+     * por debajo.
+     *
+     * ─── Que problema resuelve ───
+     *
+     * Sin esto, la comision por volumen se puede manipular: alcanza con inflar
+     * la ventana de 28 dias con ordenes que despues se devuelven para conseguir
+     * una tasa mas barata, congelada, en las ordenes reales de esa misma
+     * ventana. La orden inflada se devuelve; el descuento que consiguio, no.
+     *
+     * El costo de intentarlo ya era alto -hacen falta millones por semana en
+     * ordenes falsas, cada una paga comision de Mercado Pago, y las
+     * devoluciones se ven en el panel-, pero "caro" no es "imposible".
+     *
+     * ─── Por que configurable ───
+     *
+     * Porque es un numero de politica comercial, no una constante de dominio.
+     * Si el rubro resulta tener devoluciones altas de forma legitima -indumentaria
+     * por talle, por ejemplo- bajarlo o subirlo tiene que ser una variable de
+     * entorno y no un despliegue, y sobre todo tiene que estar en UN lugar.
+     *
+     * Es el unico lugar donde vive el 10 %. `comision-por-volumen.ts` lo recibe
+     * por parametro y no lo lee: asi la decision se puede probar con una tabla
+     * de valores sin montar la configuracion.
+     */
+    VENDOX_BUSINESS_MAX_REFUND_BPS: z.coerce.number().int().min(0).max(10_000).default(1_000),
+
+    /**
      * ¿Se le traslada al comprador el costo estimado de Mercado Pago?
      *
      * **Apagado.** Para la beta el comprador paga producto + envío y nada más:

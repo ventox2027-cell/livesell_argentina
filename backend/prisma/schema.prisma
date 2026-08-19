@@ -1917,6 +1917,40 @@ model Order {
   platformFeeBps    Int @map("platform_fee_bps")
   platformFeeAmount Int @map("platform_fee_amount")
 
+  /// POR QUÉ se cobró ese porcentaje. Ver `MotivoDeLaTasa`.
+  ///
+  /// ═══════════════════════════════════════════════════════════════════════
+  /// SIN ESTO, UN 3 % ES UN NÚMERO SIN EXPLICACIÓN
+  /// ═══════════════════════════════════════════════════════════════════════
+  ///
+  /// Dentro de seis meses, una orden al 3 % y otra al 4 % del mismo vendedor
+  /// no se pueden distinguir de un error. Y la pregunta que llega a soporte no
+  /// es "cuánto me cobraron" —eso ya está— sino "por qué a mí me cobraron
+  /// distinto", y esa no se puede responder desde la base sin esta columna.
+  ///
+  /// `null` en todas las órdenes anteriores a la comisión por volumen. No se
+  /// rellenan: inventarles un motivo sería escribir historia que nadie vivió.
+  platformFeeReason String? @map("platform_fee_reason")
+
+  /// El promedio semanal de volumen con el que se decidió, en centavos.
+  ///
+  /// Es la entrada de la decisión, congelada junto con ella. La ventana es
+  /// móvil: recalcularla mañana da otro número, así que sin guardarla no hay
+  /// forma de reconstruir por qué esta orden cayó en el tramo que cayó.
+  platformFeeWeeklyVolume Int? @map("platform_fee_weekly_volume")
+
+  /// La tasa de devolución medida, en puntos básicos.
+  ///
+  /// Es lo único que explica que un vendedor con volumen de sobra haya pagado
+  /// igual la tasa base. Ver `VENDOX_BUSINESS_MAX_REFUND_BPS`.
+  platformFeeRefundRateBps Int? @map("platform_fee_refund_rate_bps")
+
+  /// Cuándo se evaluó. El final de la ventana móvil que se usó.
+  ///
+  /// Junto con `DIAS_DE_LA_VENTANA` alcanza para reconstruir exactamente qué
+  /// período se midió, sin depender de que ese número no haya cambiado.
+  platformFeeEvaluatedAt DateTime? @map("platform_fee_evaluated_at")
+
   /// Lo que cobró Mercado Pago. `null` hasta que ELLOS lo informen.
   ///
   /// No se estima. Una estimación guardada en la misma columna que un dato

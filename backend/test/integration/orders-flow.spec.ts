@@ -5901,3 +5901,274 @@ it('⛔ un rechazo TARDÍO sobre un pedido ya pago no avisa nada', async () => {
     expect(await avisosDe(v.sellerUserId, 'ORDER_RECEIVED', 1)).toHaveLength(1);
   });
 });
+
+/**
+ * La comisión por volumen de Business, de punta a punta.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * ACÁ SE JUNTA TODO Y SE CONGELA
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Los tramos y la salvaguarda ya están probados como tabla en
+ * `test/unit/comision-por-volumen.spec.ts`, y la medición contra PostgreSQL en
+ * `test/integration/volumen-flow.spec.ts`.
+ *
+ * Lo que falta probar es lo único que no se puede probar por partes: que al
+ * crear una orden real, con su reserva y su precio, la tasa calculada sea la
+ * que quedó GUARDADA — y que se quede ahí para siempre.
+ */
+async function darBusiness(sellerId: string) {
+  await prisma.sellerMembership.create({
+    data: {
+      id: `mem_${sellerId.slice(-20)}`,
+      sellerId,
+      plan: 'BUSINESS',
+      periodo: 'MENSUAL',
+      origen: 'CORTESIA',
+      vigenteHasta: new Date(Date.now() + 30 * 86_400_000),
+    },
+  });
+}
+
+/**
+ * Le fabrica historial de ventas confirmadas dentro de la ventana móvil.
+ *
+ * Las órdenes se insertan directas: el recorrido de compra completo está
+ * probado más arriba en este mismo archivo, y montar cuatro semanas de compras
+ * reales por cada caso haría estos tests inmanejables sin probar nada nuevo.
+ */
+async function conVolumenSemanal(v: { sellerId: string; productId: string }, porSemana: number) {
+  const tienda = await prisma.product.findUniqueOrThrow({
+    where: { id: v.productId },
+    select: { storeId: true },
+  });
+  const comprador = await nuevoComprador();
+  const creadas = [];
+
+  for (let semana = 0; semana < 4; semana += 1) {
+    const sufijo = `hist${Math.random().toString(36).slice(2, 10)}`;
+    const cuando = new Date(Date.now() - semana * 7 * 86_400_000 - 3_600_000);
+
+    creadas.push(
+      await prisma.order.create({
+        data: {
+          id: `ord_${sufijo}`,
+          reference: `REF${sufijo.slice(-8).toUpperCase()}`,
+          buyerId: comprador.userId,
+          storeId: tienda.storeId,
+          sellerId: v.sellerId,
+          reservationId: `rsv_${sufijo}`,
+          status: 'DELIVERED',
+          itemsSubtotal: porSemana,
+          grossAmount: porSemana,
+          platformFeeBps: 400,
+          platformFeeAmount: 0,
+          sellerNetAmount: porSemana,
+          paidAt: cuando,
+          confirmedAt: cuando,
+          createdAt: cuando,
+          shippingAddress: {},
+          buyerSnapshot: {},
+        },
+      }),
+    );
+  }
+
+  return creadas;
+}
+
+async function devolverEntera(orden: { id: string; grossAmount: number }) {
+  const sufijo = `dv${Math.random().toString(36).slice(2, 10)}`;
+  const intento = await prisma.paymentAttempt.create({
+    data: {
+      id: `pat_${sufijo}`,
+      orderId: orden.id,
+      status: 'APPROVED',
+      amount: orden.grossAmount,
+      idempotencyKey: `idem_${sufijo}`,
+      providerPaymentId: `mp_${sufijo}`,
+      approvedAt: new Date(),
+    },
+  });
+  await prisma.refund.create({
+    data: {
+      id: `ref_${sufijo}`,
+      orderId: orden.id,
+      paymentAttemptId: intento.id,
+      status: 'COMPLETED',
+      amount: orden.grossAmount,
+      reason: 'TEST',
+      completedAt: new Date(),
+    },
+  });
+}
+
+describe('Comisión por volumen al crear la orden', () => {
+  it('un vendedor sin plan paga la tasa base, con el motivo registrado', async () => {
+    const v = await nuevaVarianteConStock(5);
+    const comprador = await nuevoComprador();
+
+    const r = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId));
+
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(r.body.platformFeeBps).toBe(400);
+
+    const orden = await leerOrden(r.body.id as string);
+    expect(orden.platformFeeReason).toBe('PLAN_SIN_TRAMOS');
+    expect(orden.platformFeeEvaluatedAt).not.toBeNull();
+  });
+
+  /**
+   * El plan no regala el descuento: lo habilita. Si alcanzara con contratarlo,
+   * el tramo no mediría nada.
+   */
+  it('⛔ un Business sin volumen suficiente paga la base', async () => {
+    const v = await nuevaVarianteConStock(5);
+    await darBusiness(v.sellerId);
+    const comprador = await nuevoComprador();
+
+    const r = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId));
+
+    expect(r.body.platformFeeBps).toBe(400);
+    const orden = await leerOrden(r.body.id as string);
+    expect(orden.platformFeeReason).toBe('VOLUMEN_INSUFICIENTE');
+  });
+
+  it('un Business con $3.000.000 semanales paga 3,5 %', async () => {
+    const v = await nuevaVarianteConStock(5);
+    await darBusiness(v.sellerId);
+    await conVolumenSemanal(v, 300_000_000);
+    const comprador = await nuevoComprador();
+
+    const r = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId));
+
+    expect(r.body.platformFeeBps).toBe(350);
+    // 3,5 % de $8.900 = $311,50
+    expect(r.body.platformFeeAmount).toBe(31_150);
+    expect(r.body.sellerNetAmount).toBe(890_000 - 31_150);
+
+    const orden = await leerOrden(r.body.id as string);
+    expect(orden.platformFeeReason).toBe('VOLUMEN_BUSINESS');
+    expect(orden.platformFeeWeeklyVolume).toBe(300_000_000);
+    expect(orden.platformFeeRefundRateBps).toBe(0);
+  });
+
+  it('un Business con $5.000.000 semanales paga 3 %', async () => {
+    const v = await nuevaVarianteConStock(5);
+    await darBusiness(v.sellerId);
+    await conVolumenSemanal(v, 500_000_000);
+    const comprador = await nuevoComprador();
+
+    const r = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId));
+
+    expect(r.body.platformFeeBps).toBe(300);
+    expect(r.body.platformFeeAmount).toBe(26_700);
+  });
+
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * LA SALVAGUARDA, DE PUNTA A PUNTA
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * Mismo volumen que el test de 3,5 %, pero con una de las cuatro semanas
+   * devuelta: 25 % de devoluciones, muy por encima del 10 %.
+   *
+   * Es exactamente el escenario que la salvaguarda existe para cortar: inflar
+   * la ventana con órdenes que después se devuelven, para conseguir una tasa
+   * más barata congelada en las órdenes reales de esa misma ventana.
+   */
+  it('⛔ un Business con devoluciones altas NO accede al tramo', async () => {
+    const v = await nuevaVarianteConStock(5);
+    await darBusiness(v.sellerId);
+    const historial = await conVolumenSemanal(v, 400_000_000);
+    await devolverEntera(historial[0]!);
+
+    const comprador = await nuevoComprador();
+    const r = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId));
+
+    expect(r.body.platformFeeBps).toBe(400);
+
+    const orden = await leerOrden(r.body.id as string);
+    expect(orden.platformFeeReason).toBe('DEVOLUCIONES_ALTAS');
+    // Una de cuatro devuelta: 25 %.
+    expect(orden.platformFeeRefundRateBps).toBe(2_500);
+  });
+
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * EL TEST MÁS IMPORTANTE DE TODO EL BLOQUE
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * La comisión de una orden se decide UNA vez y no se toca nunca más.
+   *
+   * Acá el vendedor pierde Business después de haber vendido. La orden vieja
+   * tiene que seguir diciendo 3,5 %: recalcularla reescribiría historia
+   * contable de forma retroactiva, y del lado del vendedor eso es plata que
+   * aparece o desaparece de un pedido que ya cobró.
+   */
+  it('⛔ la comisión congelada NO se recalcula cuando cambia el plan', async () => {
+    const v = await nuevaVarianteConStock(5);
+    await darBusiness(v.sellerId);
+    await conVolumenSemanal(v, 400_000_000);
+    const comprador = await nuevoComprador();
+
+    const conDescuento = await crearOrden(
+      comprador.token,
+      await reservar(comprador.token, v.variantId),
+    );
+    expect(conDescuento.body.platformFeeBps).toBe(350);
+
+    // Se le vence Business.
+    await prisma.sellerMembership.update({
+      where: { sellerId: v.sellerId },
+      data: { vigenteHasta: new Date(Date.now() - 86_400_000) },
+    });
+
+    // La orden vieja no se movió.
+    const vieja = await leerOrden(conDescuento.body.id as string);
+    expect(vieja.platformFeeBps).toBe(350);
+    expect(vieja.platformFeeAmount).toBe(31_150);
+    expect(vieja.platformFeeReason).toBe('VOLUMEN_BUSINESS');
+
+    // Y la nueva ya paga la base.
+    const otroComprador = await nuevoComprador();
+    const nueva = await crearOrden(
+      otroComprador.token,
+      await reservar(otroComprador.token, v.variantId),
+    );
+    expect(nueva.body.platformFeeBps).toBe(400);
+    expect((await leerOrden(nueva.body.id as string)).platformFeeReason).toBe('PLAN_SIN_TRAMOS');
+  });
+
+  /**
+   * El tramo cambia el PORCENTAJE, no la base sobre la que se aplica: la
+   * comisión sigue saliendo del precio efectivamente pagado y no del de lista.
+   */
+  it('el tramo se aplica sobre el subtotal ya descontado', async () => {
+    const v = await nuevaVarianteConStock(5);
+    await darBusiness(v.sellerId);
+    await conVolumenSemanal(v, 500_000_000);
+
+    const cupon = await call('POST', '/api/v1/seller/coupons', {
+      token: v.sellerToken,
+      body: {
+        codigo: `VOL${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
+        tipo: 'PORCENTAJE',
+        valor: 10,
+        usosMaximos: 5,
+      },
+    });
+    expect(cupon.status, JSON.stringify(cupon.body)).toBe(201);
+
+    const comprador = await nuevoComprador();
+    const r = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId), {
+      cupon: cupon.body.codigo,
+    });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(r.body.discountAmount).toBe(89_000);
+    expect(r.body.platformFeeBps).toBe(300);
+    // 3 % sobre $8.010 —lo que se pagó—, no sobre $8.900.
+    expect(r.body.platformFeeAmount).toBe(24_030);
+  });
+});

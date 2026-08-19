@@ -113,7 +113,85 @@ interface ClienteConsultable {
 }
 
 /**
- * El volumen elegible de un vendedor en la ventana móvil, en centavos.
+ * Lo que se midió en la ventana. Todo en centavos.
+ *
+ * Se devuelven las tres cifras y no sólo el volumen porque la decisión de tramo
+ * necesita las tres, y porque son las que hay que poder auditar después: con
+ * sólo el resultado, un vendedor que pregunta «¿por qué no me bajó la comisión?»
+ * no tiene respuesta.
+ */
+export interface MedicionDeVolumen {
+  /** Lo que se vendió y llegó a confirmarse, ANTES de descontar devoluciones. */
+  readonly brutoConfirmado: number;
+  /** La parte de PRODUCTO efectivamente devuelta. Ver la nota de prorrateo. */
+  readonly devuelto: number;
+  /** `brutoConfirmado − devuelto`. Es lo que decide el tramo. */
+  readonly volumenElegible: number;
+  /** El promedio semanal del volumen elegible. */
+  readonly promedioSemanal: number;
+  /** `devuelto / brutoConfirmado`, en puntos básicos. 0 si no vendió nada. */
+  readonly tasaDeDevolucionBps: number;
+}
+
+/**
+ * Mide el volumen y las devoluciones de un vendedor en la ventana móvil.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * LA BASE ES `confirmed_at`, NO LA LISTA DE ESTADOS
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Y es una diferencia con `ESTADOS_CON_VENTA_CONFIRMADA` de arriba, a
+ * propósito. Aquélla responde «¿qué ventas de este vendedor siguen en pie hoy?»
+ * —lo que necesitan el panel de admin y el riesgo—. Ésta responde «¿qué llegó a
+ * ser una venta alguna vez en esta ventana?».
+ *
+ * La tasa de devolución necesita la segunda, porque necesita un denominador.
+ * Con la lista de estados, un vendedor que devuelve TODO tendría cero ventas en
+ * pie: la tasa sería `0 / 0` y saldría 0 %. El que más devuelve mediría mejor
+ * que nadie.
+ *
+ * `confirmed_at` sirve para eso porque se escribe en un solo lugar
+ * —`payments.service.ts`, al confirmar— y **no se borra nunca**. Una orden
+ * confirmada y después devuelta lo conserva, así que sigue contando como venta
+ * que existió aunque su estado ya sea `REFUNDED`.
+ *
+ * Y no cambia el volumen: esa orden entra en `brutoConfirmado` y sale entera
+ * por `devuelto`. El neto es el mismo que antes; lo que se gana es poder verla.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * EL PRORRATEO DE LA DEVOLUCIÓN
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * `Refund.amount` se devuelve sobre el BRUTO, que incluye envío y recargo del
+ * procesador. El volumen habla sólo de producto. Así que la parte de una
+ * devolución que corresponde descontar es
+ *
+ *     devuelto_producto = monto_devuelto × base / bruto
+ *
+ * Con una devolución total da la base entera, que es lo correcto. Con una
+ * parcial da la fracción — que es lo que pedía «una devolución parcial tiene
+ * que afectar proporcionalmente».
+ *
+ * ⚠️ **Hoy toda devolución es total.** `payments.service.ts` crea la devolución
+ * con `amount: intento.amount`, el cobro completo, y no hay ningún camino que
+ * devuelva de a partes. El prorrateo está escrito igual porque el día que
+ * exista la devolución parcial, este cálculo tiene que estar bien de entrada:
+ * si sumara el monto sin prorratear, una devolución de $1.000 sobre una orden
+ * con $800 de envío descontaría $1.000 de volumen de producto que nunca se
+ * vendió.
+ *
+ * `LEAST(base, …)` es el techo: una devolución nunca puede sacar más valor de
+ * producto del que la orden tenía. Sin él, una orden con mucho envío y varias
+ * devoluciones podría restar más de lo que aportó.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * SÓLO LAS DEVOLUCIONES `COMPLETED`
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * `PENDING` y `PROCESSING` todavía no devolvieron plata, y `FAILED` no la
+ * devolvió nunca. Contarlas castigaría al vendedor por una devolución que
+ * quizá falle y se revierta — y la comisión ya estaría congelada en las órdenes
+ * que se hicieron mientras tanto.
  *
  * ═══════════════════════════════════════════════════════════════════════════
  * POR QUÉ SQL CRUDO Y NO `aggregate`
@@ -134,30 +212,92 @@ interface ClienteConsultable {
  * volumen que sí se vendió.
  *
  * `GREATEST(…, 0)` por fila hace exactamente lo que hace `baseDeComision`, y
- * hace que esta consulta y la comisión de cada orden hablen de lo mismo. La
- * diferencia sería chica y siempre a la baja, así que nunca regalaría un tramo
- * que no corresponde; pero castigaría al vendedor por haber dado un cupón de
- * envío gratis, que no es lo que nadie decidió.
- *
- * Los estados salen de `ESTADOS_CON_VENTA_CONFIRMADA` interpolados como
- * parámetros, no concatenados: es la misma lista de arriba, sin una segunda
- * copia escrita a mano dentro del SQL.
+ * hace que esta consulta y la comisión de cada orden hablen de lo mismo.
  */
-export async function volumenElegibleDe(
+export async function medirVolumenDe(
   prisma: ClienteConsultable,
   sellerId: string,
   ahora: Date,
-): Promise<number> {
+): Promise<MedicionDeVolumen> {
   const desde = inicioDeLaVentana(ahora);
-  const estados = Prisma.join([...ESTADOS_CON_VENTA_CONFIRMADA]);
 
-  const filas = await prisma.$queryRaw<Array<{ total: bigint | null }>>(Prisma.sql`
-    SELECT COALESCE(SUM(GREATEST("items_subtotal" - "discount_amount", 0)), 0)::bigint AS total
-    FROM "orders"
-    WHERE "seller_id" = ${sellerId}
-      AND "status"::text IN (${estados})
-      AND "created_at" >= ${desde}
-  `);
+  const filas = await prisma.$queryRaw<Array<{ bruto: bigint | null; devuelto: bigint | null }>>(
+    Prisma.sql`
+      WITH ordenes AS (
+        SELECT
+          "id",
+          GREATEST("items_subtotal" - "discount_amount", 0) AS base,
+          "gross_amount" AS bruto
+        FROM "orders"
+        WHERE "seller_id" = ${sellerId}
+          AND "confirmed_at" IS NOT NULL
+          AND "created_at" >= ${desde}
+      ),
+      devoluciones AS (
+        SELECT r."order_id", SUM(r."amount") AS monto
+        FROM "refunds" r
+        JOIN ordenes o ON o."id" = r."order_id"
+        WHERE r."status" = 'COMPLETED'
+        GROUP BY r."order_id"
+      )
+      SELECT
+        COALESCE(SUM(o.base), 0)::bigint AS bruto,
+        COALESCE(SUM(
+          LEAST(
+            o.base,
+            COALESCE(FLOOR(d.monto::numeric * o.base / NULLIF(o.bruto, 0)), 0)
+          )
+        ), 0)::bigint AS devuelto
+      FROM ordenes o
+      LEFT JOIN devoluciones d ON d."order_id" = o."id"
+    `,
+  );
 
-  return Number(filas[0]?.total ?? 0);
+  const brutoConfirmado = Number(filas[0]?.bruto ?? 0);
+  const devuelto = Number(filas[0]?.devuelto ?? 0);
+  const volumenElegible = Math.max(0, brutoConfirmado - devuelto);
+
+  return {
+    brutoConfirmado,
+    devuelto,
+    volumenElegible,
+    promedioSemanal: promedioSemanal(volumenElegible),
+    /**
+     * Se trunca. Un vendedor con 10,004 % mide 1000 bps y queda justo en el
+     * umbral en vez de pasarlo: ante la duda, la medición no lo perjudica.
+     *
+     * ⚠️ Este número es para MOSTRAR y AUDITAR. La comparación contra el umbral
+     * se hace con enteros y sin redondear —ver `superaElUmbral`—, para que un
+     * centavo no decida un tramo por un artefacto de división.
+     */
+    tasaDeDevolucionBps:
+      brutoConfirmado === 0 ? 0 : Math.floor((devuelto * 10_000) / brutoConfirmado),
+  };
+}
+
+/**
+ * Si la tasa de devolución supera el umbral.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * SE COMPARA CON ENTEROS, SIN DIVIDIR
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ *     devuelto / bruto > umbral / 10000    ⟺    devuelto × 10000 > bruto × umbral
+ *
+ * La forma de la derecha no divide, así que no redondea, así que no hay ningún
+ * caso en que un centavo caiga del lado equivocado por un artefacto de coma
+ * flotante. Con dinero eso no es una sutileza: la diferencia entre 4 % y 3,5 %
+ * sobre tres millones semanales son quince mil pesos por semana.
+ *
+ * **Estrictamente mayor.** Justo en el 10 % el vendedor conserva el descuento:
+ * la regla dice «si supera», y el borde exacto no supera nada.
+ *
+ * Sin ventas, no supera: `0 > 0` es falso. Un vendedor sin historial no puede
+ * quedar castigado por una tasa que no se pudo medir.
+ */
+export function superaElUmbral(
+  medicion: Pick<MedicionDeVolumen, 'brutoConfirmado' | 'devuelto'>,
+  umbralBps: number,
+): boolean {
+  return medicion.devuelto * 10_000 > medicion.brutoConfirmado * umbralBps;
 }
