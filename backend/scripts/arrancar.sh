@@ -35,6 +35,24 @@
 
 set -e
 
+# ═══════════════════════════════════════════════════════════════════════════
+# ANTES DE MIGRAR: ¿por dónde vamos a migrar?
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# `migrate deploy` toma un lock de sesión. Si la conexión pasa por un agrupador
+# —PgBouncer en modo transacción, que es lo que da Neon en `-pooler`— no hay
+# sesión que lo sostenga: el lock se toma en un backend y la consulta siguiente
+# pregunta en otro. Diez segundos después:
+#
+#     P1002  Timed out trying to acquire a postgres advisory lock
+#
+# Ese mensaje no menciona el pooler por ningún lado, así que el despliegue muere
+# apuntando al lugar equivocado. Pasó dos veces.
+#
+# Esto lo dice antes, en una línea, y corta acá. También imprime el host —sin
+# credenciales— para que en los logs quede constancia de por dónde se migró.
+node dist/revisar-conexion.js
+
 echo "→ Aplicando migraciones pendientes…"
 node_modules/.bin/prisma migrate deploy
 

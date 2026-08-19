@@ -2,6 +2,7 @@ import { config as loadDotenv } from 'dotenv';
 import { z } from 'zod';
 
 import { leerCredencialDeFirebase } from '@/modules/notifications/credencial-de-firebase';
+import { esConexionAgrupada } from './conexion-de-migraciones';
 import { leerLlave } from '@/shared/crypto/secretos';
 import { PROVEEDORES } from '@/shared/http/deployment-provider';
 import {
@@ -1303,11 +1304,11 @@ export const envSchema = z
    * al pooler. Ahí el lock de sesión no existe y la migración se cuelga o queda
    * a medio aplicar — que es peor que no haberla corrido.
    */
-  .refine((e) => !e.DATABASE_URL.includes('-pooler.') || !!e.DIRECT_URL, {
+  .refine((e) => !esConexionAgrupada(e.DATABASE_URL) || !!e.DIRECT_URL, {
     message:
-      'DATABASE_URL apunta al pooler, así que hace falta DIRECT_URL (la conexión sin ' +
-      '`-pooler` en el host) para las migraciones. Contra el pooler, `migrate deploy` se ' +
-      'cuelga o deja la migración a medias.',
+      'DATABASE_URL pasa por un agrupador, así que hace falta DIRECT_URL (la conexión sin ' +
+      '`-pooler` en el host y sin `pgbouncer=true`) para las migraciones. Contra el pooler, ' +
+      '`migrate deploy` se cuelga esperando un lock de sesión y muere con P1002.',
     path: ['DIRECT_URL'],
   })
   /**
@@ -1316,11 +1317,22 @@ export const envSchema = z
    * Pegar la misma cadena en las dos variables es el error natural cuando se
    * copian del mismo panel, y anula por completo la razón de que exista la
    * segunda.
+   *
+   * ⚠️ La regla la define `esConexionAgrupada`, y no está escrita acá a mano.
+   *
+   * Antes decía `.includes('-pooler.')` —sólo la forma de Neon— y esta
+   * comprobación además corre cuando arranca `dist/main.js`, o sea DESPUÉS de
+   * `migrate deploy`. O sea que existía, era incompleta, y llegaba tarde: el
+   * despliegue moría diez segundos antes con un error sobre locks.
+   *
+   * Ahora la misma función la usa `dist/revisar-conexion.js`, que corre ANTES
+   * de migrar. Una definición, dos momentos.
    */
-  .refine((e) => !e.DIRECT_URL?.includes('-pooler.'), {
+  .refine((e) => !e.DIRECT_URL || !esConexionAgrupada(e.DIRECT_URL), {
     message:
-      'DIRECT_URL apunta al pooler. Tiene que ser la conexión directa: en Neon, la misma ' +
-      'cadena con el selector "Pooled connection" DESACTIVADO (sin `-pooler` en el host).',
+      'DIRECT_URL pasa por un agrupador. Tiene que ser la conexión DIRECTA: en Neon, la ' +
+      'misma cadena con el selector "Pooled connection" DESACTIVADO — sin `-pooler` en el ' +
+      'host y sin `pgbouncer=true`.',
     path: ['DIRECT_URL'],
   })
   /**
