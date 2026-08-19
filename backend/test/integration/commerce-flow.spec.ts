@@ -2637,6 +2637,25 @@ describe('Codificación', () => {
 
   it('⛔ los acentos sobreviven de la app a la base y de vuelta', async () => {
     const v = await nuevoVendedor();
+    /**
+     * Pro porque este test publica una palabra por cada caso de codificación, y
+     * son más de tres.
+     *
+     * Es una decisión del test, no un agujero de la regla: lo que se prueba acá
+     * son los bytes que llegan a PostgreSQL, y el tope del plan Free no tiene
+     * nada que ver. Reducir la lista de palabras para no chocarlo habría dejado
+     * casos de codificación sin cubrir por una razón ajena.
+     */
+    await prisma.sellerMembership.create({
+      data: {
+        id: `mem_enc_${(v.seller.id as string).slice(-16)}`,
+        sellerId: v.seller.id as string,
+        plan: 'PRO',
+        periodo: 'MENSUAL',
+        origen: 'CORTESIA',
+        vigenteHasta: new Date(Date.now() + 30 * 86_400_000),
+      },
+    });
 
     for (const palabra of PALABRAS) {
       const creado = await crear(v, palabra);
@@ -4292,5 +4311,344 @@ describe('El embudo del vendedor', () => {
       expect(Number.isInteger(r.body.comisionBps)).toBe(true);
       expect(Number.isInteger(r.body.costoDelProcesadorBps)).toBe(true);
     });
+  });
+});
+
+/**
+ * El límite de catálogo del plan Free.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * ESTOS TESTS SON LA REGLA. LA APP SÓLO LA MUESTRA
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Flutter va a esconder el botón al llegar al tope, y está bien. Pero esconder
+ * un botón no es una restricción: `POST /products` es una petición HTTP que
+ * cualquiera puede repetir. Todo lo que se prueba acá entra por HTTP, sin pasar
+ * por la app, que es exactamente como entraría alguien que quiera saltearlo.
+ */
+async function darPlan(sellerId: string, plan: 'PRO' | 'BUSINESS') {
+  await prisma.sellerMembership.create({
+    data: {
+      id: `mem_${sellerId.slice(-20)}`,
+      sellerId,
+      plan,
+      periodo: 'MENSUAL',
+      origen: 'CORTESIA',
+      vigenteHasta: new Date(Date.now() + 30 * 86_400_000),
+    },
+  });
+}
+
+/** Publica sin exigir que salga bien: los tests del tope necesitan el rechazo. */
+async function intentarPublicar(token: string, nombre: string) {
+  return call('POST', '/api/v1/products', {
+    token,
+    body: {
+      name: nombre,
+      basePriceCents: 1_549_900,
+      categoryId: 'cat_otros',
+      status: 'ACTIVE',
+    },
+  });
+}
+
+describe('Límite de productos publicados (Free)', () => {
+  it('un Free publica tres productos sin problema', async () => {
+    const v = await nuevoVendedor();
+
+    for (let i = 1; i <= 3; i += 1) {
+      const r = await intentarPublicar(v.token, `Producto libre ${i}`);
+      expect(r.status, JSON.stringify(r.body)).toBe(201);
+    }
+  });
+
+  it('⛔ el cuarto se rechaza, con el mensaje que explica qué hacer', async () => {
+    const v = await nuevoVendedor();
+    for (let i = 1; i <= 3; i += 1) await intentarPublicar(v.token, `Producto tope ${i}`);
+
+    const r = await intentarPublicar(v.token, 'Producto cuarto');
+
+    expect(r.status).toBe(409);
+    expect(r.body.error.code).toBe('PLAN_LIMIT_REACHED');
+    expect(r.body.error.message).toBe(
+      'Llegaste al límite de 3 productos publicados del plan Free. ' +
+        'Pasate a VendoX Pro para ampliar tu catálogo.',
+    );
+    expect(r.body.error.details.limite).toBe(3);
+    expect(r.body.error.details.publicados).toBe(3);
+  });
+
+  /**
+   * Los borradores son libres, y esa es la mitad del diseño.
+   *
+   * Alguien en Free tiene que poder sentarse una tarde a cargar cuarenta
+   * productos con sus fotos y sus variantes, y decidir después cuáles tres
+   * muestra. Si el tope contara lo cargado, la app le diría «borrá productos
+   * para poder publicar» y el trabajo se perdería.
+   */
+  it('los borradores NO cuentan: puede cargar todos los que quiera', async () => {
+    const v = await nuevoVendedor();
+    for (let i = 1; i <= 3; i += 1) await intentarPublicar(v.token, `Publicado ${i}`);
+
+    for (let i = 1; i <= 5; i += 1) {
+      const r = await call('POST', '/api/v1/products', {
+        token: v.token,
+        body: { name: `Borrador ${i}`, basePriceCents: 100_000, status: 'DRAFT' },
+      });
+      expect(r.status, JSON.stringify(r.body)).toBe(201);
+    }
+  });
+
+  /**
+   * Pausar tiene que liberar un lugar. Es la vía por la que un vendedor Free
+   * rota su catálogo por temporada sin borrar nada.
+   */
+  it('pausar uno libera lugar para publicar otro', async () => {
+    const v = await nuevoVendedor();
+    const ids: string[] = [];
+    for (let i = 1; i <= 3; i += 1) {
+      const r = await intentarPublicar(v.token, `Rotación ${i}`);
+      ids.push(r.body.id as string);
+    }
+
+    expect((await intentarPublicar(v.token, 'De más')).status).toBe(409);
+
+    const pausa = await call('PATCH', `/api/v1/products/${ids[0]}`, {
+      token: v.token,
+      body: { status: 'PAUSED' },
+    });
+    expect(pausa.status, JSON.stringify(pausa.body)).toBe(200);
+
+    expect((await intentarPublicar(v.token, 'Ahora sí')).status).toBe(201);
+  });
+
+  /**
+   * EL CAMINO QUE SE ESCAPA SI SÓLO SE MIRA `create`.
+   *
+   * Crear borrador y después editarlo a publicado es el flujo NORMAL de la app
+   * —se arma la ficha, se suben fotos, se publica al final—, no un truco. Sin
+   * guardián en `update`, el tope se saltea en dos pasos sin proponérselo.
+   */
+  it('⛔ tampoco se puede pasar el tope publicando un borrador', async () => {
+    const v = await nuevoVendedor();
+    for (let i = 1; i <= 3; i += 1) await intentarPublicar(v.token, `Lleno ${i}`);
+
+    const borrador = await call('POST', '/api/v1/products', {
+      token: v.token,
+      body: { name: 'Borrador que quiere colarse', basePriceCents: 100_000, status: 'DRAFT' },
+    });
+    expect(borrador.status).toBe(201);
+
+    const r = await call('PATCH', `/api/v1/products/${borrador.body.id}`, {
+      token: v.token,
+      body: { status: 'ACTIVE', categoryId: 'cat_otros' },
+    });
+
+    expect(r.status).toBe(409);
+    expect(r.body.error.code).toBe('PLAN_LIMIT_REACHED');
+  });
+
+  /**
+   * Editar un producto YA publicado no puede chocar contra el tope. Estando
+   * lleno, corregir un precio mal puesto tiene que seguir funcionando: si no,
+   * el vendedor Free queda con su catálogo congelado.
+   */
+  it('con el catálogo lleno se puede seguir editando lo publicado', async () => {
+    const v = await nuevoVendedor();
+    const ids: string[] = [];
+    for (let i = 1; i <= 3; i += 1) {
+      const r = await intentarPublicar(v.token, `Editable ${i}`);
+      ids.push(r.body.id as string);
+    }
+
+    const r = await call('PATCH', `/api/v1/products/${ids[0]}`, {
+      token: v.token,
+      body: { basePriceCents: 999_900 },
+    });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.body.basePriceCents).toBe(999_900);
+  });
+
+  it('borrar uno libera lugar', async () => {
+    const v = await nuevoVendedor();
+    const ids: string[] = [];
+    for (let i = 1; i <= 3; i += 1) {
+      const r = await intentarPublicar(v.token, `Borrable ${i}`);
+      ids.push(r.body.id as string);
+    }
+
+    expect((await call('DELETE', `/api/v1/products/${ids[0]}`, { token: v.token })).status).toBe(
+      200,
+    );
+
+    expect((await intentarPublicar(v.token, 'Después de borrar')).status).toBe(201);
+  });
+
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * ESTE TEST EXISTE PORQUE EL DE ARRIBA NO ALCANZABA
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * «Borrar uno libera lugar» pasaba aunque el conteo NO filtrara por
+   * `deletedAt`. Se descubrió sacando ese filtro a propósito: los 215 tests
+   * siguieron en verde.
+   *
+   * El motivo es que `softDelete` hace dos cosas —marca `deletedAt` y pasa el
+   * estado a `ARCHIVED`—, así que el filtro de estado ya lo saca de la cuenta
+   * por su lado. El test probaba la consecuencia, no la causa.
+   *
+   * Acá se arma la fila que hoy ningún camino produce: publicada y borrada a la
+   * vez. Es lo único que ejercita el `deletedAt: null` de verdad, y protege al
+   * vendedor del día que un camino nuevo borre sin archivar — donde el síntoma
+   * sería que alguien no puede publicar nunca más y su catálogo se ve vacío.
+   */
+  it('⛔ un producto borrado pero todavía ACTIVE no ocupa lugar', async () => {
+    const v = await nuevoVendedor();
+    const ids: string[] = [];
+    for (let i = 1; i <= 3; i += 1) {
+      const r = await intentarPublicar(v.token, `Fantasma ${i}`);
+      ids.push(r.body.id as string);
+    }
+
+    expect((await intentarPublicar(v.token, 'Bloqueado')).status).toBe(409);
+
+    // Borrado sin archivar: sólo `deletedAt` puede sacarlo de la cuenta.
+    await prisma.product.update({
+      where: { id: ids[0] },
+      data: { deletedAt: new Date() },
+    });
+
+    const lista = await call('GET', '/api/v1/products/mine', { token: v.token });
+    expect(lista.body.catalogo.publicados).toBe(2);
+
+    expect((await intentarPublicar(v.token, 'Ahora entra')).status).toBe(201);
+  });
+
+  it('⛔ el tope es del vendedor, no de cada uno de sus productos', async () => {
+    // Dos vendedores distintos no comparten cupo: el de al lado publicando tres
+    // no puede dejar sin publicar a nadie.
+    const uno = await nuevoVendedor();
+    const otro = await nuevoVendedor();
+    for (let i = 1; i <= 3; i += 1) await intentarPublicar(uno.token, `Del uno ${i}`);
+
+    expect((await intentarPublicar(otro.token, 'Del otro')).status).toBe(201);
+  });
+});
+
+describe('Los planes pagos no tienen tope de catálogo', () => {
+  it('un Pro publica más de tres', async () => {
+    const v = await nuevoVendedor();
+    await darPlan(v.seller.id as string, 'PRO');
+
+    for (let i = 1; i <= 5; i += 1) {
+      const r = await intentarPublicar(v.token, `Pro sin tope ${i}`);
+      expect(r.status, JSON.stringify(r.body)).toBe(201);
+    }
+  });
+
+  it('un Business también', async () => {
+    const v = await nuevoVendedor();
+    await darPlan(v.seller.id as string, 'BUSINESS');
+
+    for (let i = 1; i <= 5; i += 1) {
+      const r = await intentarPublicar(v.token, `Business sin tope ${i}`);
+      expect(r.status, JSON.stringify(r.body)).toBe(201);
+    }
+  });
+
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * EL CASO QUE NO PUEDE DEGRADAR A NADIE
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * Un vendedor que ya tenía diez productos publicados cuando se introdujo el
+   * límite los CONSERVA. El tope frena publicar uno más; no despublica nada, no
+   * borra nada y no le pide que elija cuáles tres se queda.
+   *
+   * Es la diferencia entre una regla nueva y una expropiación.
+   */
+  it('⛔ un Free que ya tenía más de tres los conserva, sólo no puede publicar más', async () => {
+    const v = await nuevoVendedor();
+    await darPlan(v.seller.id as string, 'PRO');
+    for (let i = 1; i <= 6; i += 1) await intentarPublicar(v.token, `Heredado ${i}`);
+
+    // Se le vence el plan: pasa a Free con seis publicados.
+    await prisma.sellerMembership.update({
+      where: { sellerId: v.seller.id as string },
+      data: { vigenteHasta: new Date(Date.now() - 86_400_000) },
+    });
+
+    const lista = await call('GET', '/api/v1/products/mine?limit=20', { token: v.token });
+    expect(lista.body.items.filter((p: { status: string }) => p.status === 'ACTIVE')).toHaveLength(
+      6,
+    );
+
+    // Los conserva, pero no puede sumar.
+    const r = await intentarPublicar(v.token, 'El séptimo');
+    expect(r.status).toBe(409);
+    expect(r.body.error.details.publicados).toBe(6);
+  });
+});
+
+describe('El contador que ve el vendedor', () => {
+  it('un Free recién creado ve 0 de 3', async () => {
+    const v = await nuevoVendedor();
+
+    const r = await call('GET', '/api/v1/products/mine', { token: v.token });
+
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.body.catalogo).toEqual({ publicados: 0, limite: 3, puedePublicar: true });
+  });
+
+  it('después de publicar dos, ve 2 de 3 y todavía puede', async () => {
+    const v = await nuevoVendedor();
+    await intentarPublicar(v.token, 'Contador uno');
+    await intentarPublicar(v.token, 'Contador dos');
+
+    const r = await call('GET', '/api/v1/products/mine', { token: v.token });
+
+    expect(r.body.catalogo).toEqual({ publicados: 2, limite: 3, puedePublicar: true });
+  });
+
+  /**
+   * `puedePublicar: false` es lo que la app usa para apagar el botón ANTES de
+   * que alguien intente. Sin él, la única forma de saberlo sería chocar contra
+   * el error — que funciona, pero es una mala manera de enterarse.
+   */
+  it('en el tope, puedePublicar pasa a false', async () => {
+    const v = await nuevoVendedor();
+    for (let i = 1; i <= 3; i += 1) await intentarPublicar(v.token, `Tope contador ${i}`);
+
+    const r = await call('GET', '/api/v1/products/mine', { token: v.token });
+
+    expect(r.body.catalogo).toEqual({ publicados: 3, limite: 3, puedePublicar: false });
+  });
+
+  /**
+   * `limite: null` es lo que le dice a la app «no muestres contador». Un
+   * «12 de ∞» no le sirve a nadie.
+   */
+  it('un Pro ve limite null y puede siempre', async () => {
+    const v = await nuevoVendedor();
+    await darPlan(v.seller.id as string, 'PRO');
+    await intentarPublicar(v.token, 'Pro contador');
+
+    const r = await call('GET', '/api/v1/products/mine', { token: v.token });
+
+    expect(r.body.catalogo).toEqual({ publicados: 1, limite: null, puedePublicar: true });
+  });
+
+  it('los borradores no mueven el contador', async () => {
+    const v = await nuevoVendedor();
+    await intentarPublicar(v.token, 'El único publicado');
+    await call('POST', '/api/v1/products', {
+      token: v.token,
+      body: { name: 'Un borrador', basePriceCents: 100_000, status: 'DRAFT' },
+    });
+
+    const r = await call('GET', '/api/v1/products/mine', { token: v.token });
+
+    expect(r.body.catalogo.publicados).toBe(1);
   });
 });

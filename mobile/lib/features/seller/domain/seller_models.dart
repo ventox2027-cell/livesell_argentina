@@ -303,12 +303,60 @@ class Producto {
 
 /// Página de resultados con cursor.
 class Pagina<T> {
-  const Pagina({required this.items, this.nextCursor});
+  const Pagina({required this.items, this.nextCursor, this.catalogo});
 
   final List<T> items;
   final String? nextCursor;
 
+  /// Sólo lo trae el listado del vendedor. `null` en cualquier otra página.
+  final EstadoDelCatalogo? catalogo;
+
   bool get hayMas => nextCursor != null;
+}
+
+/// Cuántos productos publicados tiene el vendedor y cuántos le permite su plan.
+///
+/// ═══════════════════════════════════════════════════════════════════════════
+/// EL NÚMERO LO DICE EL BACKEND, SIEMPRE
+/// ═══════════════════════════════════════════════════════════════════════════
+///
+/// Ni el tope ni el conteo se calculan acá. El límite del plan Free es una
+/// regla de negocio que vive en el servidor —es el único lugar donde se puede
+/// hacer cumplir—, y una copia en Dart sería una segunda verdad que el día que
+/// difiera va a mostrarle al vendedor un número que no es.
+///
+/// Esta clase sólo transporta lo que vino.
+class EstadoDelCatalogo {
+  const EstadoDelCatalogo({
+    required this.publicados,
+    required this.limite,
+    required this.puedePublicar,
+  });
+
+  final int publicados;
+
+  /// `null` = sin techo. La pantalla no muestra contador en ese caso: un
+  /// «12 de ∞» no le sirve a nadie.
+  final int? limite;
+
+  /// Si puede publicar uno más. Viene resuelto para que la app no tenga que
+  /// comparar dos números y equivocarse en el borde.
+  final bool puedePublicar;
+
+  bool get tieneTope => limite != null;
+
+  /// «2 de 3 productos publicados». `null` cuando no hay tope que mostrar.
+  String? get resumen =>
+      limite == null ? null : '$publicados de $limite productos publicados';
+
+  static EstadoDelCatalogo? desdeJson(Object? json) {
+    if (json is! Map<String, dynamic>) return null;
+    return EstadoDelCatalogo(
+      publicados: (json['publicados'] as num?)?.toInt() ?? 0,
+      limite: (json['limite'] as num?)?.toInt(),
+      puedePublicar: json['puedePublicar'] as bool? ?? true,
+    );
+  }
 }
 
 /// Formato argentino: punto para miles, coma para decimales.

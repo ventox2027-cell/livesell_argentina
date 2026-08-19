@@ -404,9 +404,17 @@ class _Panel extends ConsumerWidget {
               onReintentar: () => ref.invalidate(misProductosProvider),
             ),
             data: (pagina) {
-              if (pagina.items.isEmpty) return const _SinProductos();
+              final catalogo = pagina.catalogo;
+              if (pagina.items.isEmpty) {
+                return const _SinProductos();
+              }
               return Column(
                 children: [
+                  if (catalogo != null && catalogo.tieneTope)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: Gap.md),
+                      child: _ContadorDelPlan(catalogo: catalogo),
+                    ),
                   for (final p in pagina.items)
                     Padding(
                       padding: const EdgeInsets.only(bottom: Gap.md),
@@ -614,6 +622,66 @@ class _SinFoto extends StatelessWidget {
     return const ColoredBox(
       color: AppColor.superficieAlta,
       child: Icon(Icons.image_outlined, size: 22, color: AppColor.textoDebil),
+    );
+  }
+}
+
+/// «2 de 3 productos publicados», y qué hacer cuando ya no entran más.
+///
+/// ═══════════════════════════════════════════════════════════════════════════
+/// SE MUESTRA ANTES DE CHOCARLO, NO DESPUÉS
+/// ═══════════════════════════════════════════════════════════════════════════
+///
+/// El backend rechaza el cuarto producto con un mensaje claro, y eso es lo que
+/// hace cumplir la regla. Pero enterarse de un límite recién al chocarlo —con
+/// la ficha ya cargada y las fotos ya subidas— es una mala manera de enterarse.
+///
+/// Los números vienen resueltos del servidor. Acá no se compara nada ni se
+/// escribe el 3 en ningún lado: si el tope del plan cambiara, esta pantalla no
+/// se toca.
+class _ContadorDelPlan extends StatelessWidget {
+  const _ContadorDelPlan({required this.catalogo});
+  final EstadoDelCatalogo catalogo;
+
+  @override
+  Widget build(BuildContext context) {
+    final lleno = !catalogo.puedePublicar;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: Gap.md, horizontal: Gap.lg),
+      decoration: BoxDecoration(
+        color: lleno ? AppColor.acentoSuave : AppColor.superficie,
+        borderRadius: BorderRadius.circular(Redondeo.lg),
+        border: Border.all(color: lleno ? AppColor.acento : AppColor.borde),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            lleno ? Icons.lock_outline : Icons.inventory_2_outlined,
+            size: 18,
+            color: lleno ? AppColor.acento : AppColor.textoSuave,
+          ),
+          const SizedBox(width: Gap.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  catalogo.resumen!,
+                  style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w500),
+                ),
+                if (lleno) ...[
+                  const SizedBox(height: 2),
+                  const Text(
+                    'Pasate a VendoX Pro para ampliar tu catálogo',
+                    style: TextStyle(fontSize: 12.5, color: AppColor.textoSuave),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

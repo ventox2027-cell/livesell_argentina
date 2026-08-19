@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   DIAS_DE_AVISO_ANTES_DE_VENCER,
+  puedePublicarUnoMas,
   beneficiosDe,
   calcularVencimiento,
   diasRestantes,
@@ -307,5 +308,49 @@ describe('El aviso de vencimiento también alcanza a Business', () => {
 
   it('⛔ a un Business con tiempo de sobra no se le avisa', () => {
     expect(tocaAvisarQueVence(BUSINESS_VIGENTE, AHORA)).toBe(false);
+  });
+});
+
+describe('El tope de productos publicados', () => {
+  it('Free tiene tres', () => {
+    expect(limitesDe(FREE, AHORA).productosPublicados).toBe(3);
+  });
+
+  it('Pro y Business no tienen tope', () => {
+    expect(limitesDe(PRO_VIGENTE, AHORA).productosPublicados).toBeNull();
+    expect(limitesDe(BUSINESS_VIGENTE, AHORA).productosPublicados).toBeNull();
+  });
+
+  it('un Pro vencido vuelve al tope de Free', () => {
+    expect(limitesDe(PRO_VENCIDO, AHORA).productosPublicados).toBe(3);
+  });
+
+  it('con cero publicados y tope tres, puede', () => {
+    expect(puedePublicarUnoMas(3, 0)).toBe(true);
+  });
+
+  it('con dos publicados y tope tres, todavía puede', () => {
+    expect(puedePublicarUnoMas(3, 2)).toBe(true);
+  });
+
+  /**
+   * El borde. Un `<=` en vez de un `<` deja publicar cuatro, y nadie lo nota
+   * hasta contar los productos de una tienda Free.
+   */
+  it('en el tope exacto, ya no', () => {
+    expect(puedePublicarUnoMas(3, 3)).toBe(false);
+  });
+
+  /**
+   * El caso de quien ya tenía más de tres cuando se introdujo el límite. No se
+   * le saca nada: simplemente no puede sumar.
+   */
+  it('por encima del tope tampoco, pero es un no-podés-sumar, no un tenés-que-borrar', () => {
+    expect(puedePublicarUnoMas(3, 10)).toBe(false);
+  });
+
+  it('sin tope, siempre puede', () => {
+    expect(puedePublicarUnoMas(null, 0)).toBe(true);
+    expect(puedePublicarUnoMas(null, 5_000)).toBe(true);
   });
 });

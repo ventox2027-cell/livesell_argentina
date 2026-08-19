@@ -85,6 +85,7 @@ class SellerRepository {
           .map((e) => Producto.fromJson(e as Map<String, dynamic>))
           .toList(),
       nextCursor: res.data!['nextCursor'] as String?,
+      catalogo: EstadoDelCatalogo.desdeJson(res.data!['catalogo']),
     );
   }
 

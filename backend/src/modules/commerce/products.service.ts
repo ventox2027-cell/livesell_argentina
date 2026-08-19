@@ -29,6 +29,7 @@ import { PromocionesService } from './promociones.service';
 import { ordenarPorPuntaje } from './ranking';
 import { SearchService } from './search.service';
 import { SellerOAuthService } from '@/modules/payments/seller-oauth.service';
+import { LimiteDeCatalogo } from '@/modules/sellers/limite-de-catalogo';
 
 import { PRODUCTO_COMPRABLE, PRODUCTO_VISIBLE } from './visibilidad';
 import {
@@ -195,6 +196,7 @@ export class ProductsService {
     private readonly sellerOAuth: SellerOAuthService,
     private readonly categorias: CategoriasService,
     private readonly promociones: PromocionesService,
+    private readonly limiteDeCatalogo: LimiteDeCatalogo,
   ) {}
 
   /**
@@ -249,6 +251,18 @@ export class ProductsService {
 
     try {
       await this.prisma.$transaction(async (tx) => {
+        /**
+         * El límite de catálogo, DENTRO de la transacción.
+         *
+         * Tiene que estar acá y no antes: el guardián toma un cerrojo por
+         * vendedor que se suelta al cerrar la transacción. Comprobarlo afuera
+         * dejaría el hueco entre la comprobación y la escritura, que es
+         * exactamente lo que dos toques rápidos aprovechan.
+         */
+        if (dto.status === 'ACTIVE') {
+          await this.limiteDeCatalogo.exigirPoderPublicar(tx, store.sellerId);
+        }
+
         await tx.product.create({
           data: {
             id: productId,
@@ -408,19 +422,37 @@ export class ProductsService {
       throw new InvalidPriceError('El precio tachado tiene que ser mayor que el de venta');
     }
 
-    const actualizado = await this.prisma.product.update({
-      where: { id: product.id },
-      data: {
-        ...(dto.name !== undefined ? { name: dto.name } : {}),
-        ...(dto.description !== undefined ? { description: dto.description } : {}),
-        ...(dto.basePriceCents !== undefined ? { basePriceCents: dto.basePriceCents } : {}),
-        ...(dto.compareAtPriceCents !== undefined
-          ? { compareAtPriceCents: dto.compareAtPriceCents }
-          : {}),
-        ...(dto.categoryId !== undefined ? { categoryId: dto.categoryId } : {}),
-        ...(dto.status !== undefined ? { status: dto.status } : {}),
-      },
-    });
+    /**
+     * Publicar un borrador también cuenta contra el límite, y por el mismo
+     * camino que crear uno ya publicado.
+     *
+     * Sin esto, el tope se saltea en dos pasos: crear como borrador —que es
+     * libre— y después editar el estado. Es el camino que usa la propia app
+     * cuando alguien arma la ficha y publica al final, así que no es un caso
+     * rebuscado: es el más común de los dos.
+     *
+     * Va en una transacción sólo cuando hace falta comprobar. Un cambio de
+     * precio no necesita cerrojo, y envolverlo igual serializaría ediciones que
+     * no compiten por nada.
+     */
+    const pasaAPublicado = dto.status === 'ACTIVE' && product.status !== 'ACTIVE';
+
+    const actualizado = pasaAPublicado
+      ? await this.prisma.$transaction(async (tx) => {
+          const tienda = await tx.store.findUniqueOrThrow({
+            where: { id: product.storeId },
+            select: { sellerId: true },
+          });
+          await this.limiteDeCatalogo.exigirPoderPublicar(tx, tienda.sellerId);
+          return tx.product.update({
+            where: { id: product.id },
+            data: this.camposAActualizar(dto),
+          });
+        })
+      : await this.prisma.product.update({
+          where: { id: product.id },
+          data: this.camposAActualizar(dto),
+        });
 
     await this.audit.logDiff({
       action: 'product.updated',
@@ -433,7 +465,7 @@ export class ProductsService {
 
     // Evento específico según a qué estado fue: un suscriptor de búsqueda
     // necesita saber si tiene que indexar o desindexar, no sólo "cambió".
-    if (dto.status === 'ACTIVE' && product.status !== 'ACTIVE') {
+    if (pasaAPublicado) {
       this.events.publish(DomainEvent.productActivated, { entityId: product.id, actorId: userId });
     } else if (dto.status === 'ARCHIVED' && product.status !== 'ARCHIVED') {
       this.events.publish(DomainEvent.productArchived, { entityId: product.id, actorId: userId });
@@ -442,6 +474,20 @@ export class ProductsService {
     }
 
     return this.cargarDetalle(product.id);
+  }
+
+  /** Los campos que el DTO pidió cambiar. Uno solo para los dos caminos. */
+  private camposAActualizar(dto: UpdateProductDto) {
+    return {
+      ...(dto.name !== undefined ? { name: dto.name } : {}),
+      ...(dto.description !== undefined ? { description: dto.description } : {}),
+      ...(dto.basePriceCents !== undefined ? { basePriceCents: dto.basePriceCents } : {}),
+      ...(dto.compareAtPriceCents !== undefined
+        ? { compareAtPriceCents: dto.compareAtPriceCents }
+        : {}),
+      ...(dto.categoryId !== undefined ? { categoryId: dto.categoryId } : {}),
+      ...(dto.status !== undefined ? { status: dto.status } : {}),
+    };
   }
 
   /**
@@ -491,7 +537,7 @@ export class ProductsService {
    * mismo en la página 1 que en la 500.
    */
   async listMine(userId: string, query: PageQueryDto) {
-    const { store } = await this.ownership.primaryStoreOf(userId);
+    const { seller, store } = await this.ownership.primaryStoreOf(userId);
 
     const filas = await this.prisma.product.findMany({
       where: {
@@ -510,10 +556,24 @@ export class ProductsService {
       take: query.limit + 1,
     });
 
-    return this.paginar(
+    const pagina = this.paginar(
       filas.map((f) => ({ ...f, images: conUrls(f.images) })),
       query.limit,
     );
+
+    /**
+     * El contador del plan viaja con el listado.
+     *
+     * La app tiene que poder decir «2 de 3 productos publicados» sin pedir otra
+     * cosa: un segundo viaje para un número que se muestra arriba de la misma
+     * lista deja la pantalla mostrando el estado de hace un rato, y el momento
+     * en que ese número importa es justo después de publicar.
+     *
+     * ⚠️ Sale en TODAS las páginas y no sólo en la primera. Es del vendedor, no
+     * de la página, y sacarlo de la segunda haría que el contador desapareciera
+     * al desplazarse.
+     */
+    return { ...pagina, catalogo: await this.limiteDeCatalogo.estado(seller.id) };
   }
 
   /**

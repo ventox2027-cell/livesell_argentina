@@ -166,11 +166,31 @@ export interface LimitesDelPlan {
   readonly cuponesActivos: number;
   /** Cuántos días de historial ve en las métricas. */
   readonly diasDeHistorial: number;
+  /**
+   * Cuántos productos puede tener PUBLICADOS a la vez. `null` = sin techo.
+   *
+   * ═══════════════════════════════════════════════════════════════════════════
+   * PUBLICADOS, NO CARGADOS
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * Cuenta sólo lo que un comprador puede ver: `ACTIVE`. Los borradores y los
+   * pausados no cuentan, y esa es toda la diferencia entre un límite y un
+   * castigo.
+   *
+   * Alguien en Free puede cargar cuarenta productos, dejarlos armados con sus
+   * fotos y sus variantes, y publicar tres. Puede pausar uno y publicar otro
+   * cuando cambia de temporada. Lo que no puede es tener más de tres a la vez
+   * en la vidriera.
+   *
+   * Si contara lo cargado, la app le diría «borrá productos para poder
+   * publicar» — y el trabajo de cargarlos se perdería. Nadie vuelve de eso.
+   */
+  readonly productosPublicados: number | null;
 }
 
 const LIMITES_POR_PLAN: Record<Plan, LimitesDelPlan> = {
-  FREE: { cuponesActivos: 0, diasDeHistorial: 30 },
-  PRO: { cuponesActivos: 20, diasDeHistorial: 365 },
+  FREE: { cuponesActivos: 0, diasDeHistorial: 30, productosPublicados: 3 },
+  PRO: { cuponesActivos: 20, diasDeHistorial: 365, productosPublicados: null },
   /**
    * Dos años de historial, no «infinito».
    *
@@ -179,8 +199,21 @@ const LIMITES_POR_PLAN: Record<Plan, LimitesDelPlan> = {
    * lenta cada mes que pasa, y el vendedor que más paga es el que primero lo
    * nota.
    */
-  BUSINESS: { cuponesActivos: 50, diasDeHistorial: 730 },
+  BUSINESS: { cuponesActivos: 50, diasDeHistorial: 730, productosPublicados: null },
 };
+
+/**
+ * Si puede publicar uno más.
+ *
+ * Función aparte y pura para que la respuesta no dependa de haber escrito bien
+ * el `>=` en el servicio. `null` es sin techo, y `0` publicados con techo `3`
+ * tiene que dar `true` — el borde de abajo se equivoca tan fácil como el de
+ * arriba.
+ */
+export function puedePublicarUnoMas(limite: number | null, publicadosAhora: number): boolean {
+  if (limite === null) return true;
+  return publicadosAhora < limite;
+}
 
 /** Lo que hay guardado sobre un vendedor. */
 export interface MembresiaGuardada {
