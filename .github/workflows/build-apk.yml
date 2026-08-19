@@ -1,0 +1,222 @@
+# Compila el APK y el AAB firmados, en la nube.
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# PARA QUÉ EXISTE
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# El backend corre en Railway, la base en Neon, las imágenes en R2. Lo único que
+# seguía necesitando una máquina prendida era compilar la app: cada cambio de
+# Flutter obligaba a estar frente a la PC.
+#
+# Esto lo cierra. Se dispara a mano —o al etiquetar una versión— y deja el APK
+# descargable desde GitHub, también desde el teléfono.
+#
+# ⚠️ NO se dispara en cada push. Un artefacto firmado por commit quema minutos y
+# llena la lista de binarios que nadie va a instalar. Los tests y el análisis sí
+# corren en cada push, en `ci.yml`.
+
+name: APK firmado
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_base_url:
+        description: 'A qué backend le habla la app'
+        required: true
+        default: 'https://livesellargentina-production.up.railway.app'
+      motivo:
+        description: 'Para qué es esta build (aparece en el nombre del artefacto)'
+        required: false
+        default: 'qa'
+  push:
+    tags:
+      - 'v*'
+
+# Una build a la vez. Dos en paralelo sobre el mismo ref no aportan nada y
+# compiten por los minutos.
+concurrency:
+  group: apk-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Compilar y firmar
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: mobile
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Java 17: lo exige el plugin de Android Gradle que usa el proyecto.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Instalar
+        run: flutter pub get
+
+      # ─── Las verificaciones ANTES de firmar ─────────────────────────────
+      #
+      # Un artefacto firmado sale con la etiqueta de "listo para instalar". Si
+      # además viniera de código que no compila los tests, esa etiqueta miente.
+      # Cuesta dos minutos y evita repartir una build rota.
+      - name: Analyze
+        run: flutter analyze --no-pub
+
+      - name: Tests
+        run: flutter test
+
+      # ─── Los secretos, sólo en archivos, nunca en el log ────────────────
+      #
+      # `base64 -d` lee de la entrada estándar para que el contenido no aparezca
+      # en la línea de comandos, que sí se registra. GitHub además enmascara los
+      # secretos en el log, pero no conviene depender de una sola barrera.
+      - name: Preparar la clave de firma
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::Falta el secreto ANDROID_KEYSTORE_BASE64."
+            echo "Generarlo con: base64 -w0 vendox-upload.jks   (o certutil en Windows)"
+            exit 1
+          fi
+
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > android/vendox-upload.jks
+
+          # `key.properties` es el archivo que lee build.gradle.kts. Es el mismo
+          # mecanismo que en local: acá se arma con los secretos en vez de a
+          # mano. Ver la nota de `key.properties.example`.
+          {
+            echo "storeFile=$(pwd)/android/vendox-upload.jks"
+            echo "storePassword=$STORE_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "keyPassword=$KEY_PASSWORD"
+          } > android/key.properties
+
+      # El plugin `com.google.gms.google-services` no compila sin este archivo, y
+      # está fuera del repositorio a propósito.
+      - name: Preparar google-services.json
+        env:
+          GOOGLE_SERVICES_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+        run: |
+          if [ -z "$GOOGLE_SERVICES_BASE64" ]; then
+            echo "::error::Falta el secreto GOOGLE_SERVICES_JSON_BASE64."
+            exit 1
+          fi
+          printf '%s' "$GOOGLE_SERVICES_BASE64" | base64 -d > android/app/google-services.json
+
+      # ─── Compilar ───────────────────────────────────────────────────────
+      #
+      # La URL del backend entra por `--dart-define`. Es lo que decide a qué
+      # servidor le habla esta build, y por eso es una entrada del workflow y no
+      # un valor fijo: la misma receta sirve para el QA de Railway y para el
+      # dominio propio cuando exista.
+      - name: Compilar el APK
+        run: |
+          flutter build apk --release \
+            --dart-define=API_BASE_URL=${{ github.event.inputs.api_base_url || 'https://livesellargentina-production.up.railway.app' }}
+
+      # El AAB es lo que sube a Play. El APK es para instalar a mano.
+      - name: Compilar el AAB
+        run: |
+          flutter build appbundle --release \
+            --dart-define=API_BASE_URL=${{ github.event.inputs.api_base_url || 'https://livesellargentina-production.up.railway.app' }}
+
+      # ─── La verificación que importa ────────────────────────────────────
+      #
+      # Que el binario esté firmado con la clave de SUBIDA y no con la de
+      # depuración.
+      #
+      # No es teórico: el 17 de agosto se descubrió que todas las builds salían
+      # con `CN=Android Debug` porque faltaba `key.properties` y Gradle caía a la
+      # clave de depuración en silencio. Se instalaron en un teléfono y nadie se
+      # enteró hasta mirarlo con `apksigner`.
+      #
+      # El build local ahora falla si falta la clave. Acá se comprueba el
+      # RESULTADO, que es la única prueba que no depende de que esa otra guarda
+      # siga en su lugar.
+      - name: Verificar la firma
+        run: |
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
+          echo "Usando $APKSIGNER"
+
+          SALIDA=$("$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk)
+          echo "$SALIDA"
+
+          if echo "$SALIDA" | grep -q "CN=Android Debug"; then
+            echo "::error::El APK quedó firmado con la clave de DEPURACIÓN. No sirve para Play."
+            exit 1
+          fi
+
+          if ! echo "$SALIDA" | grep -q "certificate DN:"; then
+            echo "::error::El APK no está firmado."
+            exit 1
+          fi
+
+          echo "✓ Firmado con una clave que no es la de depuración."
+
+      # Un escaneo de lo obvio sobre el binario. La lista completa vive en
+      # `tools/escanear-secretos.mjs`, que corre sobre lo versionado; esto mira
+      # lo COMPILADO, que es donde terminaría un secreto embebido por error.
+      - name: Buscar secretos en el binario
+        run: |
+          if strings -a build/app/outputs/flutter-apk/app-release.apk \
+            | grep -qiE 'APP_USR-[0-9]{6}|-----BEGIN (RSA |EC )?PRIVATE KEY|sk_live_'; then
+            echo "::error::Aparece algo que parece un secreto dentro del APK."
+            exit 1
+          fi
+          echo "✓ Sin hallazgos."
+
+      - name: Limpiar los archivos con secretos
+        if: always()
+        run: rm -f android/vendox-upload.jks android/key.properties android/app/google-services.json
+
+      # ─── El resultado ───────────────────────────────────────────────────
+      #
+      # 14 días: suficiente para instalar y probar, sin acumular binarios de 96
+      # MB para siempre. Una build vieja se vuelve a generar en diez minutos.
+      - name: Publicar el APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: vendox-apk-${{ github.event.inputs.motivo || github.ref_name }}
+          path: mobile/build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Publicar el AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: vendox-aab-${{ github.event.inputs.motivo || github.ref_name }}
+          path: mobile/build/app/outputs/bundle/release/app-release.aab
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Resumen
+        if: always()
+        run: |
+          {
+            echo "## APK firmado"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Backend | \`${{ github.event.inputs.api_base_url || 'https://livesellargentina-production.up.railway.app' }}\` |"
+            echo "| Commit | \`${{ github.sha }}\` |"
+            echo ""
+            echo "Bajalo desde **Artifacts**, acá abajo. Se puede desde el teléfono."
+          } >> "$GITHUB_STEP_SUMMARY"
