@@ -314,7 +314,14 @@ class SellerRepository {
         }
       }
       if (msg is String && msg.isNotEmpty) {
-        return ComercioException(msg, codigo: codigo);
+        return ComercioException(
+          msg,
+          codigo: codigo,
+          // Los detalles viajan sólo cuando son un objeto: cuando son una
+          // lista, son errores de validación campo por campo y ya se
+          // resolvieron arriba.
+          detalles: detalles is Map<String, dynamic> ? detalles : null,
+        );
       }
     }
     return ComercioException('No se pudo completar la operación.');
@@ -322,7 +329,7 @@ class SellerRepository {
 }
 
 class ComercioException implements Exception {
-  ComercioException(this.mensaje, {this.codigo});
+  ComercioException(this.mensaje, {this.codigo, this.detalles});
 
   final String mensaje;
 
@@ -331,6 +338,36 @@ class ComercioException implements Exception {
   /// La app decide con esto, nunca con el texto: el mensaje puede cambiar de
   /// redacción en cualquier momento y el código no.
   final String? codigo;
+
+  /// Lo que el backend adjunto al error.
+  ///
+  /// Un mapa suelto y no un tipo por cada error: cada codigo trae lo suyo y
+  /// modelarlos todos seria mantener veinte clases para leer un numero.
+  /// Quien lo use tiene que comprobar el tipo, que es lo que hace
+  /// .
+  final Map<String, dynamic>? detalles;
+
+  /// Llegó al tope de productos publicados de su plan.
+  ///
+  /// ⚠️ NO es un error, aunque llegue por el mismo camino que los errores.
+  ///
+  /// El producto se guardó perfecto: quedó como borrador. Lo único que pasó es
+  /// que el catálogo Free está completo. Mostrarlo como un cartel rojo le dice
+  /// al vendedor que su trabajo falló, que es lo contrario de lo que pasó.
+  ///
+  /// Quien lo reciba tiene que ofrecer la salida —ver Pro, o pausar uno— en vez
+  /// de mostrar el texto crudo. Ver `LimiteDelPlanSheet`.
+  bool get llegoAlLimiteDelPlan => codigo == 'PLAN_LIMIT_REACHED';
+
+  /// Cuántos productos permite el plan, según el backend.
+  ///
+  /// `null` si no vino. Quien lo use decide qué hacer — pero el número no se
+  /// escribe en Dart: tenerlo en dos lugares hace que el de la app quede viejo
+  /// el día que el plan cambie.
+  int? get limiteDelPlan {
+    final valor = detalles?['limite'];
+    return valor is int ? valor : null;
+  }
 
   /// Falta conectar Mercado Pago para poder publicar o transmitir.
   ///

@@ -12,7 +12,9 @@ import '../../inventory/presentation/stock_screen.dart';
 import '../data/categorias_api.dart';
 import '../data/tasas_api.dart';
 import '../data/seller_repository.dart';
+import 'pro_screen.dart';
 import 'widgets/conectar_mp_sheet.dart';
+import 'widgets/limite_del_plan_sheet.dart';
 import '../domain/desglose_de_precio.dart';
 import '../domain/seller_models.dart';
 
@@ -236,6 +238,31 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
   /// Mostrarlo como un error rojo cualquiera dejaría al vendedor buscando
   /// dónde se arregla, con el producto ya cargado y sin poder publicarlo.
   Future<void> _mostrarError(Object e, {Future<void> Function()? reintentar}) async {
+    /**
+     * ⚠️ Llegar al tope del plan NO es un error, aunque llegue por acá.
+     *
+     * El producto se guardó perfecto: quedó como borrador. Lo único que pasó es
+     * que el catálogo Free está completo.
+     *
+     * Antes se mostraba con `AppSnack.error` —un cartel rojo con el texto crudo
+     * del backend— y eso le decía al vendedor que su trabajo había fallado. Es
+     * lo contrario de lo que pasó, y encima no ofrecía ninguna salida.
+     */
+    if (e is ComercioException && e.llegoAlLimiteDelPlan) {
+      final quiereVerPro = await LimiteDelPlanSheet.mostrar(
+        context,
+        // El límite lo dice el backend. Escribir un 3 acá sería tener el número
+        // en dos lugares, y el de la app quedaría viejo el día que cambie.
+        limite: e.limiteDelPlan ?? 3,
+      );
+      if (quiereVerPro && mounted) {
+        await Navigator.of(context).push(
+          MaterialPageRoute<void>(builder: (_) => const ProScreen()),
+        );
+      }
+      return;
+    }
+
     if (e is ComercioException && e.requiereMercadoPago) {
       final fueAConectar = await ConectarMpSheet.mostrar(context, AccionBloqueada.publicar);
       /**

@@ -286,6 +286,7 @@ class PedidoException implements Exception {
   bool get rechazado => codigo == 'PAYMENT_REJECTED';
   bool get yaHayUnPagoEnCurso => codigo == 'PAYMENT_IN_FLIGHT';
 
+
   @override
   String toString() => mensaje;
 }
