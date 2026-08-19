@@ -1,9 +1,5 @@
 import 'reflect-metadata';
 
-import { existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-
-
 import { NestFactory } from '@nestjs/core';
 import fastifyStatic from '@fastify/static';
 import { type NestFastifyApplication } from '@nestjs/platform-fastify';
@@ -11,29 +7,14 @@ import { Logger } from 'nestjs-pino';
 
 import { AppModule } from './app.module';
 import { env, isLocalEnv } from './config/env.schema';
-import { configurarPrefijoYVersionado, crearAdaptador, registrarMultipart } from './http-setup';
+import {
+  configurarPrefijoYVersionado,
+  crearAdaptador,
+  registrarMultipart,
+  registrarSitioPublico,
+} from './http-setup';
 import { resolverDeIp } from './shared/http/client-ip';
 import { registrarApagadoOrdenado } from './shutdown';
-
-/**
- * Dónde están los archivos del sitio público.
- *
- * Dos ubicaciones posibles, y las dos son legítimas:
- *
- *   · `../web` — corriendo desde `backend/` en una máquina de desarrollo, con
- *     el repositorio completo alrededor.
- *   · `./web`  — dentro del contenedor, donde el Dockerfile copia sólo esa
- *     carpeta al lado de `dist`.
- *
- * Se devuelve `null` si no está ninguna, en vez de inventar una ruta. Un
- * `root` que no existe hace fallar el registro del plugin y con él todo el
- * arranque: la API entera caída porque falta una landing es un intercambio que
- * nadie haría.
- */
-function raizDelSitio(): string | null {
-  const candidatas = [resolve(process.cwd(), '..', 'web'), resolve(process.cwd(), 'web')];
-  return candidatas.find((ruta) => existsSync(join(ruta, 'index.html'))) ?? null;
-}
 
 async function bootstrap(): Promise<void> {
   // Opciones, hooks y parsers viven en http-setup.ts, que también usan los
@@ -80,51 +61,16 @@ async function bootstrap(): Promise<void> {
   }
 
   /**
-   * ═══════════════════════════════════════════════════════════════════════════
-   * EL SITIO PÚBLICO SE SIRVE DESDE ACÁ, Y NO DESDE UN HOSTING APARTE
-   * ═══════════════════════════════════════════════════════════════════════════
+   * El sitio público de `vendox.com.ar`.
    *
-   * `vendox.com.ar` y `api.vendox.com.ar` apuntan al mismo servicio. Parece
-   * mezclar dos cosas, y es al revés: separarlas obligaría a mantener un
-   * proxy, porque hay rutas del dominio público que **sólo** puede contestar el
-   * backend.
+   * ⚠️ El registro vive en `http-setup.ts` y no acá, que es donde estaba.
    *
-   *   · `/.well-known/assetlinks.json` — las huellas salen de la configuración
-   *     del entorno, no de un archivo del repositorio.
-   *   · `/p/:id`, `/v/:id`, `/t/:slug`, `/u/:slug` — la previsualización de
-   *     WhatsApp la arma un robot que no ejecuta JavaScript: las etiquetas
-   *     `og:` tienen que venir escritas en el HTML que responde el servidor.
-   *   · `/descargar/android` — la descarga del APK es una redirección firmada
-   *     a R2. El bucket es privado y tiene que seguir siéndolo.
-   *
-   * Con un hosting estático aparte, esas seis rutas necesitan reglas de proxy
-   * que hay que mantener sincronizadas a mano con el código. Con un solo
-   * origen, no existe la pregunta de quién sirve qué.
-   *
-   * El costo es que el proceso de la API entrega cuatro archivos HTML. Son 40
-   * kB y se cachean; el proceso ya venía sirviendo HTML en `/p/:id`.
-   *
-   * ⚠️ `wildcard: false` es lo que hace que esto sea seguro: un pedido que no
-   * corresponde a un archivo real NO lo contesta este plugin, sigue de largo y
-   * lo resuelven las rutas de Nest. Con el comodín encendido, `/p/abc123` se
-   * comería el 404 del estático y la previsualización de WhatsApp mostraría una
-   * página en blanco.
+   * Por eso ningún test lo vio: `https://api.vendox.com.ar/eliminar-cuenta`
+   * devolvía 404 mientras `/eliminar-cuenta/index.html` devolvía 200. Es una
+   * URL que Google Play abre para revisar la app. Ver la lista de las otras
+   * cuatro veces que pasó exactamente lo mismo en `test/helpers/app.ts`.
    */
-  const raizWeb = raizDelSitio();
-  if (raizWeb) {
-    await app.register(fastifyStatic, {
-      root: raizWeb,
-      prefix: '/',
-      // `/privacidad` tiene que servir `/privacidad/index.html`.
-      index: ['index.html'],
-      // Ya lo decoró el registro de `/media/`. Sólo uno puede.
-      decorateReply: false,
-      list: false,
-      wildcard: false,
-      // Un año para lo que lleva huella en el nombre; el HTML se revalida.
-      maxAge: '10m',
-    });
-  }
+  const raizWeb = await registrarSitioPublico(app.getHttpAdapter().getInstance());
   // Si `raizWeb` es null la API funciona igual, pero el dominio público
   // devuelve 404 y nada más lo explica. Por eso viaja en el log de arranque
   // —`sitio`— junto al resto de lo que hay que poder ver de un vistazo.

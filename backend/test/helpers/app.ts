@@ -5,6 +5,7 @@ import {
   configurarPrefijoYVersionado,
   crearAdaptador,
   registrarMultipart,
+  registrarSitioPublico,
 } from '@/http-setup';
 
 /**
@@ -52,6 +53,18 @@ export async function crearAppDePrueba(
   configurarPrefijoYVersionado(app);
 
   await registrarMultipart(app);
+
+  /**
+   * ⚠️ El sitio público también. Faltaba, y ése fue el quinto caso de la lista
+   * de arriba: `/eliminar-cuenta` daba 404 en producción y ningún test podía
+   * verlo porque acá no había sitio que servir.
+   *
+   * Además protege el sentido contrario: si algún día un archivo de `web/`
+   * tapara una ruta de la API, se rompe un test de integración en vez de
+   * romperse el teléfono de alguien.
+   */
+  await registrarSitioPublico(app.getHttpAdapter().getInstance());
+
   await app.init();
   await app.getHttpAdapter().getInstance().ready();
 

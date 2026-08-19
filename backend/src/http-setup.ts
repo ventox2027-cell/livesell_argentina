@@ -1,8 +1,14 @@
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+
 import { RequestMethod, VersioningType } from '@nestjs/common';
 import multipart from '@fastify/multipart';
+import fastifyStatic from '@fastify/static';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
+import type { FastifyInstance } from 'fastify';
 
 import { env } from '@/config/env.schema';
+import { paginasDelSitio, raizDelSitio } from '@/config/sitio-publico';
 import {
   RUTA_OAUTH_MERCADOPAGO,
   RUTA_WEBHOOK_LIVEKIT,
@@ -246,4 +252,111 @@ export async function registrarMultipart(app: NestFastifyApplication): Promise<v
       fieldSize: 4 * 1024,
     },
   });
+}
+
+/**
+ * Monta el sitio público de `vendox.com.ar`.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * SE SIRVE DESDE LA API, Y NO DESDE UN HOSTING APARTE
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * `vendox.com.ar` y `api.vendox.com.ar` apuntan al mismo servicio. Parece
+ * mezclar dos cosas, y es al revés: separarlas obligaría a mantener un proxy,
+ * porque hay rutas del dominio público que **sólo** puede contestar el backend.
+ *
+ *   · `/.well-known/assetlinks.json` — las huellas salen de la configuración
+ *     del entorno, no de un archivo del repositorio.
+ *   · `/p/:id`, `/v/:id`, `/t/:slug`, `/u/:slug` — la previsualización de
+ *     WhatsApp la arma un robot que no ejecuta JavaScript: las etiquetas `og:`
+ *     tienen que venir escritas en el HTML que responde el servidor.
+ *   · `/descargar/android` — la descarga del APK es una redirección firmada a
+ *     R2. El bucket es privado y tiene que seguir siéndolo.
+ *
+ * Con un hosting estático aparte, esas rutas necesitan reglas de proxy que hay
+ * que mantener sincronizadas a mano con el código. Con un solo origen, no
+ * existe la pregunta de quién sirve qué.
+ *
+ * El costo es que el proceso de la API entrega cuatro archivos HTML. Son 40 kB
+ * y se cachean; el proceso ya venía sirviendo HTML en `/p/:id`.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * POR QUÉ ESTO ESTÁ ACÁ Y NO EN `main.ts`
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Porque estaba en `main.ts` y por eso ningún test lo vio.
+ *
+ * Es la quinta vez que pasa lo mismo —ver la lista en `test/helpers/app.ts`— y
+ * esta vez el resultado fue que `https://api.vendox.com.ar/eliminar-cuenta`
+ * devolvía **404** mientras `/eliminar-cuenta/index.html` devolvía 200. Los
+ * tests del sitio leían los archivos del disco y confirmaban que estaban ahí,
+ * que es cierto y no era la pregunta.
+ *
+ * Es una URL que Google Play abre para revisar la app.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * LO QUE LE FALTA AL PLUGIN, Y POR QUÉ NO SE ARREGLA CON EL COMODÍN
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Con `wildcard: false`, `@fastify/static` registra una ruta por archivo real.
+ * Para `web/privacidad/index.html` eso da `/privacidad/index.html` y, por la
+ * opción `index`, también `/privacidad/`. La forma **sin** barra final no queda
+ * registrada por nadie, y es la que la gente escribe.
+ *
+ * ─── Lo que se midió antes de elegir el arreglo ───
+ *
+ * El comentario que había acá decía que encender el comodín rompería `/p/:id`,
+ * `/v/:id`, `/t/:slug` y `/u/:slug`. Se probó con las versiones instaladas
+ * —Fastify 5, `@fastify/static` 10— y no es cierto: el enrutador prefiere una
+ * ruta con parámetro antes que el comodín, sin importar el orden de registro, y
+ * lo que no existe sigue cayendo en el manejador de 404 de la aplicación.
+ *
+ * O sea que `wildcard: true` también habría arreglado esto. Se dejó en `false`
+ * igual, por dos razones: es lo que se pidió conservar, y una ruta explícita es
+ * una garantía nuestra en vez de un detalle de resolución de un plugin que
+ * puede cambiar en la próxima versión menor.
+ *
+ * Sin redirección: un 301 a la barra final funcionaría, pero cuesta un viaje de
+ * ida y vuelta más en un teléfono con mala señal para no ganar nada.
+ */
+export async function registrarSitioPublico(
+  fastify: FastifyInstance,
+): Promise<string | null> {
+  const raiz = raizDelSitio();
+  if (!raiz) return null;
+
+  await fastify.register(fastifyStatic, {
+    root: raiz,
+    prefix: '/',
+    // `/privacidad/` tiene que servir `/privacidad/index.html`.
+    index: ['index.html'],
+    /**
+     * ⚠️ No se decora `reply.sendFile`.
+     *
+     * Con `STORAGE_DRIVER=local` ya lo decoró el registro de `/media/`, y sólo
+     * uno puede. Pero en producción ese registro NO ocurre, así que
+     * `reply.sendFile` no existiría — y un handler que lo use andaría en
+     * desarrollo y explotaría en Railway. Por eso las páginas de abajo leen el
+     * archivo y lo mandan, sin depender de la decoración.
+     */
+    decorateReply: false,
+    list: false,
+    wildcard: false,
+    // Un año para lo que lleva huella en el nombre; el HTML se revalida.
+    maxAge: '10m',
+  });
+
+  for (const pagina of paginasDelSitio(raiz)) {
+    const archivo = join(raiz, pagina, 'index.html');
+
+    fastify.get(pagina, async (_peticion, respuesta) => {
+      const html = await readFile(archivo, 'utf8');
+      return respuesta
+        .type('text/html; charset=utf-8')
+        .header('cache-control', 'public, max-age=600')
+        .send(html);
+    });
+  }
+
+  return raiz;
 }
