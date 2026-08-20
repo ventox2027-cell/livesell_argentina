@@ -22,8 +22,17 @@ import 'package:flutter_test/flutter_test.dart';
 /// está bien. Lo único que lo pilla es mirar quién llama a qué, que es
 /// exactamente lo que hace este archivo.
 void main() {
-  /// El único archivo donde `LiveApi.seguir` se puede llamar.
-  const puertaUnica = 'lib/features/social/data/seguimientos.dart';
+  /// Los únicos archivos donde se puede seguir a alguien.
+  ///
+  /// `seguimientos.dart` es la puerta que avisa a la pestaña «Siguiendo», y
+  /// `perfil_de_vendedor.dart` es el estado compartido por `sellerId` que la
+  /// atraviesa. Cualquier pantalla que llame por su cuenta se saltea los dos:
+  /// no avisa, y deja su propia copia de «lo sigo» que va a contradecir a las
+  /// otras superficies del mismo vendedor.
+  const puertasUnicas = [
+    'lib/features/social/data/seguimientos.dart',
+    'lib/features/social/data/perfil_de_vendedor.dart',
+  ];
 
   /// Y el archivo donde vive la llamada HTTP.
   const definicion = 'lib/features/lives/data/live_api.dart';
@@ -43,7 +52,7 @@ void main() {
     final culpables = <String>[];
     for (final archivo in dartDeLib()) {
       final ruta = rutaNormal(archivo);
-      if (ruta.endsWith(puertaUnica) || ruta.endsWith(definicion)) continue;
+      if (puertasUnicas.any(ruta.endsWith) || ruta.endsWith(definicion)) continue;
 
       final texto = archivo.readAsStringSync();
       for (final linea in texto.split('\n')) {
@@ -69,7 +78,7 @@ void main() {
   /// reenvío a `LiveApi`— y el test de arriba seguiría en verde mientras el bug
   /// vuelve entero.
   test('⛔ Seguimientos sube su versión al seguir', () {
-    final texto = File(puertaUnica).readAsStringSync();
+    final texto = File(puertasUnicas.first).readAsStringSync();
 
     expect(texto, contains('state = state + 1'));
   });

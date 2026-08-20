@@ -288,6 +288,93 @@ void main() {
       expect(find.text('Vela agotada'), findsOneWidget, reason: 'La tienda se cerró sola');
     });
   });
+  group('Por qué no se ve el catálogo', () {
+    /**
+     * ⛔ VIDRIERA APAGADA: SE DICE QUÉ PASA, Y NO SE OFRECE REINTENTAR.
+     *
+     * La tienda existe y el vendedor la cerró al público. Reintentar no lo
+     * arregla, así que el botón no está: uno que nunca va a funcionar es peor
+     * que ninguno.
+     */
+    testWidgets('⛔ vidriera apagada: mensaje propio, sin Reintentar', (tester) async {
+      final api = _ApiFalsa.conError(const VidrieraApagada());
+      await tester.pumpWidget(montarVivo(api));
+      await tester.tap(find.text('Tienda'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Vidriera no disponible'), findsOneWidget);
+      expect(
+        find.text('Esta tienda no tiene su vidriera disponible por el momento.'),
+        findsOneWidget,
+      );
+      expect(find.text('Reintentar'), findsNothing);
+      expect(find.text('No pudimos abrir la tienda'), findsNothing);
+    });
+
+    /**
+     * ⛔ Y NO SE CONFUNDE CON UNA TIENDA VACÍA.
+     *
+     * Era exactamente lo que pasaba: `ApiClient` no lanza con 4xx, así que el
+     * cuerpo del 404 entraba al parseo y salía una página vacía. Una vidriera
+     * apagada decía «todavía no tiene productos».
+     */
+    testWidgets('⛔ vidriera apagada no se lee como tienda vacía', (tester) async {
+      final api = _ApiFalsa.conError(const VidrieraApagada());
+      await tester.pumpWidget(montarVivo(api));
+      await tester.tap(find.text('Tienda'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('La tienda todavía no tiene productos'), findsNothing);
+    });
+
+    /**
+     * ⛔ UNA TIENDA QUE NO EXISTE ES OTRA COSA.
+     *
+     * No todos los 404 son vidrieras apagadas: un enlace viejo apunta a algo
+     * que ya no está, y decir «no está disponible por el momento» sugeriría que
+     * vuelve.
+     */
+    testWidgets('⛔ tienda inexistente no se confunde con vidriera apagada', (tester) async {
+      final api = _ApiFalsa.conError(const TiendaNoEncontrada());
+      await tester.pumpWidget(montarVivo(api));
+      await tester.tap(find.text('Tienda'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('No encontramos esta tienda'), findsOneWidget);
+      expect(find.text('Vidriera no disponible'), findsNothing);
+      expect(find.text('Reintentar'), findsNothing);
+    });
+
+    /**
+     * ⛔ UN FALLO DE RED SÍ SE REINTENTA.
+     *
+     * Es la otra mitad: confundirlo con la vidriera apagada dejaría a alguien
+     * sin forma de reintentar cuando lo único que pasó fue que se cortó la
+     * señal.
+     */
+    testWidgets('⛔ un fallo de red mantiene el mensaje genérico y Reintentar', (tester) async {
+      final api = _ApiFalsa.conError(StateError('sin red'));
+      await tester.pumpWidget(montarVivo(api));
+      await tester.tap(find.text('Tienda'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('No pudimos abrir la tienda'), findsOneWidget);
+      expect(find.text('Reintentar'), findsOneWidget);
+      expect(find.text('Vidriera no disponible'), findsNothing);
+    });
+
+    /// Y con la vidriera abierta pero sin nada adentro, el vacío de siempre.
+    testWidgets('vidriera abierta y sin productos: empty state del catálogo', (tester) async {
+      await tester.pumpWidget(montarVivo(_ApiFalsa(const PaginaDeCatalogo(items: []))));
+      await tester.tap(find.text('Tienda'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('La tienda todavía no tiene productos'), findsOneWidget);
+      expect(find.text('Vidriera no disponible'), findsNothing);
+      expect(find.text('No pudimos abrir la tienda'), findsNothing);
+    });
+  });
+
 }
 
 const _conUnProducto = PaginaDeCatalogo(
@@ -341,7 +428,15 @@ class _ApiFalsa extends LiveApi {
       : _catalogo = null,
         super(ApiClient(tokens: TokenStore()));
 
+  /// Con un error concreto, para probar cómo se ve cada uno.
+  _ApiFalsa.conError(this.error)
+      : _catalogo = null,
+        super(ApiClient(tokens: TokenStore()));
+
   final PaginaDeCatalogo? _catalogo;
+
+  /// El error que devuelve el backend, si el test puso uno.
+  Object? error;
 
   /// A qué tiendas se les pidió el catálogo, en orden.
   final List<String> tiendasPedidas = [];
@@ -371,6 +466,8 @@ class _ApiFalsa extends LiveApi {
   @override
   Future<PaginaDeCatalogo> catalogo(String storeId, {String? cursor, String? q}) async {
     tiendasPedidas.add(storeId);
+    final falla = error;
+    if (falla != null) throw falla;
     final pagina = _catalogo;
     if (pagina == null) throw Exception('sin red');
     return pagina;

@@ -11,6 +11,7 @@ import '../../../shared/widgets/app_snack.dart';
 import '../../orders/domain/order_models.dart';
 import '../../orders/presentation/checkout_sheet.dart';
 import '../data/inventory_repository.dart';
+import '../data/reserva_en_curso.dart';
 import '../domain/inventory_models.dart';
 
 /// Hoja de reserva: elegir cantidad, apartar, y ver el tiempo que queda.
@@ -95,6 +96,21 @@ class _ReserveSheetState extends ConsumerState<ReserveSheet> with WidgetsBinding
   int _restantes = 0;
   Timer? _tictac;
 
+  /// Cómo va a terminar este paso por la hoja.
+  ///
+  /// ═══════════════════════════════════════════════════════════════════════════
+  /// SE DECLARA ANTES DE CERRAR, NO SE DEDUCE DESPUÉS
+  /// ═══════════════════════════════════════════════════════════════════════════
+  ///
+  /// Arranca en `abandonada` a propósito: cerrar la hoja sin haber hecho nada
+  /// más ES abandonar, y ese es justo el caso que se estaba perdiendo. Los
+  /// otros dos desenlaces los marca quien los provoca —el botón de pagar y el
+  /// de soltar— antes de que la hoja se vaya.
+  ///
+  /// ⚠️ Deducirlo en el `dispose` no alcanza: desde ahí, irse a pagar y cerrar
+  /// la hoja se ven exactamente igual.
+  SalidaDeLaReserva _salida = SalidaDeLaReserva.abandonada;
+
   /// La clave de idempotencia de ESTE intento.
   ///
   /// ─── Por qué nace acá y no en cada llamada ───
@@ -170,11 +186,24 @@ class _ReserveSheetState extends ConsumerState<ReserveSheet> with WidgetsBinding
       // segundo que el sistema se saltee no desfasa el contador para siempre.
       final faltan = _reserva!.segundosRestantes();
       setState(() => _restantes = faltan);
-      if (faltan <= 0) t.cancel();
+      if (faltan <= 0) {
+        t.cancel();
+        /**
+         * Venció: el backend ya la liberó por TTL.
+         *
+         * Se olvida para que cerrar la hoja después no mande un `DELETE` sobre
+         * algo que ya no está activo. El camino del vencimiento no cambia — lo
+         * sigue manejando el servidor, que es el único que sabe la hora buena.
+         */
+        ref.read(reservaEnCursoProvider.notifier).olvidar();
+      }
     });
   }
 
   Future<void> _reservar() async {
+    // Apartar de nuevo después de haber soltado es un paso nuevo por la hoja:
+    // vuelve a contar como «si cierra, abandonó».
+    _salida = SalidaDeLaReserva.abandonada;
     setState(() => _reservando = true);
     try {
       final r = await ref.read(inventoryRepositoryProvider).reservar(
@@ -186,6 +215,10 @@ class _ReserveSheetState extends ConsumerState<ReserveSheet> with WidgetsBinding
 
       unawaited(HapticFeedback.mediumImpact());
       _arrancarCuenta(r);
+
+      // Desde acá hay algo apartado. Si la hoja se cierra sin ir a pagar, lo
+      // suelta `ReservaEnCurso`, que sobrevive a esta pantalla.
+      ref.read(reservaEnCursoProvider.notifier).tomada(r.reservationId);
 
       // El backend devolvió una que ya existía: se avisa, porque si no la
       // persona no entiende por qué la cantidad no es la que acababa de elegir.
@@ -225,6 +258,17 @@ class _ReserveSheetState extends ConsumerState<ReserveSheet> with WidgetsBinding
     final r = _reserva;
     if (r == null) return;
 
+    /**
+     * ⚠️ ACÁ SE DEJA DE ABANDONAR.
+     *
+     * Se marca ANTES de abrir el checkout, no después: el checkout puede
+     * mandar a la app de Mercado Pago, y desde ese momento esta hoja puede
+     * cerrarse por caminos que no controlamos. Si la salida siguiera diciendo
+     * «abandonada», la reserva se soltaría justo cuando la persona está
+     * pagándola.
+     */
+    _salida = SalidaDeLaReserva.pagando;
+
     final pedido = await CheckoutSheet.mostrar(
       context,
       reservationId: r.reservationId,
@@ -238,7 +282,22 @@ class _ReserveSheetState extends ConsumerState<ReserveSheet> with WidgetsBinding
     ref.invalidate(disponibilidadProvider(widget.productVariantId));
 
     // Con el pedido resuelto, la hoja de reserva ya cumplió su función.
-    if (pedido != null) Navigator.of(context).pop(pedido);
+    if (pedido != null) {
+      // La reserva la consumió el pedido: ya no hay nada que soltar.
+      ref.read(reservaEnCursoProvider.notifier).olvidar();
+      Navigator.of(context).pop(pedido);
+      return;
+    }
+
+    /**
+     * Volvió del checkout SIN pagar y la hoja sigue abierta.
+     *
+     * Vuelve a contar como «está mirando»: si ahora cierra, abandonó. Sin esta
+     * línea, entrar al checkout una vez blindaría la reserva para siempre —el
+     * resto de la sesión de esta hoja saldría como «pagando»— y la unidad
+     * quedaría tomada hasta que venza el TTL.
+     */
+    _salida = SalidaDeLaReserva.abandonada;
   }
 
   Future<void> _cancelar() async {
@@ -249,6 +308,16 @@ class _ReserveSheetState extends ConsumerState<ReserveSheet> with WidgetsBinding
     try {
       await ref.read(inventoryRepositoryProvider).cancelar(r.reservationId);
       _tictac?.cancel();
+
+      /**
+       * ⚠️ Ya está soltada: que el cierre de la hoja no vuelva a soltarla.
+       *
+       * Sin esto, tocar «Soltar reserva» y después cerrar mandaría un segundo
+       * `DELETE` sobre una reserva que ya no está activa.
+       */
+      _salida = SalidaDeLaReserva.liberada;
+      ref.read(reservaEnCursoProvider.notifier).olvidar();
+
       ref.invalidate(disponibilidadProvider(widget.productVariantId));
       if (!mounted) return;
       setState(() {
@@ -269,86 +338,118 @@ class _ReserveSheetState extends ConsumerState<ReserveSheet> with WidgetsBinding
     final reservada = _reserva != null && _restantes > 0;
     final vencida = _reserva != null && _restantes <= 0;
 
-    return Padding(
-      padding: EdgeInsets.only(
-        left: Gap.xl,
-        right: Gap.xl,
-        top: Gap.md,
-        bottom: MediaQuery.viewInsetsOf(context).bottom + Gap.xl,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _Agarradera(),
-          const SizedBox(height: Gap.lg),
-          Text(
-            widget.nombreProducto,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.titleLarge,
-          ),
-          if (widget.variante != null) ...[
-            const SizedBox(height: 2),
-            Text(
-              widget.variante!,
-              style: const TextStyle(fontSize: 13.5, color: AppColor.textoSuave),
-            ),
-          ],
-          const SizedBox(height: Gap.sm),
-          Text(
-            widget.precio,
-            style: const TextStyle(
-              fontSize: 26,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -0.8,
-            ),
-          ),
-          const SizedBox(height: Gap.xl),
-          if (vencida)
-            _Vencida(
-              onReintentar: () {
-                setState(() {
-                  _reserva = null;
-                  _clave = _nuevaClave();
-                });
-              },
-            )
-          else if (reservada)
-            _Reservada(
-              restantes: _restantes,
-              cantidad: _reserva!.quantity,
-              onPagar: _irAPagar,
-              onCancelar: _reservando ? null : _cancelar,
-            )
-          else ...[
-            _SelectorCantidad(
-              valor: _cantidad,
-              onCambio: _reservando ? null : (v) => setState(() => _cantidad = v),
-            ),
+    return PopScope(
+      /**
+       * ═══════════════════════════════════════════════════════════════════════
+       * IRSE DE ACÁ SUELTA LO APARTADO
+       * ═══════════════════════════════════════════════════════════════════════
+       *
+       * Un `PopScope` y no un `dispose` porque cubre TODAS las formas de salir
+       * de una hoja modal con una sola pieza: el botón de atrás del sistema, el
+       * arrastre hacia abajo, el toque afuera y el `pop` que hace el código.
+       * Todas terminan en un `pop`, y todas pasan por acá.
+       *
+       * ⚠️ `canPop: true`: no se frena la salida ni se pregunta nada. Alguien
+       * que se está yendo ya decidió; un diálogo de «¿seguro?» encima de una
+       * reserva de tres minutos es un obstáculo, no una ayuda.
+       *
+       * Y NO se libera por ciclo de vida. Que la app pase a segundo plano
+       * —porque se abrió Mercado Pago, o llegó una llamada— no es abandonar.
+       * Esta hoja sigue viva y la persona vuelve. Ver `SalidaDeLaReserva`.
+       */
+      canPop: true,
+      onPopInvokedWithResult: (_, __) {
+        /**
+         * Se avisa al notifier, que sobrevive a esta hoja.
+         *
+         * Para cuando esto corre, el widget se está yendo: no se puede usar
+         * `setState` ni esperar el resultado. Por eso lo hace `ReservaEnCurso`,
+         * que vive en el `ProviderScope` — y por eso `alSalir` es idempotente y
+         * no lanza.
+         */
+        unawaited(ref.read(reservaEnCursoProvider.notifier).alSalir(_salida));
+      },
+      child: Padding(
+        padding: EdgeInsets.only(
+          left: Gap.xl,
+          right: Gap.xl,
+          top: Gap.md,
+          bottom: MediaQuery.viewInsetsOf(context).bottom + Gap.xl,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _Agarradera(),
             const SizedBox(height: Gap.lg),
-            FilledButton(
-              onPressed: _reservando ? null : _reservar,
-              style: FilledButton.styleFrom(minimumSize: const Size(0, 52)),
-              child: _reservando
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                    )
-                  : const Text(
-                      'Apartar',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-                    ),
+            Text(
+              widget.nombreProducto,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.titleLarge,
             ),
+            if (widget.variante != null) ...[
+              const SizedBox(height: 2),
+              Text(
+                widget.variante!,
+                style: const TextStyle(fontSize: 13.5, color: AppColor.textoSuave),
+              ),
+            ],
             const SizedBox(height: Gap.sm),
-            const Text(
-              'Te lo guardamos unos minutos mientras terminás la compra.',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 12.5, color: AppColor.textoSuave),
+            Text(
+              widget.precio,
+              style: const TextStyle(
+                fontSize: 26,
+                fontWeight: FontWeight.w800,
+                letterSpacing: -0.8,
+              ),
             ),
+            const SizedBox(height: Gap.xl),
+            if (vencida)
+              _Vencida(
+                onReintentar: () {
+                  setState(() {
+                    _reserva = null;
+                    _clave = _nuevaClave();
+                  });
+                },
+              )
+            else if (reservada)
+              _Reservada(
+                restantes: _restantes,
+                cantidad: _reserva!.quantity,
+                onPagar: _irAPagar,
+                onCancelar: _reservando ? null : _cancelar,
+              )
+            else ...[
+              _SelectorCantidad(
+                valor: _cantidad,
+                onCambio: _reservando ? null : (v) => setState(() => _cantidad = v),
+              ),
+              const SizedBox(height: Gap.lg),
+              FilledButton(
+                onPressed: _reservando ? null : _reservar,
+                style: FilledButton.styleFrom(minimumSize: const Size(0, 52)),
+                child: _reservando
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      )
+                    : const Text(
+                        'Apartar',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                      ),
+              ),
+              const SizedBox(height: Gap.sm),
+              const Text(
+                'Te lo guardamos unos minutos mientras terminás la compra.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 12.5, color: AppColor.textoSuave),
+              ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }

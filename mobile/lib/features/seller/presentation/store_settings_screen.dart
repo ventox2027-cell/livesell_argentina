@@ -86,6 +86,46 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
     }
   }
 
+  /// Enciende o apaga la vidriera pública.
+  ///
+  /// ═══════════════════════════════════════════════════════════════════════════
+  /// NO ES PAUSAR LA TIENDA
+  /// ═══════════════════════════════════════════════════════════════════════════
+  ///
+  /// Pausar frena las compras. Apagar la vidriera esconde el catálogo y deja
+  /// todo lo demás igual: los productos siguen publicados, siguen apareciendo
+  /// en el feed y se siguen vendiendo desde ahí. Su perfil también sigue
+  /// entero, con seguidores y reputación.
+  ///
+  /// Son dos interruptores distintos porque responden dos preguntas distintas,
+  /// y fundirlos haría que esconder la vidriera frene las ventas.
+  Future<void> _alternarVidriera(PerfilVendedor perfil) async {
+    final store = perfil.store;
+    if (store == null) return;
+
+    final encender = !store.vidrieraActiva;
+    setState(() => _guardando = true);
+    try {
+      await ref.read(sellerRepositoryProvider).actualizarTienda(
+            store.id,
+            vidrieraActiva: encender,
+          );
+      unawaited(ref.read(miPerfilVendedorProvider.notifier).reconciliar());
+      if (mounted) {
+        AppSnack.exito(
+          context,
+          encender
+              ? 'Tu vidriera ya se puede visitar'
+              : 'Vidriera apagada. Tus productos siguen publicados.',
+        );
+      }
+    } catch (e) {
+      if (mounted) AppSnack.error(context, mensajeDeError(e));
+    } finally {
+      if (mounted) setState(() => _guardando = false);
+    }
+  }
+
   Future<void> _alternarApertura(PerfilVendedor perfil) async {
     final store = perfil.store;
     if (store == null) return;
@@ -226,6 +266,17 @@ class _StoreSettingsScreenState extends ConsumerState<StoreSettingsScreen> {
                   },
                 ),
                 const SizedBox(height: Gap.md),
+                /**
+                 * La vidriera, al lado de lo demás que define qué ve la gente.
+                 *
+                 * Con un interruptor y no navegando a otra pantalla: es un
+                 * sí/no, y esconderlo detrás de un toque más lo volvería una
+                 * preferencia que nadie encuentra.
+                 */
+                _FilaDeVidriera(
+                  activa: store.vidrieraActiva,
+                  onAlternar: _guardando ? null : () => unawaited(_alternarVidriera(p)),
+                ),
                 // Los cobros van con el resto de lo que define plata: quién
                 // recibe el dinero es tan importante como cuánto se cobra.
                 _FilaDeAjuste(
@@ -349,6 +400,67 @@ class _Direccion extends StatelessWidget {
               await Clipboard.setData(ClipboardData(text: 'https://$url'));
               if (context.mounted) AppSnack.exito(context, 'Copiado');
             },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// El interruptor de la vidriera pública.
+///
+/// Dice qué pasa al apagarla, no sólo que se apaga: sin esa frase, «vidriera
+/// off» se puede leer como «cierro la tienda» o «despublico todo», que es
+/// exactamente lo que NO hace.
+class _FilaDeVidriera extends StatelessWidget {
+  const _FilaDeVidriera({required this.activa, this.onAlternar});
+
+  final bool activa;
+  final VoidCallback? onAlternar;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(Gap.lg),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(Redondeo.lg),
+        border: Border.all(color: AppColor.borde),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            activa ? Icons.storefront_rounded : Icons.visibility_off_outlined,
+            size: 18,
+            color: activa ? AppColor.exito : AppColor.textoSuave,
+          ),
+          const SizedBox(width: Gap.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Vidriera pública',
+                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  activa
+                      ? 'Cualquiera puede visitar tu tienda y ver tu catálogo.'
+                      : 'Tu catálogo no se puede visitar. Tus productos siguen '
+                          'publicados y se siguen vendiendo desde el feed.',
+                  style: const TextStyle(
+                    fontSize: 12.5,
+                    color: AppColor.textoSuave,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: Gap.sm),
+          Switch(
+            value: activa,
+            onChanged: onAlternar == null ? null : (_) => onAlternar!(),
           ),
         ],
       ),

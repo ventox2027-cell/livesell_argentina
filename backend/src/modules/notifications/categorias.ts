@@ -32,6 +32,15 @@ export const AVISOS_QUE_NO_SE_APAGAN: ReadonlySet<NotificationType> = new Set([
   'ORDER_STATUS',
   // Al vendedor: le entró una venta. Si no se entera, no la prepara.
   'ORDER_RECEIVED',
+  /**
+   * Al vendedor: alguien apartó una unidad de su stock.
+   *
+   * Encaja con la definición de arriba —algo que ya pasó y afecta una
+   * operación suya—: su inventario quedó tomado y tiene unos minutos para
+   * saberlo. No se le hace una categoría propia porque un grupo de un solo
+   * tipo es justo lo que el comentario de abajo dice que no hay que hacer.
+   */
+  'RESERVATION_RECEIVED',
   'PAYMENT_APPROVED',
   // El más importante de todos: sin este, la persona cree que compró.
   'PAYMENT_REJECTED',

@@ -250,6 +250,8 @@ class PerfilDeVendedor {
     this.cumplimiento,
     this.esNuevo = false,
     this.loSigo,
+    this.seguidos = 0,
+    this.vidrieraActiva = true,
     this.storeId,
     this.tiendaNombre,
     this.horario,
@@ -280,6 +282,10 @@ class PerfilDeVendedor {
       resenas: (j['resenas'] as num?)?.toInt() ?? 0,
       ventas: (j['ventas'] as num?)?.toInt() ?? 0,
       loSigo: j['loSigo'] as bool?,
+      seguidos: (j['seguidos'] as num?)?.toInt() ?? 0,
+      // Un servidor viejo no manda el campo: se asume encendida, que es como
+      // se comportaba antes de que existiera.
+      vidrieraActiva: tienda?['vidriera'] as bool? ?? true,
       storeId: tienda?['id'] as String?,
       tiendaNombre: tienda?['nombre'] as String?,
       horario: horario == null ? null : EstadoDeTienda.fromJson(horario),
@@ -335,6 +341,18 @@ class PerfilDeVendedor {
   /// `null` si no hay sesión: la app no muestra el botón de seguir.
   final bool? loSigo;
 
+  /// A cuántos vendedores sigue la persona dueña de este perfil.
+  ///
+  /// ⚠️ No es lo mismo que [seguidores]: eso es cuánta gente lo sigue A ÉL.
+  /// Son las dos direcciones de la misma relación.
+  final int seguidos;
+
+  /// Si su vidriera se puede navegar.
+  ///
+  /// Apagada, el perfil sigue existiendo entero —seguidores, reputación,
+  /// botón de seguir— y lo único que cambia es que no se abre el catálogo.
+  final bool vidrieraActiva;
+
   final String? storeId;
   final String? tiendaNombre;
   final EstadoDeTienda? horario;
@@ -356,6 +374,8 @@ class PerfilDeVendedor {
   /// que dice "Siguiendo" con 0 seguidores.
   PerfilDeVendedor conFollow(bool siguiendo, int seguidores) => PerfilDeVendedor(
         id: id,
+        seguidos: seguidos,
+        vidrieraActiva: vidrieraActiva,
         nombre: nombre,
         bio: bio,
         avatarUrl: avatarUrl,

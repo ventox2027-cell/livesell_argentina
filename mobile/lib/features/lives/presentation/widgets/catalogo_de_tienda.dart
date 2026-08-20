@@ -194,6 +194,37 @@ class _CatalogoDeTiendaState extends ConsumerState<CatalogoDeTienda> {
   Widget _cuerpo() {
     if (_cargando) return const Center(child: CircularProgressIndicator());
 
+    /**
+     * ═══════════════════════════════════════════════════════════════════════
+     * TRES SITUACIONES DISTINTAS, TRES PANTALLAS DISTINTAS
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     *   · **vidriera apagada** — la tienda existe y el vendedor la cerró al
+     *     público. No se ofrece reintentar: no se arregla reintentando, y un
+     *     botón que nunca va a funcionar es peor que ninguno.
+     *   · **no se pudo cargar** — red o servidor. Ahí sí se reintenta.
+     *   · **sin productos** — la vidriera está abierta y no hay nada adentro.
+     *
+     * Antes las tres se veían igual de mal: como `ApiClient` no lanza con 4xx,
+     * el cuerpo del 404 entraba al parseo y salía una página vacía, así que una
+     * vidriera apagada decía «todavía no tiene productos».
+     */
+    if (_error is VidrieraApagada) {
+      return const _Vacio(
+        icono: Icons.storefront_outlined,
+        titulo: 'Vidriera no disponible',
+        detalle: 'Esta tienda no tiene su vidriera disponible por el momento.',
+      );
+    }
+
+    if (_error is TiendaNoEncontrada) {
+      return const _Vacio(
+        icono: Icons.storefront_outlined,
+        titulo: 'No encontramos esta tienda',
+        detalle: 'El enlace puede ser viejo, o la tienda ya no está disponible.',
+      );
+    }
+
     if (_error != null) {
       return _Vacio(
         icono: Icons.wifi_off_rounded,

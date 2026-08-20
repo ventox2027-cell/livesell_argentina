@@ -5350,12 +5350,34 @@ describe('Los avisos de la venta', () => {
     return prisma.notification.findMany({ where: donde, orderBy: { createdAt: 'asc' } });
   }
 
-  it('ORDER_RECEIVED · le llega al VENDEDOR cuando entra una venta', async () => {
+  /**
+   * ⛔ EL BUG: «¡TE COMPRARON!» POR UNA ORDEN SIN PAGAR.
+   *
+   * El aviso colgaba de `order.created`, y la orden se crea al ABRIR el
+   * checkout. El vendedor recibía «te compraron» de alguien que todavía no
+   * había visto la pantalla de pago. Reportado desde producción: varias
+   * notificaciones de compra sin un solo pago.
+   */
+  it('⛔ crear la orden NO avisa una compra', async () => {
     const v = await nuevaVarianteConStock(3);
     const comprador = await nuevoComprador();
 
     const orden = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId));
     expect(orden.status, JSON.stringify(orden.body)).toBe(201);
+
+    expect(await avisosDe(v.sellerUserId, 'ORDER_RECEIVED')).toHaveLength(0);
+  });
+
+  it('ORDER_RECEIVED · le llega al VENDEDOR cuando la venta se CONFIRMA', async () => {
+    const v = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId));
+    expect(orden.status, JSON.stringify(orden.body)).toBe(201);
+
+    // Recién el pago acreditado y el stock consumido hacen una venta.
+    await pagar(comprador.token, orden.body.id as string);
+    expect((await leerOrden(orden.body.id as string)).status).toBe('CONFIRMED');
 
     const delVendedor = await avisosDe(v.sellerUserId, 'ORDER_RECEIVED', 1);
     expect(delVendedor).toHaveLength(1);
@@ -5380,12 +5402,21 @@ describe('Los avisos de la venta', () => {
      */
     const v = await nuevaVarianteConStock(3);
     const comprador = await nuevoComprador();
-    await crearOrden(comprador.token, await reservar(comprador.token, v.variantId));
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId));
+    await pagar(comprador.token, orden.body.id as string);
 
     const aviso = (await avisosDe(v.sellerUserId, 'ORDER_RECEIVED', 1))[0]!;
     const todo = JSON.stringify(aviso).toLowerCase();
 
-    for (const dato of ['30123456', '+5491122334455', 'av. corrientes', 'ana pérez']) {
+    /**
+     * ⚠️ El NOMBRE DE PILA sí va, y el apellido no.
+     *
+     * «Ana compró un buzo» le dice al vendedor lo que necesita para reconocer
+     * la operación, y no identifica a nadie fuera de contexto. El apellido, el
+     * teléfono, la dirección y el documento siguen fuera: están en el pedido,
+     * detrás de la sesión del vendedor.
+     */
+    for (const dato of ['30123456', '+5491122334455', 'av. corrientes', 'pérez']) {
       expect(todo, dato).not.toContain(dato.toLowerCase());
     }
   });
@@ -5896,10 +5927,194 @@ it('⛔ un rechazo TARDÍO sobre un pedido ya pago no avisa nada', async () => {
       data: { mutedNotificationTypes: ['REVIEW_RECEIVED'] },
     });
 
-    await crearOrden(comprador.token, await reservar(comprador.token, v.variantId));
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId));
+    await pagar(comprador.token, orden.body.id as string);
 
     // La venta sí llega: ORDER_RECEIVED es obligatorio.
     expect(await avisosDe(v.sellerUserId, 'ORDER_RECEIVED', 1)).toHaveLength(1);
+  });
+});
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * RESERVAR NO ES COMPRAR
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * El aviso «¡Te compraron!» colgaba de `order.created`, y la orden se crea al
+ * ABRIR el checkout. Apartar una unidad y mirar el precio ya le prometía una
+ * venta al vendedor.
+ *
+ * Ahora son dos avisos: uno cuando alguien aparta —«Te reservaron», sin
+ * «preparalo», porque todavía no hay nada que preparar— y otro cuando la venta
+ * se confirma de verdad.
+ */
+describe('Avisos de reserva contra avisos de compra', () => {
+  async function avisosDe(userId: string, tipo?: string, minimo = 0) {
+    const donde = { userId, ...(tipo ? { type: tipo as never } : {}) };
+
+    for (let intento = 0; intento < 40; intento += 1) {
+      const filas = await prisma.notification.findMany({
+        where: donde,
+        orderBy: { createdAt: 'asc' },
+      });
+      if (filas.length >= minimo && (minimo > 0 || intento > 0)) return filas;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+
+    return prisma.notification.findMany({ where: donde, orderBy: { createdAt: 'asc' } });
+  }
+
+  /** ⛔ Apartar avisa una reserva, no una compra. */
+  it('⛔ reservar avisa una reserva y NUNCA una compra', async () => {
+    const v = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+
+    await reservar(comprador.token, v.variantId);
+
+    const deReserva = await avisosDe(v.sellerUserId, 'RESERVATION_RECEIVED', 1);
+    expect(deReserva).toHaveLength(1);
+    expect(deReserva[0]!.title).toBe('Te reservaron');
+    expect(await avisosDe(v.sellerUserId, 'ORDER_RECEIVED')).toHaveLength(0);
+  });
+
+  /**
+   * ⛔ Y NO DICE «PREPARALO».
+   *
+   * Todavía no hay nada que preparar: la reserva puede vencer, soltarse o
+   * quedar en nada. Ese texto es lo que hacía que el vendedor creyera que ya
+   * tenía una venta.
+   */
+  it('⛔ el aviso de reserva no promete una venta', async () => {
+    const v = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+
+    await reservar(comprador.token, v.variantId);
+
+    const aviso = (await avisosDe(v.sellerUserId, 'RESERVATION_RECEIVED', 1))[0]!;
+    expect(aviso.body).not.toContain('Preparalo');
+    expect(aviso.body).not.toContain('compró');
+    expect(aviso.body).toContain('reservó');
+  });
+
+  /** El nombre de pila de quien reservó, y nada más. */
+  it('el aviso dice quién y qué, sin datos de más', async () => {
+    const v = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+
+    await reservar(comprador.token, v.variantId);
+
+    const aviso = (await avisosDe(v.sellerUserId, 'RESERVATION_RECEIVED', 1))[0]!;
+    const todo = JSON.stringify(aviso).toLowerCase();
+
+    for (const dato of ['30123456', '+5491122334455', 'av. corrientes', 'pérez']) {
+      expect(todo, dato).not.toContain(dato.toLowerCase());
+    }
+  });
+
+  /**
+   * ⛔ UNA RESERVA SOLTADA NO TERMINA EN UNA COMPRA AVISADA.
+   *
+   * Es el caso reportado: varias reservas sin pagar, varias notificaciones de
+   * compra.
+   */
+  it('⛔ soltar la reserva no genera aviso de compra', async () => {
+    const v = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+
+    const idReserva = await reservar(comprador.token, v.variantId);
+    const baja = await call('DELETE', `/api/v1/inventory/reservations/${idReserva}`, {
+      token: comprador.token,
+    });
+    expect(baja.status).toBe(200);
+
+    expect(await avisosDe(v.sellerUserId, 'ORDER_RECEIVED')).toHaveLength(0);
+  });
+
+  /**
+   * ⛔ NI SIQUIERA LLEGANDO HASTA EL CHECKOUT SIN PAGAR.
+   *
+   * Reservar y crear la orden es exactamente lo que hace quien abre el checkout
+   * y lo cierra sin pagar. Cero avisos de compra.
+   */
+  it('⛔ reservar y abrir el checkout sin pagar no avisa ninguna compra', async () => {
+    const v = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+
+    await crearOrden(comprador.token, await reservar(comprador.token, v.variantId));
+
+    expect(await avisosDe(v.sellerUserId, 'ORDER_RECEIVED')).toHaveLength(0);
+    expect(await avisosDe(v.sellerUserId, 'RESERVATION_RECEIVED', 1)).toHaveLength(1);
+  });
+
+  /**
+   * ⛔ Y UNA VENTA CONFIRMADA AVISA UNA SOLA VEZ.
+   *
+   * La garantía se hereda de `marcarConfirmada()`: publica el evento dentro de
+   * un `updateMany` condicional de PAID a CONFIRMED, así que sólo la primera
+   * llamada afecta una fila. La `dedupeKey` es la segunda red.
+   */
+  it('⛔ una compra confirmada avisa exactamente una vez', async () => {
+    const v = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId));
+
+    await pagar(comprador.token, orden.body.id as string);
+
+    const avisos = await avisosDe(v.sellerUserId, 'ORDER_RECEIVED', 1);
+    expect(avisos).toHaveLength(1);
+    expect(avisos[0]!.dedupeKey).toBe(`order_received:${orden.body.id as string}`);
+  });
+
+  /**
+   * ⛔ Y REINTENTAR EL COBRO SOBRE UNA ORDEN YA CONFIRMADA TAMPOCO DUPLICA.
+   *
+   * Es lo que hace un webhook repetido de Mercado Pago. El `updateMany` no
+   * afecta ninguna fila, así que no se publica ni se avisa de nuevo.
+   */
+  it('⛔ confirmar dos veces no manda dos avisos', async () => {
+    const v = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, v.variantId));
+    await pagar(comprador.token, orden.body.id as string);
+
+    await avisosDe(v.sellerUserId, 'ORDER_RECEIVED', 1);
+
+    // El mismo cobro otra vez: la orden ya está confirmada.
+    await pagar(comprador.token, orden.body.id as string);
+
+    expect(await avisosDe(v.sellerUserId, 'ORDER_RECEIVED')).toHaveLength(1);
+  });
+
+  /**
+   * ⛔ Y REINTENTAR LA MISMA RESERVA TAMPOCO.
+   *
+   * `reserve()` publica el evento sólo cuando CREA una fila: un reintento con
+   * la misma clave de idempotencia devuelve la reserva anterior sin publicar.
+   */
+  it('⛔ reintentar la misma reserva no manda dos avisos', async () => {
+    const v = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+    const clave = `rsv-${Date.now()}-${Math.random()}`;
+
+    for (let i = 0; i < 3; i += 1) {
+      const r = await call('POST', '/api/v1/inventory/reservations', {
+        token: comprador.token,
+        body: { productVariantId: v.variantId, quantity: 1 },
+        idempotencyKey: clave,
+      });
+      expect(r.status, JSON.stringify(r.body)).toBe(201);
+    }
+
+    expect(await avisosDe(v.sellerUserId, 'RESERVATION_RECEIVED', 1)).toHaveLength(1);
+  });
+
+  /** Y nadie se avisa a sí mismo por apartar su propio producto. */
+  it('⛔ el vendedor que aparta su propio producto no se avisa', async () => {
+    const v = await nuevaVarianteConStock(3);
+
+    await reservar(v.sellerToken, v.variantId);
+
+    expect(await avisosDe(v.sellerUserId, 'RESERVATION_RECEIVED')).toHaveLength(0);
   });
 });
 

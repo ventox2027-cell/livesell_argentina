@@ -90,11 +90,13 @@ class SellerRepository {
     String? name,
     String? description,
     String? status,
+    bool? vidrieraActiva,
   }) async {
     final res = await _api.patch<Map<String, dynamic>>('/stores/$storeId', data: {
       if (name != null) 'name': name,
       if (description != null) 'description': description,
       if (status != null) 'status': status,
+      if (vidrieraActiva != null) 'storefrontEnabled': vidrieraActiva,
     });
     if (res.statusCode != 200) throw _error(res);
     return Store.fromJson(res.data!);
@@ -476,6 +478,52 @@ final miPerfilVendedorProvider =
     AsyncNotifierProvider<PerfilVendedorNotifier, PerfilVendedor?>(
   PerfilVendedorNotifier.new,
 );
+
+/// Si un `sellerId` es el del vendedor de esta persona.
+///
+/// ═══════════════════════════════════════════════════════════════════════════
+/// TRES ESTADOS, Y EL TERCERO IMPORTA
+/// ═══════════════════════════════════════════════════════════════════════════
+///
+/// `true` es mío, `false` es de otro, y **`null` es «todavía no lo sé»**.
+///
+/// El tercero existe para que el botón «Seguir» no aparezca un instante sobre
+/// la tienda propia y desaparezca después. Quien lo mira ve un botón que
+/// parpadea sin haber tocado nada, y si llega a tocarlo el backend lo rechaza
+/// —nadie se sigue a sí mismo— y el botón queda sin hacer nada.
+///
+/// ═══════════════════════════════════════════════════════════════════════════
+/// SE COMPARA POR ID, NUNCA POR NOMBRE
+/// ═══════════════════════════════════════════════════════════════════════════
+///
+/// Ni el nombre de la tienda, ni el slug, ni el nombre que se muestra. Dos
+/// personas pueden llamar «Lanas del Sur» a su tienda, y quien se cambie el
+/// nombre dejaría de reconocer la propia. El id del vendedor lo asigna el
+/// backend y no cambia nunca.
+///
+/// ⚠️ Sin sesión devuelve `false` sin pedir nada: quien no entró no tiene
+/// tienda que reconocer, y pedir `/sellers/me` sin token sería una petición
+/// que ya sabemos cómo termina.
+final esMiTiendaProvider = Provider.family<bool?, String>((ref, sellerId) {
+  final sesion = ref.watch(sesionProvider);
+  if (sesion is! ConSesion) return false;
+
+  final mio = ref.watch(miPerfilVendedorProvider);
+
+  // Todavía cargando y sin nada previo: no se sabe.
+  if (mio.isLoading && !mio.hasValue) return null;
+
+  /**
+   * ⚠️ Un fallo al pedir el perfil propio cae en `false`, no en `null`.
+   *
+   * `valueOrNull` es `null` tanto para «no tiene tienda» como para «no se
+   * pudo pedir», y las dos llevan al mismo lugar: mostrar el botón. Es lo
+   * correcto — esconderlo por un error de red le impediría seguir a alguien a
+   * quien sí puede seguir, y el peor caso de mostrarlo de más es un rechazo
+   * del backend sobre la propia tienda, que casi nadie va a ver.
+   */
+  return mio.valueOrNull?.seller.id == sellerId;
+});
 
 /// El listado de productos tal como lo devolvió el servidor.
 ///

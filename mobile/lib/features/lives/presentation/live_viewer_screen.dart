@@ -21,7 +21,10 @@ import '../../auth/domain/session.dart';
 import 'widgets/acciones_de_mensaje.dart';
 import 'widgets/video_live.dart';
 import 'seller_profile_screen.dart';
-import '../../social/data/seguimientos.dart';
+import '../../../core/network/errores_de_red.dart';
+import '../../../shared/widgets/app_snack.dart';
+import '../../seller/data/seller_repository.dart';
+import '../../social/data/perfil_de_vendedor.dart';
 import 'tienda_screen.dart';
 import 'variant_sheet.dart';
 
@@ -588,64 +591,18 @@ class _Pastilla extends StatelessWidget {
   }
 }
 
-class _FilaDeVendedor extends ConsumerStatefulWidget {
+/// El vendedor arriba del vivo, con su botón de seguir.
+///
+/// ⚠️ El estado de seguimiento NO vive acá. Sale de `perfilDeVendedorProvider`,
+/// el mismo que miran el feed y el perfil: seguir desde el vivo se ve en las
+/// tres al instante, y ninguna vuelve a preguntarle al servidor lo que otra ya
+/// preguntó.
+class _FilaDeVendedor extends ConsumerWidget {
   const _FilaDeVendedor({required this.live});
   final DetalleDeLive live;
 
   @override
-  ConsumerState<_FilaDeVendedor> createState() => _FilaDeVendedorState();
-}
-
-class _FilaDeVendedorState extends ConsumerState<_FilaDeVendedor> {
-  bool? _siguiendo;
-  bool _enviando = false;
-
-  @override
-  void initState() {
-    super.initState();
-    unawaited(_cargarSiSigo());
-  }
-
-  /// Se pregunta al backend, no se asume.
-  ///
-  /// El estado de seguimiento vive en la base: un booleano local diría
-  /// "Seguir" cada vez que se abre la app aunque la persona ya lo siga desde
-  /// hace un mes.
-  Future<void> _cargarSiSigo() async {
-    try {
-      final perfil = await ref.read(liveApiProvider).perfil(widget.live.vendedorId);
-      if (mounted) setState(() => _siguiendo = perfil.loSigo);
-    } catch (_) {
-      // Sin dato, el botón queda en "Seguir": tocarlo es idempotente del lado
-      // del servidor, así que equivocarse no tiene consecuencia.
-      if (mounted) setState(() => _siguiendo = false);
-    }
-  }
-
-  Future<void> _alternar() async {
-    if (_enviando) return;
-    setState(() => _enviando = true);
-
-    // ⚠️ Por `Seguimientos`, no por `LiveApi`: es lo que avisa a la pestaña
-    // «Siguiendo» del feed. Ver `seguimientos.dart`.
-    final seguimientos = ref.read(seguimientosProvider.notifier);
-    try {
-      final r = _siguiendo == true
-          ? await seguimientos.dejarDeSeguir(widget.live.vendedorId)
-          : await seguimientos.seguir(widget.live.vendedorId);
-      if (mounted) setState(() => _siguiendo = r.siguiendo);
-    } catch (_) {
-      // El estado no cambia: mejor que mostrar "Siguiendo" sobre algo que
-      // falló.
-    } finally {
-      if (mounted) setState(() => _enviando = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final live = widget.live;
-
+  Widget build(BuildContext context, WidgetRef ref) {
     return Row(
       children: [
         GestureDetector(
@@ -690,14 +647,40 @@ class _FilaDeVendedorState extends ConsumerState<_FilaDeVendedor> {
           ),
         ),
         const SizedBox(width: Gap.sm),
-        if (_siguiendo != null)
-          _BotonSeguir(
-            siguiendo: _siguiendo!,
-            cargando: _enviando,
-            onTap: _alternar,
-          ),
+        _SeguirAlDelVivo(sellerId: live.vendedorId),
       ],
     );
+  }
+}
+
+class _SeguirAlDelVivo extends ConsumerWidget {
+  const _SeguirAlDelVivo({required this.sellerId});
+  final String sellerId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Sobre el vivo propio no se dibuja: nadie se sigue a sí mismo, y el
+    // backend lo rechaza. Ver `esMiTiendaProvider`.
+    if (ref.watch(esMiTiendaProvider(sellerId)) != false) return const SizedBox.shrink();
+
+    final vista = ref.watch(perfilDeVendedorProvider(sellerId)).valueOrNull;
+    final siguiendo = vista?.loSigo;
+    if (siguiendo == null) return const SizedBox.shrink();
+
+    return _BotonSeguir(
+      siguiendo: siguiendo,
+      cargando: vista!.alternando,
+      onTap: () => unawaited(_alternar(context, ref)),
+    );
+  }
+
+  /// El error se muestra. El estado ya volvió solo a lo que era.
+  Future<void> _alternar(BuildContext context, WidgetRef ref) async {
+    try {
+      await ref.read(perfilDeVendedorProvider(sellerId).notifier).alternar();
+    } catch (e) {
+      if (context.mounted) AppSnack.error(context, mensajeDeError(e));
+    }
   }
 }
 

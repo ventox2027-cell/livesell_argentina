@@ -1268,6 +1268,35 @@ model Store {
 
   status    StoreStatus @default(ACTIVE)
 
+  /// Si la vidriera pública se puede navegar.
+  ///
+  /// ═══════════════════════════════════════════════════════════════════════
+  /// ES UNA COSA DISTINTA DE TODAS LAS QUE SE LE PARECEN
+  /// ═══════════════════════════════════════════════════════════════════════
+  ///
+  /// No se reutilizó ninguna de las que ya existían, y cada una responde otra
+  /// pregunta:
+  ///
+  ///   · `status` — si la tienda existe como entidad operativa. Una tienda
+  ///     suspendida no vende NADA; ésta sí vende, sólo que no muestra catálogo.
+  ///   · el horario — si atiende AHORA. Es de todos los días y vuelve solo.
+  ///   · la pausa de compras — si se puede pagar. Ortogonal a si se puede mirar.
+  ///   · el estado de cada producto — qué está publicado, uno por uno.
+  ///
+  /// Fundirla con cualquiera de ésas haría que apagar la vidriera despublique
+  /// productos o cierre la tienda, que es justo lo que no tiene que pasar.
+  ///
+  /// ─── Qué NO hace apagarla ───
+  ///
+  /// El perfil público sigue existiendo, con seguidores, reputación y el botón
+  /// de seguir. Los productos siguen publicados y siguen apareciendo en el
+  /// feed y en la búsqueda: apagar la vidriera es esconder la puerta de la
+  /// tienda, no retirar la mercadería.
+  ///
+  /// `true` por defecto: las tiendas que ya existen no cambian de
+  /// comportamiento cuando esta columna aparece.
+  storefrontEnabled Boolean @default(true) @map("storefront_enabled")
+
   // ═══════════════════════════════════════════════════════════════════════
   // ENVÍO — V1 MANUAL
   // ═══════════════════════════════════════════════════════════════════════
@@ -2961,8 +2990,13 @@ enum NotificationType {
   LIVE_STARTED
   /// Cambió el estado de un pedido: preparándose, listo, despachado, entregado.
   ORDER_STATUS
-  /// Al vendedor: le entró una venta.
+  /// Al vendedor: le entró una venta CONFIRMADA.
+  ///
+  /// ⚠️ Confirmada, no creada. Una orden creada es alguien que abrió el
+  /// checkout: puede no pagar nunca. Ver RESERVATION_RECEIVED.
   ORDER_RECEIVED
+  /// Al vendedor: alguien apartó una unidad y todavía no pagó.
+  RESERVATION_RECEIVED
   /// Se acreditó un pago.
   PAYMENT_APPROVED
   /// Se rechazó un cobro y se puede reintentar.

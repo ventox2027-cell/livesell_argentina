@@ -100,6 +100,16 @@ export const UpdateStoreSchema = z
      * una confirmación explícita en la interfaz.
      */
     status: z.enum(['ACTIVE', 'PAUSED', 'CLOSED']).optional(),
+
+    /**
+     * Encender o apagar la vidriera pública.
+     *
+     * Va en el mismo endpoint que el resto de los datos de la tienda —y no en
+     * uno propio— porque es una preferencia más de la tienda, con la misma
+     * dueña y la misma auditoría. Apagarla NO despublica productos ni cierra
+     * la tienda: sólo esconde la puerta. Ver el campo en `schema.prisma`.
+     */
+    storefrontEnabled: z.boolean().optional(),
   })
   .refine((v) => Object.keys(v).length > 0, { message: 'No hay nada que actualizar' });
 export type UpdateStoreDto = z.infer<typeof UpdateStoreSchema>;

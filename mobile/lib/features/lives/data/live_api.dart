@@ -53,6 +53,23 @@ class LiveApi {
   ///
   /// Paginado desde el principio: un vendedor con trescientos productos no
   /// puede mandarlos todos mientras el video sigue corriendo atrás.
+  /// El catálogo de una tienda.
+  ///
+  /// ═══════════════════════════════════════════════════════════════════════════
+  /// EL ESTADO DE LA RESPUESTA SE MIRA, Y ANTES NO
+  /// ═══════════════════════════════════════════════════════════════════════════
+  ///
+  /// ⚠️ `ApiClient` NO lanza con 4xx: usa `validateStatus: (s) => s < 500` para
+  /// poder reintentar después de refrescar el token. Así que el cuerpo de un
+  /// 404 —un objeto de error— entraba derecho a `PaginaDeCatalogo.fromJson`, que
+  /// lo lee a la defensiva y devuelve una página **vacía**.
+  ///
+  /// El resultado era que una tienda con la vidriera apagada se veía como una
+  /// tienda sin productos: «todavía no tiene productos publicados» sobre un
+  /// catálogo lleno que simplemente no se puede mostrar.
+  ///
+  /// Ahora los dos casos que el backend distingue por código llegan como
+  /// excepciones distintas, y la pantalla dice lo que corresponde.
   Future<PaginaDeCatalogo> catalogo(String storeId, {String? cursor, String? q}) async {
     final r = await _api.get<Map<String, dynamic>>(
       '/stores/$storeId/catalog',
@@ -62,6 +79,18 @@ class LiveApi {
         if (q != null && q.isNotEmpty) 'q': q,
       },
     );
+
+    if (r.statusCode != 200 || r.data == null) {
+      final error = r.data?['error'];
+      final codigo = error is Map ? error['code'] as String? : null;
+
+      // La app decide con el CÓDIGO, nunca con el texto: el mensaje puede
+      // cambiar de redacción en cualquier momento y el código no.
+      if (codigo == 'STOREFRONT_DISABLED') throw const VidrieraApagada();
+      if (r.statusCode == 404) throw const TiendaNoEncontrada();
+      throw StateError('No se pudo abrir el catálogo de $storeId');
+    }
+
     return PaginaDeCatalogo.fromJson(r.data!);
   }
 
@@ -123,4 +152,17 @@ class TiendaNoEncontrada implements Exception {
 
   @override
   String toString() => 'No encontramos esta tienda.';
+}
+
+/// La tienda existe, pero su vidriera está apagada.
+///
+/// Se distingue de [TiendaNoEncontrada] a propósito: son dos cosas distintas
+/// para quien la está buscando, y sólo una se arregla reintentando. El vendedor
+/// la apagó y puede volver a encenderla; sus productos siguen publicados y se
+/// siguen vendiendo desde el feed.
+class VidrieraApagada implements Exception {
+  const VidrieraApagada();
+
+  @override
+  String toString() => 'La vidriera de esta tienda no está disponible.';
 }

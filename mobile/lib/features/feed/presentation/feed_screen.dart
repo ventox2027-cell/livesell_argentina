@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../../../core/config/traza_de_arranque.dart';
 import '../../../core/design/tokens.dart';
@@ -11,11 +12,13 @@ import '../../../core/network/reintentar_al_volver_la_red.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../auth/domain/session.dart';
 import '../../auth/state/auth_providers.dart';
-import '../../inventory/presentation/reserve_sheet.dart';
-import '../../lives/data/live_api.dart';
+import '../../lives/presentation/variant_sheet.dart';
 import '../../lives/presentation/seller_profile_screen.dart';
+import '../../seller/data/seller_repository.dart';
 import '../../seller/presentation/seller_home_screen.dart';
-import '../../social/data/seguimientos.dart';
+import '../../lives/presentation/tienda_screen.dart';
+import '../../social/data/perfil_de_vendedor.dart';
+import '../../social/data/social_api.dart';
 import '../data/feed_repository.dart';
 import '../domain/feed_models.dart';
 import '../domain/pestana_del_feed.dart';
@@ -405,18 +408,6 @@ class _InfoPublicacion extends StatelessWidget {
   }
 }
 
-/// Seguir a un vendedor desde el feed.
-///
-/// ─── Antes era un booleano local, y eso era una mentira ───
-///
-/// El botón alternaba un `bool` en memoria: se ponía en "Siguiendo", no
-/// mandaba nada al servidor, y al volver a abrir la app decía "Seguir" otra
-/// vez. La persona creía que iba a recibir avisos de los vivos de ese vendedor
-/// y no iba a recibir ninguno.
-///
-/// Ahora el estado sale del backend y el contador lo devuelve él. Ver
-/// `stores.service.ts`: el follow es idempotente —un P2002 se trata como éxito—
-/// así que tocar dos veces no rompe nada.
 /// «Promocionado».
 ///
 /// ═══════════════════════════════════════════════════════════════════════════
@@ -461,64 +452,58 @@ class _EtiquetaPromocionado extends StatelessWidget {
   }
 }
 
-class _BotonSeguir extends ConsumerStatefulWidget {
+/// Seguir a un vendedor desde el feed.
+///
+/// ─── Antes era un booleano local, y eso era una mentira ───
+///
+/// El botón alternaba un `bool` en memoria: se ponía en "Siguiendo", no
+/// mandaba nada al servidor, y al volver a abrir la app decía "Seguir" otra
+/// vez. La persona creía que iba a recibir avisos de los vivos de ese vendedor
+/// y no iba a recibir ninguno.
+///
+/// ─── Y después fue un booleano local POR TARJETA, que también era una ───
+///
+/// Cada publicación tenía su propio `bool? _siguiendo` y su propia consulta del
+/// perfil. Con tres productos del mismo vendedor en pantalla, seguirlo desde
+/// uno dejaba ese en «Siguiendo» y los otros dos en «Seguir»: tres respuestas
+/// distintas a la misma pregunta. Y treinta productos de cuatro vendedores eran
+/// treinta peticiones para responder cuatro preguntas.
+///
+/// Ahora el estado vive en `perfilDeVendedorProvider`, con clave `sellerId`, y
+/// todas las superficies —feed, vivo y perfil— observan el mismo.
+class _BotonSeguir extends ConsumerWidget {
   const _BotonSeguir({required this.sellerId});
 
   final String sellerId;
 
   @override
-  ConsumerState<_BotonSeguir> createState() => _BotonSeguirState();
-}
+  Widget build(BuildContext context, WidgetRef ref) {
+    /**
+     * ⚠️ SOBRE LA TIENDA PROPIA NO SE DIBUJA NADA.
+     *
+     * El backend rechaza que alguien se siga a sí mismo —el número de
+     * seguidores es una señal de confianza y auto-incrementarlo la degrada— y
+     * la app se tragaba ese error en silencio. Desde afuera se veía un botón
+     * que no hacía nada.
+     *
+     * Se compara por id de vendedor, nunca por nombre de tienda: ver
+     * `esMiTiendaProvider`. Y sólo se dibuja cuando SABEMOS que no es propia
+     * —`false`, no `null`— para que no aparezca un instante y desaparezca.
+     */
+    if (ref.watch(esMiTiendaProvider(sellerId)) != false) return const SizedBox.shrink();
 
-class _BotonSeguirState extends ConsumerState<_BotonSeguir> {
-  /// `null` mientras no se sabe. El botón no se dibuja hasta saberlo: mostrar
-  /// "Seguir" y que dos segundos después cambie solo a "Siguiendo" se ve como
-  /// que la app hizo algo que nadie pidió.
-  bool? _siguiendo;
-  bool _enviando = false;
+    final vista = ref.watch(perfilDeVendedorProvider(sellerId)).valueOrNull;
 
-  @override
-  void initState() {
-    super.initState();
-    unawaited(_cargar());
-  }
-
-  Future<void> _cargar() async {
-    try {
-      final perfil = await ref.read(liveApiProvider).perfil(widget.sellerId);
-      if (mounted) setState(() => _siguiendo = perfil.loSigo ?? false);
-    } catch (_) {
-      // Sin dato no se dibuja el botón. Es preferible a mostrar uno que
-      // miente sobre un estado que no pudimos leer.
-    }
-  }
-
-  Future<void> _alternar() async {
-    if (_enviando) return;
-    setState(() => _enviando = true);
-
-    // ⚠️ Por `Seguimientos`, no por `LiveApi`: es lo que avisa a la pestaña
-    // «Siguiendo» de que a quién sigo cambió. Ver `seguimientos.dart`.
-    final seguimientos = ref.read(seguimientosProvider.notifier);
-    try {
-      final r = _siguiendo == true
-          ? await seguimientos.dejarDeSeguir(widget.sellerId)
-          : await seguimientos.seguir(widget.sellerId);
-      if (mounted) setState(() => _siguiendo = r.siguiendo);
-    } catch (_) {
-      // El estado no cambia: mejor que mostrar "Siguiendo" sobre algo que falló.
-    } finally {
-      if (mounted) setState(() => _enviando = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final siguiendo = _siguiendo;
+    // Sin dato no se dibuja: mostrar «Seguir» sobre un estado que no pudimos
+    // leer es afirmar algo que quizá no es cierto. Y `loSigo` es `null` cuando
+    // no hay sesión, donde el botón tampoco tiene sentido.
+    final siguiendo = vista?.loSigo;
     if (siguiendo == null) return const SizedBox.shrink();
 
     return GestureDetector(
-      onTap: _enviando ? null : () => unawaited(_alternar()),
+      // El doble toque lo frena el notifier, que es quien sabe si hay algo
+      // viajando. Acá sólo se apaga el gesto para que se note.
+      onTap: vista!.alternando ? null : () => unawaited(_alternar(context, ref)),
       child: AnimatedContainer(
         duration: Duraciones.rapida,
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
@@ -537,6 +522,19 @@ class _BotonSeguirState extends ConsumerState<_BotonSeguir> {
         ),
       ),
     );
+  }
+
+  /// ⚠️ El error NO se traga.
+  ///
+  /// El estado ya volvió a lo que era —lo hace el notifier— y acá se dice por
+  /// qué. Un botón que no hace nada y no explica nada es indistinguible de uno
+  /// roto.
+  Future<void> _alternar(BuildContext context, WidgetRef ref) async {
+    try {
+      await ref.read(perfilDeVendedorProvider(sellerId).notifier).alternar();
+    } catch (e) {
+      if (context.mounted) AppSnack.error(context, mensajeDeError(e));
+    }
   }
 }
 
@@ -673,17 +671,33 @@ class _TarjetaProducto extends ConsumerWidget {
       return;
     }
 
-    final variantId = datos.variantePorDefectoId;
-    if (variantId == null) {
-      AppSnack.info(context, 'Este producto todavía no tiene variantes para comprar.');
-      return;
-    }
-
-    await ReserveSheet.mostrar(
+    /**
+     * ═══════════════════════════════════════════════════════════════════════
+     * COMPRAR PIDE EL PRODUCTO DE NUEVO. NO USA LO QUE MUESTRA EL FEED
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * Acá estaba el bug: se abría `ReserveSheet` directo con `datos.precio` y
+     * `datos.variantePorDefectoId`, o sea con lo que el feed tenía en memoria.
+     * Un feed cargado hace un rato mostraba $150.000 sobre un producto que el
+     * vendedor ya había bajado a $10, y la persona apartaba mirando el precio
+     * viejo.
+     *
+     * El feed puede estar momentáneamente viejo —es una lista cacheada y está
+     * bien que lo sea—, pero **iniciar una compra es una operación comercial**
+     * y no puede confiar en ese snapshot.
+     *
+     * `VariantSheet` es el camino que ya usaban el vivo, la tienda y la
+     * búsqueda: pide el producto al backend, muestra el precio actual, el
+     * stock actual y las variantes que existen hoy, y recién después encadena
+     * con `ReserveSheet`. Ahora los cuatro caminos entran por el mismo lugar.
+     *
+     * ⚠️ No agrega un paso: con una sola variante, `VariantSheet` la elige
+     * sola y queda a un toque de «Apartar», igual que antes.
+     */
+    await VariantSheet.mostrar(
       context,
-      productVariantId: variantId,
-      nombreProducto: datos.nombre,
-      precio: datos.precio,
+      productId: datos.id,
+      storeId: datos.storeId.isEmpty ? null : datos.storeId,
     );
 
     // Al cerrar la hoja se recarga el feed: si se apartó una unidad, la
@@ -704,15 +718,15 @@ class _SinFoto extends StatelessWidget {
   }
 }
 
-class _AccionesLaterales extends StatefulWidget {
+class _AccionesLaterales extends ConsumerStatefulWidget {
   const _AccionesLaterales({required this.publicacion});
   final PublicacionFeed publicacion;
 
   @override
-  State<_AccionesLaterales> createState() => _AccionesLateralesState();
+  ConsumerState<_AccionesLaterales> createState() => _AccionesLateralesState();
 }
 
-class _AccionesLateralesState extends State<_AccionesLaterales> {
+class _AccionesLateralesState extends ConsumerState<_AccionesLaterales> {
   bool _meGusta = false;
 
   @override
@@ -738,27 +752,78 @@ class _AccionesLateralesState extends State<_AccionesLaterales> {
         _Accion(
           icono: Icons.mode_comment_outlined,
           etiqueta: 'Comentar',
-          onTap: () => AppSnack.info(context, 'Los comentarios llegan con el chat del vivo.'),
+          onTap: () => AppSnack.info(context, 'Los comentarios llegan pronto.'),
         ),
         const SizedBox(height: Gap.lg),
         _Accion(
           icono: Icons.share_outlined,
           etiqueta: 'Enviar',
-          onTap: () => AppSnack.info(
-            context,
-            'vendox.com/${widget.publicacion.tiendaSlug}',
-          ),
+          onTap: () => unawaited(_compartir()),
         ),
         const SizedBox(height: Gap.lg),
         _Accion(
           icono: Icons.storefront_outlined,
           etiqueta: 'Tienda',
-          onTap: () => AppSnack.info(
-            context,
-            'La tienda de ${widget.publicacion.tiendaNombre} llega con la vidriera pública.',
-          ),
+          onTap: () => unawaited(_abrirTienda()),
         ),
       ],
+    );
+  }
+
+  /// Comparte el PRODUCTO, con el enlace que arma el backend.
+  ///
+  /// ═══════════════════════════════════════════════════════════════════════════
+  /// EL ENLACE NO SE ARMA ACÁ
+  /// ═══════════════════════════════════════════════════════════════════════════
+  ///
+  /// Antes esto mostraba un aviso con `vendox.com/<slug de la tienda>`: no era
+  /// un enlace real, no llevaba al producto y no abría ninguna hoja de
+  /// compartir. Dos cosas mal — el destino y el mecanismo.
+  ///
+  /// El destino ahora es el producto, que es lo que la persona está mirando:
+  /// `vendox.com.ar/p/<id>`, la URL canónica que ya usan el vivo y la tienda, y
+  /// que `destino.dart` resuelve como App Link para abrir la app si está
+  /// instalada.
+  ///
+  /// Y lo arma el BACKEND (`GET /share/product/:id`), igual que en el vivo: un
+  /// enlace compartido sobrevive a la versión de la app que lo generó, y si
+  /// cada versión tuviera su propia idea del formato, cambiarlo rompería los
+  /// que ya están dando vueltas en los chats.
+  Future<void> _compartir() async {
+    try {
+      final mensaje = await ref
+          .read(socialApiProvider)
+          .compartir('product', widget.publicacion.id, origen: 'feed');
+
+      if (!mounted || mensaje.texto.isEmpty) return;
+      await Share.share(mensaje.texto);
+    } catch (_) {
+      /**
+       * Sin cartel, igual que en el vivo.
+       *
+       * Compartir es opcional y el feed sigue andando. Una pantalla de error
+       * encima de lo que la persona vino a mirar, porque una petición
+       * secundaria no llegó, molesta más de lo que informa.
+       */
+    }
+  }
+
+  /// La tienda del vendedor de esta publicación.
+  ///
+  /// Es la misma pantalla que se abre desde el vivo y desde el perfil: una sola
+  /// vidriera en toda la app. Antes acá había un aviso que decía que la tienda
+  /// «llega con la vidriera pública» — y la vidriera ya existe.
+  Future<void> _abrirTienda() async {
+    final storeId = widget.publicacion.storeId;
+    if (storeId.isEmpty) return;
+
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => TiendaScreen(
+          storeId: storeId,
+          nombreTienda: widget.publicacion.tiendaNombre,
+        ),
+      ),
     );
   }
 }

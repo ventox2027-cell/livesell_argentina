@@ -61,19 +61,39 @@ export class VentasListener {
   ) {}
 
   /**
-   * Entró una venta. Se le avisa al VENDEDOR.
+   * Se confirmó una venta. Se le avisa al VENDEDOR.
    *
-   * ⚠️ Al vendedor, no al comprador: el comprador acaba de tocar «pagar» y
-   * está mirando la pantalla. Avisarle de su propia acción es ruido.
+   * ⚠️ Al vendedor, no al comprador: el comprador acaba de pagar y está
+   * mirando la pantalla. Avisarle de su propia acción es ruido.
    *
-   * ─── Por qué en `orderCreated` y no cuando se paga ───
+   * ═══════════════════════════════════════════════════════════════════════
+   * EN `orderConfirmed`, Y ANTES ESTABA EN `orderCreated`
+   * ═══════════════════════════════════════════════════════════════════════
    *
-   * Porque el vendedor quiere saber que alguien está comprando, no enterarse
-   * treinta segundos después de que además pagó. Una orden creada ya reservó
-   * el stock: es una venta empezando.
+   * Ahí estaba el bug, y el comentario que lo justificaba estaba equivocado:
+   * decía que «una orden creada ya reservó el stock: es una venta empezando».
+   *
+   * Pero la orden se crea al ABRIR el checkout —`CheckoutSheet` la pide apenas
+   * se monta— así que el vendedor recibía «¡Te compraron!» de alguien que
+   * todavía no había visto la pantalla de pago, y que podía cerrarla y no
+   * volver nunca. Reportado desde producción: varias notificaciones de compra
+   * sin un solo pago.
+   *
+   * `CONFIRMED` es el estado donde VendoX considera que hay una venta: el pago
+   * se acreditó Y el stock se consumió. En el medio queda `PAID`, que todavía
+   * puede terminar en devolución si el producto se agotó mientras el pago
+   * viajaba — avisar ahí sería prometer una venta que se va a deshacer.
+   *
+   * ─── La idempotencia se hereda, no se inventa ───
+   *
+   * `marcarConfirmada()` publica este evento dentro de un `updateMany`
+   * condicional de `PAID` a `CONFIRMED`: la transición ES el candado y sólo la
+   * primera llamada afecta una fila. Un webhook repetido de Mercado Pago no
+   * confirma dos veces, así que tampoco publica dos veces, así que tampoco
+   * avisa dos veces. La `dedupeKey` es la segunda red.
    */
-  @OnEvent(DomainEvent.orderCreated)
-  async alEntrarUnaVenta(evento: DomainEventPayload): Promise<void> {
+  @OnEvent(DomainEvent.orderConfirmed)
+  async alConfirmarseUnaVenta(evento: DomainEventPayload): Promise<void> {
     try {
       const orden = await this.prisma.order.findUnique({
         where: { id: evento.entityId },
@@ -82,20 +102,23 @@ export class VentasListener {
           reference: true,
           itemsSubtotal: true,
           seller: { select: { userId: true } },
+          buyer: { select: { firstName: true } },
           items: { select: { productNameSnapshot: true }, take: 1 },
         },
       });
       if (!orden) return;
 
       const producto = orden.items[0]?.productNameSnapshot ?? 'un producto';
+      const quien = nombreDeQuienCompra(orden.buyer?.firstName);
 
       await this.notifications.crear({
         userId: orden.seller.userId,
         type: 'ORDER_RECEIVED',
         title: '¡Te compraron!',
-        // El nombre del producto y nada más. Quién compró, su dirección y su
-        // teléfono están en el pedido, detrás de la sesión del vendedor.
-        body: `Alguien compró ${producto}. Preparalo cuando puedas.`,
+        // El nombre de pila y el producto. Nada más: la dirección, el teléfono
+        // y el código de entrega están en el pedido, detrás de la sesión del
+        // vendedor. Un aviso se lee en una pantalla bloqueada sobre una mesa.
+        body: `${quien} compró ${producto}. Preparalo cuando puedas.`,
         data: { orderId: orden.id, referencia: orden.reference },
         /**
          * Una venta, un aviso. La clave es el id de la orden: si este oyente
@@ -108,6 +131,90 @@ export class VentasListener {
       // Un aviso que no salió no puede tumbar una venta que sí ocurrió.
       this.logger.error({ msg: 'no se pudo avisar la venta', orderId: evento.entityId, e });
     }
+  }
+
+  /**
+   * Alguien apartó una unidad. Se le avisa al VENDEDOR.
+   *
+   * ═══════════════════════════════════════════════════════════════════════
+   * RESERVAR NO ES COMPRAR, Y EL AVISO TIENE QUE DECIRLO
+   * ═══════════════════════════════════════════════════════════════════════
+   *
+   * Una reserva aparta stock por unos minutos y puede terminar en nada: se
+   * vence, se suelta, o la persona cierra la app. Decirle «¡Te compraron!» a un
+   * vendedor por eso es prometerle plata que quizá no llegue — y era
+   * exactamente lo que pasaba.
+   *
+   * Por eso NO dice «preparalo cuando puedas»: todavía no hay nada que
+   * preparar. Dice lo que pasó y nada más.
+   *
+   * ─── Un aviso por reserva, y las reservas son idempotentes ───
+   *
+   * `reserve()` publica este evento sólo cuando CREA una fila. Un reintento con
+   * la misma clave de idempotencia devuelve la reserva anterior sin volver a
+   * publicar, y reusar una reserva viva tampoco publica. La `dedupeKey` con el
+   * id de la reserva es la segunda red.
+   */
+  @OnEvent(DomainEvent.reservationCreated)
+  async alReservar(evento: DomainEventPayload): Promise<void> {
+    try {
+      const variantId = (evento.data as { productVariantId?: string } | undefined)
+        ?.productVariantId;
+      if (!variantId) return;
+
+      const variante = await this.prisma.productVariant.findUnique({
+        where: { id: variantId },
+        select: {
+          product: {
+            select: {
+              name: true,
+              store: { select: { seller: { select: { userId: true } } } },
+            },
+          },
+        },
+      });
+      if (!variante) return;
+
+      const vendedor = variante.product.store.seller.userId;
+
+      /**
+       * ⚠️ Nadie se avisa a sí mismo.
+       *
+       * Un vendedor puede apartar su propio producto para probar la app, y
+       * recibir «te reservaron» por algo que acaba de hacer es ruido.
+       */
+      if (vendedor === evento.actorId) return;
+
+      const quien = await this.nombreDe(evento.actorId);
+
+      await this.notifications.crear({
+        userId: vendedor,
+        type: 'RESERVATION_RECEIVED',
+        title: 'Te reservaron',
+        body: `${quien} reservó ${variante.product.name}.`,
+        data: { productVariantId: variantId, reservationId: evento.entityId },
+        dedupeKey: `reservation_received:${evento.entityId}`,
+      });
+    } catch (e) {
+      // Un aviso que no salió no puede tumbar una reserva que sí ocurrió.
+      this.logger.error({
+        msg: 'no se pudo avisar la reserva',
+        reservationId: evento.entityId,
+        e,
+      });
+    }
+  }
+
+  /** El nombre de pila de quien hizo algo, o «Alguien» si no se puede saber. */
+  private async nombreDe(userId: string | null | undefined): Promise<string> {
+    if (!userId) return 'Alguien';
+
+    const persona = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { firstName: true },
+    });
+
+    return nombreDeQuienCompra(persona?.firstName);
   }
 
   /**
@@ -280,4 +387,19 @@ export class VentasListener {
       this.logger.error({ msg: 'no se pudo avisar la reseña', reviewId: evento.entityId, e });
     }
   }
+}
+
+/**
+ * El nombre de pila de quien compró o reservó, para el aviso.
+ *
+ * ⚠️ SÓLO el nombre de pila. Ni apellido, ni correo, ni teléfono: un aviso se
+ * lee en la pantalla bloqueada de un teléfono que puede estar sobre una mesa,
+ * y el vendedor tiene los datos completos del pedido detrás de su sesión.
+ *
+ * «Alguien» cuando no hay nombre. Es honesto y se lee bien: «Alguien reservó
+ * un buzo» dice lo mismo que hace falta.
+ */
+export function nombreDeQuienCompra(nombre: string | null | undefined): string {
+  const limpio = nombre?.trim() ?? '';
+  return limpio.length === 0 ? 'Alguien' : limpio;
 }

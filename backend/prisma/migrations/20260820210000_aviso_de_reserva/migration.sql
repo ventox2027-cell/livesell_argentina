@@ -1,0 +1,11 @@
+-- Un tipo de aviso para las reservas.
+--
+-- Hasta ahora, apartar una unidad le mandaba al vendedor un "¡Te compraron!"
+-- —el aviso colgaba de `order.created`, que ocurre al ABRIR el checkout— y esa
+-- compra podía no pasar nunca. Reservar y comprar son dos cosas distintas y
+-- ahora tienen dos avisos distintos.
+--
+-- Aditiva: `ADD VALUE` sobre un enum no toca ninguna fila existente ni cambia
+-- el significado de los valores que ya están. Las notificaciones ya guardadas
+-- siguen leyéndose igual.
+ALTER TYPE "NotificationType" ADD VALUE IF NOT EXISTS 'RESERVATION_RECEIVED';

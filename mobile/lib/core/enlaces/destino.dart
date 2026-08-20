@@ -179,6 +179,15 @@ Destino? resolverAviso(Map<String, dynamic> data) {
     'ORDER_STATUS' || 'PAYMENT_APPROVED' || 'PAYMENT_REJECTED' =>
       _con(data, 'orderId', TipoDeDestino.pedido),
     'ORDER_RECEIVED' => _con(data, 'orderId', TipoDeDestino.venta),
+
+    /**
+     * Una reserva NO lleva a una venta: todavía no existe.
+     *
+     * Lleva al producto, que es lo que el vendedor va a querer mirar —cuánto
+     * stock le queda—. Mandarlo a «Mis ventas» sería mandarlo a una lista donde
+     * no hay nada suyo todavía.
+     */
+    'RESERVATION_RECEIVED' => _con(data, 'productVariantId', TipoDeDestino.producto),
     'REVIEW_ANSWERED' || 'REVIEW_RECEIVED' => _con(data, 'reviewId', TipoDeDestino.resena),
 
     /**

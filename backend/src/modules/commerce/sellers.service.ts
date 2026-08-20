@@ -353,6 +353,9 @@ export class SellersService {
         ...(dto.logoUrl !== undefined ? { logoUrl: dto.logoUrl } : {}),
         ...(dto.coverUrl !== undefined ? { coverUrl: dto.coverUrl } : {}),
         ...(dto.status !== undefined ? { status: dto.status } : {}),
+        ...(dto.storefrontEnabled !== undefined
+            ? { storefrontEnabled: dto.storefrontEnabled }
+            : {}),
       },
     });
 

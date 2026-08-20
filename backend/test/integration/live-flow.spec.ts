@@ -1339,3 +1339,204 @@ describe('La tienda por su slug', () => {
     expect(r.body.enVivo).toBeNull();
   });
 });
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * LA VIDRIERA PÚBLICA: ENCENDERLA Y APAGARLA
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * `storefrontEnabled` es un campo NUEVO e independiente. No es el estado de la
+ * tienda, ni el horario, ni la pausa de compras, ni el estado de cada producto:
+ * apagar la vidriera esconde la puerta de la tienda, no retira la mercadería.
+ */
+describe('Vidriera pública de la tienda', () => {
+  async function miTienda(token: string) {
+    const r = await call('GET', '/api/v1/stores/me', { token });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    return r.body as { id: string; slug: string };
+  }
+
+  async function apagarLaVidriera(token: string, storeId: string) {
+    const r = await call('PATCH', `/api/v1/stores/${storeId}`, {
+      token,
+      body: { storefrontEnabled: false },
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    return r;
+  }
+
+  /** Las tiendas que ya existían no cambian de comportamiento. */
+  it('nace encendida', async () => {
+    const v = await nuevoVendedorConProducto();
+    const tienda = await miTienda(v.token);
+
+    const perfil = await call('GET', `/api/v1/sellers/${v.sellerId}/profile`);
+
+    expect(perfil.body.tienda.vidriera).toBe(true);
+    expect((await call('GET', `/api/v1/stores/${tienda.id}/catalog?limit=20`)).status).toBe(200);
+  });
+
+  /**
+   * ⛔ APAGADA, EL CATÁLOGO NO SE PUEDE NAVEGAR.
+   *
+   * Y se comprueba en el servidor: esconder el botón en la app no es una
+   * regla, y este endpoint lo puede repetir cualquiera con el id de la tienda.
+   */
+  it('⛔ apagada, el catálogo responde 404', async () => {
+    const v = await nuevoVendedorConProducto();
+    const tienda = await miTienda(v.token);
+    await apagarLaVidriera(v.token, tienda.id);
+
+    const r = await call('GET', `/api/v1/stores/${tienda.id}/catalog?limit=20`);
+
+    expect(r.status).toBe(404);
+
+    /**
+     * ⛔ Y CON CÓDIGO PROPIO, DISTINTO DEL DE UNA TIENDA QUE NO EXISTE.
+     *
+     * Es lo que deja que la app diga «no está disponible» en vez de «no
+     * pudimos abrirla»: la segunda invita a reintentar algo que no se arregla
+     * reintentando.
+     */
+    expect(r.body.error.code).toBe('STOREFRONT_DISABLED');
+  });
+
+  /**
+   * ⛔ Y UNA TIENDA QUE NO EXISTE SIGUE SIENDO OTRA COSA.
+   *
+   * No todos los 404 del catálogo son vidrieras apagadas. Sin esta distinción,
+   * un enlace viejo diría «no disponible por el momento», sugiriendo que
+   * vuelve.
+   */
+  it('⛔ una tienda inexistente no dice vidriera apagada', async () => {
+    const r = await call('GET', '/api/v1/stores/sto_no_existe/catalog?limit=20');
+
+    expect(r.status).toBe(404);
+    expect(r.body.error.code).toBe('NOT_FOUND');
+  });
+
+  /**
+   * ⛔ PERO EL PERFIL SIGUE EXISTIENDO.
+   *
+   * Con seguidores, reputación y el botón de seguir. Apagar la vidriera no es
+   * darse de baja.
+   */
+  it('⛔ apagada, el perfil público sigue completo', async () => {
+    const v = await nuevoVendedorConProducto();
+    const tienda = await miTienda(v.token);
+    const seguidor = await nuevoUsuario();
+    await call('POST', `/api/v1/sellers/${v.sellerId}/follow`, { token: seguidor.token });
+
+    await apagarLaVidriera(v.token, tienda.id);
+
+    const perfil = await call('GET', `/api/v1/sellers/${v.sellerId}/profile`, {
+      token: seguidor.token,
+    });
+
+    expect(perfil.status).toBe(200);
+    expect(perfil.body.tienda.vidriera).toBe(false);
+    expect(perfil.body.seguidores).toBe(1);
+    expect(perfil.body.loSigo).toBe(true);
+    expect(perfil.body.nombre).toBeTruthy();
+  });
+
+  /**
+   * ⛔ Y LOS PRODUCTOS SIGUEN PUBLICADOS Y EN EL FEED.
+   *
+   * Es la diferencia con despublicar. Apagar la vidriera no puede sacarle las
+   * ventas a nadie: lo que se compra desde el feed se sigue comprando.
+   */
+  it('⛔ apagada, los productos siguen en el feed', async () => {
+    const v = await nuevoVendedorConProducto();
+    const tienda = await miTienda(v.token);
+    await apagarLaVidriera(v.token, tienda.id);
+
+    const feed = await call('GET', '/api/v1/discover/products?limit=50');
+    const ids = feed.body.items.map((p: { id: string }) => p.id);
+
+    expect(ids).toContain(v.productId);
+  });
+
+  /** Y se puede volver a encender. */
+  it('se puede volver a encender', async () => {
+    const v = await nuevoVendedorConProducto();
+    const tienda = await miTienda(v.token);
+    await apagarLaVidriera(v.token, tienda.id);
+
+    const r = await call('PATCH', `/api/v1/stores/${tienda.id}`, {
+      token: v.token,
+      body: { storefrontEnabled: true },
+    });
+    expect(r.status).toBe(200);
+
+    expect((await call('GET', `/api/v1/stores/${tienda.id}/catalog?limit=20`)).status).toBe(200);
+  });
+
+  /**
+   * ⛔ Y LA VIDRIERA NO ES EL ESTADO DE LA TIENDA.
+   *
+   * Son dos campos distintos y no se pisan: apagar la vidriera deja la tienda
+   * ACTIVE. Fundirlos haría que esconder el catálogo cierre la tienda.
+   */
+  it('⛔ apagar la vidriera no cambia el estado de la tienda', async () => {
+    const v = await nuevoVendedorConProducto();
+    const tienda = await miTienda(v.token);
+
+    const r = await apagarLaVidriera(v.token, tienda.id);
+
+    expect(r.body.status).toBe('ACTIVE');
+    expect(r.body.storefrontEnabled).toBe(false);
+  });
+});
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * SEGUIDORES Y SEGUIDOS SON DOS DIRECCIONES DE LA MISMA TABLA
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Seguidores: quiénes siguen a ESTE vendedor. Seguidos: a cuántos vendedores
+ * sigue la PERSONA dueña del perfil. Confundirlos mostraría el mismo número de
+ * los dos lados.
+ */
+describe('Seguidores y seguidos en el perfil', () => {
+  it('un vendedor nuevo arranca en cero y cero', async () => {
+    const v = await nuevoVendedorConProducto();
+
+    const perfil = await call('GET', `/api/v1/sellers/${v.sellerId}/profile`);
+
+    expect(perfil.body.seguidores).toBe(0);
+    expect(perfil.body.seguidos).toBe(0);
+  });
+
+  /// ⛔ Seguir suma seguidores acá, y seguidos allá.
+  it('⛔ seguir suma de un lado y no del otro', async () => {
+    const dueno = await nuevoVendedorConProducto();
+    const otro = await nuevoVendedorConProducto();
+
+    // El dueño del primer perfil sigue al segundo vendedor.
+    const r = await call('POST', `/api/v1/sellers/${otro.sellerId}/follow`, {
+      token: dueno.token,
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+
+    const suyo = await call('GET', `/api/v1/sellers/${dueno.sellerId}/profile`);
+    const delOtro = await call('GET', `/api/v1/sellers/${otro.sellerId}/profile`);
+
+    expect(suyo.body.seguidos).toBe(1);
+    expect(suyo.body.seguidores).toBe(0);
+    expect(delOtro.body.seguidores).toBe(1);
+    expect(delOtro.body.seguidos).toBe(0);
+  });
+
+  /// Y dejar de seguir lo baja.
+  it('dejar de seguir baja los seguidos', async () => {
+    const dueno = await nuevoVendedorConProducto();
+    const otro = await nuevoVendedorConProducto();
+    await call('POST', `/api/v1/sellers/${otro.sellerId}/follow`, { token: dueno.token });
+
+    await call('DELETE', `/api/v1/sellers/${otro.sellerId}/follow`, { token: dueno.token });
+
+    const suyo = await call('GET', `/api/v1/sellers/${dueno.sellerId}/profile`);
+    expect(suyo.body.seguidos).toBe(0);
+  });
+});

@@ -63,6 +63,7 @@ class Store {
     required this.name,
     required this.slug,
     required this.status,
+    this.vidrieraActiva = true,
     this.description,
     this.logoUrl,
     this.coverUrl,
@@ -83,6 +84,9 @@ class Store {
         name: j['name'] as String? ?? '',
         slug: j['slug'] as String? ?? '',
         status: j['status'] as String? ?? 'ACTIVE',
+        // Un servidor viejo no manda el campo: encendida, que es como se
+        // comportaba antes de que existiera.
+        vidrieraActiva: j['storefrontEnabled'] as bool? ?? true,
         description: j['description'] as String?,
         logoUrl: j['logoUrl'] as String?,
         coverUrl: j['coverUrl'] as String?,
@@ -97,6 +101,13 @@ class Store {
   final String name;
   final String slug;
   final String status;
+
+  /// Si la vidriera pública se puede navegar.
+  ///
+  /// ⚠️ No es [pausada] ni [status]: son tres cosas distintas. Apagar la
+  /// vidriera esconde el catálogo y deja la tienda vendiendo por el feed.
+  final bool vidrieraActiva;
+
   final String? description;
   final String? logoUrl;
   final String? coverUrl;

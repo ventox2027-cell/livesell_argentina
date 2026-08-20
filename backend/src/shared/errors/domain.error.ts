@@ -29,6 +29,19 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<string, number>> = {
   INVALID_CREDENTIALS: 401,
   FORBIDDEN: 403,
   NOT_FOUND: 404,
+
+  /**
+   * La tienda existe, pero su vidriera está apagada.
+   *
+   * 404 y no 403: lo que no existe es un catálogo navegable. Y con código
+   * propio para que la app pueda decir «no está disponible» en vez de «no
+   * pudimos abrirla» — son dos cosas distintas para quien la está buscando, y
+   * la segunda invita a reintentar algo que no se arregla reintentando.
+   *
+   * No filtra nada nuevo: `GET /sellers/:id/profile` ya publica el estado de
+   * la vidriera de cualquier vendedor.
+   */
+  STOREFRONT_DISABLED: 404,
   CONFLICT: 409,
   RESOURCE_GONE: 410,
   RATE_LIMITED: 429,

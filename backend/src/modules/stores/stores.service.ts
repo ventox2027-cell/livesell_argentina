@@ -47,6 +47,19 @@ import {
  * dicen si otros lo hicieron, y el perfil los junta.
  */
 
+/**
+ * La tienda existe pero su vidriera está apagada.
+ *
+ * Es distinto de que no exista, y la app lo dice distinto: «no está
+ * disponible» en vez de «no pudimos abrirla». La segunda frase invita a
+ * reintentar algo que no se arregla reintentando.
+ */
+export class VidrieraApagadaError extends DomainError {
+  constructor() {
+    super('STOREFRONT_DISABLED', 'La vidriera de esta tienda no está disponible');
+  }
+}
+
 export class NoEncontradoError extends DomainError {
   constructor(que: string) {
     super('NOT_FOUND', `No se encontró ${que}`);
@@ -730,7 +743,7 @@ export class StoresService {
      *
      * Ver `reputacion.ts`.
      */
-    const [siguiendo, estadoTienda, liveActivo] = await Promise.all([
+    const [siguiendo, estadoTienda, liveActivo, seguidos] = await Promise.all([
       userId
         ? this.prisma.follow.findUnique({
             where: { userId_sellerId: { userId, sellerId } },
@@ -742,6 +755,21 @@ export class StoresService {
         where: { sellerId, state: { in: ['LIVE', 'RECONNECTING'] } },
         select: { id: true, title: true },
       }),
+
+      /**
+       * A cuántos vendedores sigue LA PERSONA dueña de este perfil.
+       *
+       * ⚠️ Se cuenta por `userId`, no por `sellerId`. Un follow es una relación
+       * de una persona hacia un vendedor: los seguidores de este perfil son
+       * quienes lo siguen a él, y los seguidos son a quiénes sigue la persona
+       * que está detrás. Son dos direcciones distintas de la misma tabla, y
+       * confundirlas mostraría el mismo número de los dos lados.
+       *
+       * Se cuenta en vivo en vez de denormalizarse como `followersCount`: ese
+       * contador existe porque se lee en cada tarjeta del feed; éste se lee en
+       * una sola pantalla.
+       */
+      this.prisma.follow.count({ where: { userId: vendedor.userId } }),
     ]);
 
     /**
@@ -806,8 +834,25 @@ export class StoresService {
       /** `undefined` si no hay sesión: la app no muestra el botón. */
       loSigo: userId ? siguiendo !== null : undefined,
 
+      /** A cuántos vendedores sigue esta persona. Ver la consulta de arriba. */
+      seguidos,
+
       tienda: tienda
-        ? { id: tienda.id, nombre: tienda.name, slug: tienda.slug, estado: tienda.status }
+        ? {
+            id: tienda.id,
+            nombre: tienda.name,
+            slug: tienda.slug,
+            estado: tienda.status,
+            /**
+             * Si la vidriera se puede navegar.
+             *
+             * ⚠️ Distinto de `estado`: una tienda ACTIVE puede tener la
+             * vidriera apagada. La app usa esto para decidir si «Ver la
+             * tienda» abre el catálogo o explica que no está disponible —y no
+             * para esconder el perfil, que sigue existiendo igual.
+             */
+            vidriera: tienda.storefrontEnabled,
+          }
         : null,
       horario: estadoTienda,
       enVivo: liveActivo ? { id: liveActivo.id, titulo: liveActivo.title } : null,
@@ -822,6 +867,32 @@ export class StoresService {
    * en una respuesta mientras el video sigue corriendo atrás.
    */
   async catalogo(storeId: string, dto: { cursor?: string; limit: number; q?: string }) {
+    /**
+     * ⚠️ LA VIDRIERA APAGADA NO SE PUEDE NAVEGAR.
+     *
+     * Se comprueba acá y no sólo en la app: esconder un botón no es una regla,
+     * y este endpoint es una petición HTTP que cualquiera puede repetir con el
+     * id de la tienda a mano.
+     *
+     * Los dos casos son 404, con CÓDIGOS distintos: lo que no existe en ambos
+     * es un catálogo navegable. Se distinguen porque la app tiene que decir
+     * cosas distintas —«no está disponible» contra «no pudimos abrirla»— y la
+     * segunda invita a reintentar algo que no se arregla reintentando.
+     *
+     * Distinguirlos no filtra nada: `GET /sellers/:id/profile` ya publica el
+     * estado de la vidriera de cualquier vendedor.
+     *
+     * ⚠️ NO afecta a los productos: siguen publicados, siguen en el feed y se
+     * siguen pudiendo comprar desde ahí. Apagar la vidriera esconde la puerta
+     * de la tienda, no retira la mercadería.
+     */
+    const tienda = await this.prisma.store.findUnique({
+      where: { id: storeId },
+      select: { storefrontEnabled: true },
+    });
+    if (!tienda) throw new NoEncontradoError('la tienda');
+    if (!tienda.storefrontEnabled) throw new VidrieraApagadaError();
+
     const productos = await this.prisma.product.findMany({
       where: {
         storeId,

@@ -319,6 +319,9 @@ class _Fila extends StatelessWidget {
       case 'ORDER_STATUS':
       case 'ORDER_RECEIVED':
         return Icons.local_shipping_outlined;
+      // Un reloj, no un camión: lo apartado todavía no se despacha.
+      case 'RESERVATION_RECEIVED':
+        return Icons.timer_outlined;
       case 'PAYMENT_APPROVED':
         return Icons.check_circle_outline_rounded;
       case 'PAYMENT_REJECTED':

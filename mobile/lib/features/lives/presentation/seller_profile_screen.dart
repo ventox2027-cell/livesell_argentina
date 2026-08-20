@@ -9,9 +9,10 @@ import '../../../core/network/reintentar_al_volver_la_red.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../moderation/data/bloqueos_api.dart';
 import '../../moderation/presentation/reportar_sheet.dart';
-import '../data/live_api.dart';
 import '../domain/live_models.dart';
-import '../../social/data/seguimientos.dart';
+import '../../../core/network/errores_de_red.dart';
+import '../../seller/data/seller_repository.dart';
+import '../../social/data/perfil_de_vendedor.dart';
 import 'tienda_screen.dart';
 
 /// El perfil del vendedor.
@@ -54,52 +55,30 @@ class SellerProfileScreen extends ConsumerStatefulWidget {
 }
 
 class _SellerProfileScreenState extends ConsumerState<SellerProfileScreen> {
-  PerfilDeVendedor? _perfil;
-
   /// `null` mientras no se sabe: evita pintar "Bloquear" y que al abrir el
   /// menú diga "Desbloquear".
   bool? _loBloquee;
-  bool _cargando = true;
-
-  /// El Ãºltimo error de carga. â ï¸ Nunca se muestra: sÃ³lo decide si se reintenta
-  /// solo cuando vuelve la seÃ±al.
-  Object? _errorCrudo;
-  bool _alternandoFollow = false;
 
   @override
   void initState() {
     super.initState();
-    unawaited(_cargar());
+    unawaited(_cargarBloqueo());
   }
 
-  Future<void> _cargar() async {
-    setState(() => _cargando = true);
-    try {
-      final perfil = await ref.read(liveApiProvider).perfil(widget.sellerId);
-      if (mounted) {
-        setState(() {
-          _perfil = perfil;
-          _cargando = false;
-        });
-      }
-    } catch (e) {
-      // El error crudo se guarda para poder reintentar solo cuando vuelva la
-      // red. Lo que se muestra es la frase de _ErrorDePerfil, escrita a mano.
-      if (mounted) {
-        setState(() {
-          _cargando = false;
-          _errorCrudo = e;
-        });
-      }
-    }
-
+  /// Pide si esta persona bloqueó al vendedor.
+  ///
+  /// ⚠️ El perfil ya NO se carga acá: vive en `perfilDeVendedorProvider`, con
+  /// clave `sellerId`, junto con el estado de seguimiento. Antes esta pantalla
+  /// tenía su propia copia y su propio `_alternandoFollow`, así que seguir
+  /// desde acá y volver al feed mostraba «Seguir» sobre alguien recién seguido.
+  ///
+  /// El bloqueo sí es de esta pantalla y de ningún otro lado.
+  Future<void> _cargarBloqueo() async {
     /**
-     * El estado del bloqueo se pide APARTE y sin bloquear la pantalla.
-     *
-     * Va después y en su propio `try` porque es información secundaria: si esa
-     * consulta falla, el perfil tiene que verse igual. Lo único que pasa es que
-     * el menú va a ofrecer "Bloquear" cuando quizás ya está bloqueado, y tocarlo
-     * es idempotente del lado del servidor.
+     * Va aparte y sin bloquear la pantalla porque es información secundaria:
+     * si esa consulta falla, el perfil tiene que verse igual. Lo único que pasa
+     * es que el menú va a ofrecer "Bloquear" cuando quizás ya está bloqueado, y
+     * tocarlo es idempotente del lado del servidor.
      */
     try {
       final bloqueado = await ref.read(bloqueosApiProvider).bloqueeAlVendedor(widget.sellerId);
@@ -109,34 +88,28 @@ class _SellerProfileScreenState extends ConsumerState<SellerProfileScreen> {
     }
   }
 
+  /// Vuelve a pedir el perfil y el bloqueo, sin vaciar lo que se ve.
+  Future<void> _refrescar() async {
+    await Future.wait([
+      ref.read(perfilDeVendedorProvider(widget.sellerId).notifier).reconciliar(),
+      _cargarBloqueo(),
+    ]);
+  }
+
   /// Seguir / dejar de seguir, con el contador del servidor.
   ///
   /// El número que se muestra es el que devuelve el backend, no uno sumado del
   /// lado de la app. Con dos dispositivos, o con un toque que falla a mitad de
   /// camino, un contador local queda desfasado para siempre y sólo se arregla
   /// reinstalando.
+  ///
+  /// ⚠️ El error se muestra. Antes se tragaba con un `catch (_) {}` y el botón
+  /// quedaba sin hacer nada ni explicar por qué.
   Future<void> _alternarFollow() async {
-    final perfil = _perfil;
-    if (perfil == null || _alternandoFollow) return;
-
-    setState(() => _alternandoFollow = true);
-    // ⚠️ Por `Seguimientos`, no por `LiveApi`: es lo que avisa a la pestaña
-    // «Siguiendo» del feed. Ver `seguimientos.dart`.
-    final seguimientos = ref.read(seguimientosProvider.notifier);
-
     try {
-      final r = perfil.loSigo == true
-          ? await seguimientos.dejarDeSeguir(widget.sellerId)
-          : await seguimientos.seguir(widget.sellerId);
-
-      if (mounted) {
-        setState(() => _perfil = perfil.conFollow(r.siguiendo, r.seguidores));
-      }
-    } catch (_) {
-      // Nada cambia. Mostrar "Siguiendo" sobre una petición que falló haría
-      // que la persona crea que va a recibir avisos que nunca van a llegar.
-    } finally {
-      if (mounted) setState(() => _alternandoFollow = false);
+      await ref.read(perfilDeVendedorProvider(widget.sellerId).notifier).alternar();
+    } catch (e) {
+      if (mounted) AppSnack.error(context, mensajeDeError(e));
     }
   }
 
@@ -161,9 +134,14 @@ class _SellerProfileScreenState extends ConsumerState<SellerProfileScreen> {
     );
   }
 
+  /// El perfil que se está mostrando, o `null` mientras carga o si falló.
+  PerfilDeVendedor? get _perfil =>
+      ref.read(perfilDeVendedorProvider(widget.sellerId)).valueOrNull?.perfil;
+
   @override
   Widget build(BuildContext context) {
-    final perfil = _perfil;
+    final vista = ref.watch(perfilDeVendedorProvider(widget.sellerId));
+    final perfil = vista.valueOrNull?.perfil;
 
     return Scaffold(
       backgroundColor: AppColor.fondo,
@@ -179,25 +157,37 @@ class _SellerProfileScreenState extends ConsumerState<SellerProfileScreen> {
             ),
         ],
       ),
-      body: _cargando
+      body: vista.isLoading && perfil == null
           ? const Center(child: CircularProgressIndicator())
           : perfil == null
               ? ReintentarAlVolverLaRed(
-                  error: _errorCrudo,
-                  onReintentar: () => unawaited(_cargar()),
-                  child: _ErrorDePerfil(onReintentar: () => unawaited(_cargar())),
+                  // El error crudo decide si se reintenta solo al volver la
+                  // señal. Lo que se MUESTRA es la frase de `_ErrorDePerfil`.
+                  error: vista.error,
+                  onReintentar: () => unawaited(_refrescar()),
+                  child: _ErrorDePerfil(onReintentar: () => unawaited(_refrescar())),
                 )
               : RefreshIndicator(
-                  onRefresh: _cargar,
+                  onRefresh: _refrescar,
                   child: ListView(
                     padding: const EdgeInsets.fromLTRB(Gap.xl, Gap.sm, Gap.xl, Gap.xxxl),
                     children: [
                       _Encabezado(perfil: perfil),
                       const SizedBox(height: Gap.lg),
-                      if (perfil.loSigo != null)
+                      _Social(perfil: perfil),
+                      const SizedBox(height: Gap.lg),
+                      /**
+                       * ⚠️ Sobre la tienda propia no se dibuja.
+                       *
+                       * Nadie se sigue a sí mismo —el backend lo rechaza— y
+                       * antes la app se tragaba ese error: quedaba un botón
+                       * que no hacía nada. Ver `esMiTiendaProvider`.
+                       */
+                      if (perfil.loSigo != null &&
+                          ref.watch(esMiTiendaProvider(widget.sellerId)) == false)
                         _BotonSeguir(
                           siguiendo: perfil.loSigo!,
-                          trabajando: _alternandoFollow,
+                          trabajando: vista.valueOrNull?.alternando ?? false,
                           onTap: _alternarFollow,
                         ),
                       const SizedBox(height: Gap.xl),
@@ -221,15 +211,60 @@ class _SellerProfileScreenState extends ConsumerState<SellerProfileScreen> {
                       ],
                       if (perfil.storeId != null) ...[
                         const SizedBox(height: Gap.xl),
-                        SizedBox(
-                          width: double.infinity,
-                          child: FilledButton.icon(
-                            onPressed: () => unawaited(_abrirTienda()),
-                            icon: const Icon(Icons.storefront_rounded, size: 19),
-                            label: const Text('Ver la tienda'),
-                            style: FilledButton.styleFrom(minimumSize: const Size(0, 52)),
+                        /**
+                         * ⚠️ Con la vidriera apagada NO se abre el catálogo.
+                         *
+                         * Y se dice por qué, en vez de esconder el botón: quien
+                         * llegó buscando la tienda de alguien merece saber que
+                         * existe pero no está abierta al público, no quedarse
+                         * mirando una pantalla donde el botón desapareció sin
+                         * explicación.
+                         *
+                         * El resto del perfil sigue igual: seguirlo, ver su
+                         * reputación y sus seguidores funciona lo mismo.
+                         */
+                        if (perfil.vidrieraActiva)
+                          SizedBox(
+                            width: double.infinity,
+                            child: FilledButton.icon(
+                              onPressed: () => unawaited(_abrirTienda()),
+                              icon: const Icon(Icons.storefront_rounded, size: 19),
+                              label: const Text('Ver la tienda'),
+                              style: FilledButton.styleFrom(minimumSize: const Size(0, 52)),
+                            ),
+                          )
+                        else
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.symmetric(
+                              vertical: Gap.md,
+                              horizontal: Gap.lg,
+                            ),
+                            decoration: BoxDecoration(
+                              color: AppColor.superficie,
+                              borderRadius: BorderRadius.circular(Redondeo.lg),
+                              border: Border.all(color: AppColor.borde),
+                            ),
+                            child: const Row(
+                              children: [
+                                Icon(
+                                  Icons.storefront_outlined,
+                                  size: 18,
+                                  color: AppColor.textoDebil,
+                                ),
+                                SizedBox(width: Gap.md),
+                                Expanded(
+                                  child: Text(
+                                    'Su vidriera no está disponible por ahora',
+                                    style: TextStyle(
+                                      fontSize: 13.5,
+                                      color: AppColor.textoSuave,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
-                        ),
                       ],
                     ],
                   ),
@@ -421,6 +456,70 @@ class _Encabezado extends StatelessWidget {
   }
 }
 
+/// Seguidores y seguidos, arriba de todo.
+///
+/// ═══════════════════════════════════════════════════════════════════════════
+/// LO SOCIAL VA ANTES QUE LO COMERCIAL, Y SON COSAS DISTINTAS
+/// ═══════════════════════════════════════════════════════════════════════════
+///
+/// Es la jerarquía que la gente ya conoce de cualquier app social: quién es,
+/// a cuánta gente le interesa, y recién ahí el botón de seguir. La reputación
+/// comercial —ventas, reseñas, cumplimiento— va debajo, porque responde otra
+/// pregunta: no «vale la pena seguirlo» sino «puedo comprarle tranquilo».
+///
+/// ⚠️ Los dos números NO son el mismo dato en dos lugares. **Seguidores** es
+/// cuánta gente sigue a este vendedor; **seguidos**, a cuántos vendedores sigue
+/// la persona que está detrás del perfil. El backend los cuenta por separado.
+///
+/// Se muestran siempre, incluso en cero: un perfil nuevo con «0 seguidores» es
+/// honesto, y esconder el bloque hasta tener seguidores haría que la pantalla
+/// cambie de forma justo cuando alguien la está mirando por primera vez.
+class _Social extends StatelessWidget {
+  const _Social({required this.perfil});
+
+  final PerfilDeVendedor perfil;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        _Contador(
+          valor: perfil.seguidores,
+          etiqueta: perfil.seguidores == 1 ? 'seguidor' : 'seguidores',
+        ),
+        const SizedBox(width: Gap.xxl),
+        _Contador(valor: perfil.seguidos, etiqueta: 'seguidos'),
+      ],
+    );
+  }
+}
+
+class _Contador extends StatelessWidget {
+  const _Contador({required this.valor, required this.etiqueta});
+
+  final int valor;
+  final String etiqueta;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          _numero(valor),
+          style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w800),
+        ),
+        const SizedBox(height: 1),
+        Text(
+          etiqueta,
+          style: const TextStyle(fontSize: 12.5, color: AppColor.textoSuave),
+        ),
+      ],
+    );
+  }
+}
+
 class _BotonSeguir extends StatelessWidget {
   const _BotonSeguir({
     required this.siguiendo,
@@ -507,15 +606,15 @@ class _Numeros extends StatelessWidget {
       );
     }
 
+    /**
+     * ⚠️ Los seguidores NO van acá.
+     *
+     * Están arriba, en `_Social`, junto a los seguidos. Este bloque responde
+     * otra pregunta —«puedo comprarle tranquilo»— y mezclar el número social
+     * con el comercial lo mostraba dos veces en la misma pantalla.
+     */
     return Row(
       children: [
-        Expanded(
-          child: _Dato(
-            valor: _numero(perfil.seguidores),
-            etiqueta: perfil.seguidores == 1 ? 'seguidor' : 'seguidores',
-          ),
-        ),
-        const _Separador(),
         Expanded(
           child: _Dato(
             valor: _numero(perfil.ventas),
