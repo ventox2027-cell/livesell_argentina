@@ -211,6 +211,17 @@ export function configurarPrefijoYVersionado(app: NestFastifyApplication): void 
       { path: 'v/:id', method: RequestMethod.GET },
       { path: 't/:slug', method: RequestMethod.GET },
       { path: 'u/:slug', method: RequestMethod.GET },
+      /**
+       * La vuelta de Mercado Pago.
+       *
+       * La URL viaja adentro de la preferencia, y una preferencia creada hoy
+       * puede completarse mañana. Meterla bajo `/api/v1/` la ataría a una
+       * versión: el día que exista `/api/v2/`, los pagos empezados antes
+       * volverían a un 404 justo después de haber pagado.
+       *
+       * Es el mismo motivo por el que `/p/:id` está en esta lista.
+       */
+      { path: 'pago/:orderId', method: RequestMethod.GET },
       { path: '.well-known/assetlinks.json', method: RequestMethod.GET },
       /**
        * La descarga del APK y su ficha.

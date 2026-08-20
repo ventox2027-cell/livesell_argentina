@@ -527,3 +527,18 @@ class Venta {
         _ => status,
       };
 }
+
+/// Dónde termina de pagar la persona, cuando el pago no se hace en la app.
+///
+/// ⚠️ `checkoutUrl` es una URL pública del proveedor, atada a esta orden. No
+/// lleva credenciales nuestras ni del vendedor: lo único que identifica es la
+/// preferencia, que sólo sirve para pagar ESTE pedido.
+class CheckoutDeProveedor {
+  const CheckoutDeProveedor({required this.checkoutUrl, required this.attemptId});
+
+  final String checkoutUrl;
+
+  /// El intento que quedó abierto del lado nuestro. Es lo que el webhook va a
+  /// encontrar cuando Mercado Pago avise del pago.
+  final String attemptId;
+}

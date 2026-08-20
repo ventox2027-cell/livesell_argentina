@@ -198,6 +198,39 @@ export class OrdersController {
     };
   }
 
+  /**
+   * «Pagar con Mercado Pago»: devuelve a dónde mandar a la persona.
+   *
+   * ═══════════════════════════════════════════════════════════════════════════
+   * POR QUÉ ES UN `POST` Y NO UN `GET`
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * Porque **crea** algo del lado de Mercado Pago: una preferencia atada a esta
+   * orden, con la comisión y la cuenta del vendedor adentro. Un `GET` invita a
+   * que alguien lo reintente solo, lo precargue o lo cachee, y ninguna de las
+   * tres cosas está bien para esto.
+   *
+   * Es idempotente igual: llamarlo dos veces devuelve la misma URL. Ver
+   * `iniciarCheckoutAlojado`.
+   *
+   * ⚠️ El mismo límite que el cobro con tarjeta, y por el mismo motivo: por
+   * usuario y no por IP, porque detrás del CGNAT de una operadora hay un barrio
+   * entero.
+   */
+  @RateLimit({ limit: 10, windowSec: 60, bucket: 'orders:pay' })
+  @Post('orders/:id/checkout')
+  async checkout(@CurrentUser() user: AuthenticatedUser, @Param('id') orderId: string) {
+    const r = await this.payments.iniciarCheckoutAlojado({ orderId, buyerId: user.id });
+
+    return {
+      attemptId: r.attemptId,
+      // La URL del proveedor. Es pública por diseño: no lleva credenciales
+      // nuestras, sólo el id de la preferencia.
+      checkoutUrl: r.checkoutUrl,
+      orderStatus: r.orderStatus,
+    };
+  }
+
   @Get('orders/:id/payment-attempts')
   async attempts(@CurrentUser() user: AuthenticatedUser, @Param('id') orderId: string) {
     const orden = await this.orders.forBuyer(orderId, user.id);

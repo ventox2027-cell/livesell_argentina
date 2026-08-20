@@ -80,6 +80,44 @@ export interface ProviderRefund {
   raw: Record<string, unknown>;
 }
 
+/**
+ * Lo que hace falta para armar el checkout alojado del proveedor.
+ *
+ * Es deliberadamente parecido a `CobrarInput` y deliberadamente NO el mismo:
+ * acá no hay token de tarjeta ni cuotas —eso lo elige la persona del otro
+ * lado— y sí hay a dónde volver.
+ */
+export interface CheckoutAlojadoInput {
+  /** Nuestro id de orden. Es la llave para conciliar. */
+  externalReference: string;
+  titulo: string;
+  /** En CENTAVOS, como todo el resto del sistema. */
+  amount: number;
+  payerEmail: string;
+
+  /**
+   * La comisión de VendoX, en CENTAVOS.
+   *
+   * La misma que en `cobrar`: la foto que se calculó al crear el pedido, que es
+   * el 4 % del PRODUCTO —no del envío ni del recargo del procesador—.
+   */
+  applicationFee?: number;
+
+  /** A dónde vuelve la persona cuando termina o cancela. */
+  backUrls: { success: string; pending: string; failure: string };
+
+  /** El token del vendedor. Sin él, el cobro no entra en su cuenta. */
+  sellerAccessToken?: string;
+}
+
+/** Dónde paga la persona. */
+export interface ProviderCheckout {
+  /** El id de la preferencia del proveedor. */
+  id: string;
+  /** La URL a abrir en el teléfono. */
+  url: string;
+}
+
 export interface CobrarInput {
   /** Token de un solo uso. Nunca se guarda, nunca se registra. */
   cardToken: string;
@@ -176,8 +214,36 @@ export abstract class PaymentProvider {
     amount?: number,
   ): Promise<ProviderRefund>;
 
+  /**
+   * Crea el checkout alojado del proveedor.
+   *
+   * Es la otra mitad de `cobrar`: aquélla hace el cobro desde nuestro backend
+   * con un token de tarjeta; ésta delega el cobro entero en el proveedor y
+   * devuelve a dónde mandar a la persona.
+   *
+   * ⚠️ Lo que las une es `externalReference`: en los dos casos es el id de
+   * nuestra orden, y en los dos el webhook es la fuente de verdad. Por eso
+   * conviven sin que el resto del sistema tenga que saber cuál se usó.
+   */
+  abstract crearCheckoutAlojado(
+    input: CheckoutAlojadoInput,
+    idempotencyKey: string,
+  ): Promise<ProviderCheckout>;
+
   /** Clave pública para el formulario de tarjeta. No es un secreto. */
   abstract get clavePublica(): string;
 
   abstract get urlDeNotificacion(): string | undefined;
+}
+
+/// El proveedor creó el checkout pero no dijo dónde pagar.
+///
+/// ⚠️ Existe como error propio y no como un `url ?? ''` porque una URL vacía
+/// viajaría hasta el teléfono y fallaría al abrirla, donde nadie puede
+/// diagnosticarla. Acá se corta con un nombre que dice qué pasó.
+export class ProviderCheckoutSinUrlError extends Error {
+  constructor() {
+    super('El proveedor no devolvió una URL de pago');
+    this.name = 'ProviderCheckoutSinUrlError';
+  }
 }

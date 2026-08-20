@@ -11,10 +11,13 @@ import {
 
 import {
   PaymentProvider,
+  ProviderCheckoutSinUrlError,
   ProviderPaymentNotFoundError,
   ProviderRejectedError,
   ProviderUnavailableError,
+  type CheckoutAlojadoInput,
   type CobrarInput,
+  type ProviderCheckout,
   type ProviderPayment,
   type ProviderRefund,
 } from './payment-provider';
@@ -88,6 +91,49 @@ export class MercadoPagoPaymentProvider extends PaymentProvider {
       );
       return this.traducir(pago);
     } catch (err) {
+      throw this.traducirError(err);
+    }
+  }
+
+  async crearCheckoutAlojado(
+    input: CheckoutAlojadoInput,
+    idempotencyKey: string,
+  ): Promise<ProviderCheckout> {
+    try {
+      const preferencia = await this.mp.createPreference(
+        {
+          externalReference: input.externalReference,
+          titulo: input.titulo,
+          // Centavos adentro, unidades de moneda hacia afuera. La conversión
+          // vive acá porque es un detalle del formato de la API.
+          monto: centavosAMonto(input.amount),
+          payerEmail: input.payerEmail,
+          notificationUrl: this.mp.notificationUrl,
+          marketplaceFee:
+            input.applicationFee === undefined ? undefined : centavosAMonto(input.applicationFee),
+          backUrls: input.backUrls,
+          sellerAccessToken: input.sellerAccessToken,
+        },
+        idempotencyKey,
+      );
+
+      /**
+       * ⚠️ `init_point`, nunca `sandbox_init_point`.
+       *
+       * El de sandbox existe en la respuesta aunque las credenciales sean de
+       * producción, y abre un checkout donde el pago no es real. Elegir el
+       * equivocado da un flujo que se ve perfecto y no cobra nada — un modo de
+       * falla que sólo se descubre revisando por qué no llegó la plata.
+       *
+       * Cuál corresponde lo decide la credencial, no la app: con credenciales
+       * de prueba, `init_point` ya es de prueba.
+       */
+      const url = preferencia.init_point;
+      if (!url) throw new ProviderCheckoutSinUrlError();
+
+      return { id: preferencia.id, url };
+    } catch (err) {
+      if (err instanceof ProviderCheckoutSinUrlError) throw err;
       throw this.traducirError(err);
     }
   }

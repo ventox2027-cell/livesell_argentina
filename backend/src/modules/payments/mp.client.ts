@@ -69,6 +69,76 @@ export interface MpRefund {
   [key: string]: unknown;
 }
 
+/**
+ * Lo que hace falta para armar un Checkout Pro.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * CHECKOUT PRO Y CHECKOUT API SON DOS COSAS DISTINTAS
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Hasta ahora VendoX usaba **sólo Checkout API**: el CardForm genera un token
+ * de tarjeta en el teléfono y nosotros creamos el pago con `POST /v1/payments`.
+ * Todo el cobro pasa por nuestro backend.
+ *
+ * «Pagar con Mercado Pago» es lo otro: se crea una **preferencia** y la persona
+ * termina de pagar del lado de ellos —en su app si la tiene instalada, o en su
+ * web si no—. Nosotros nunca vemos el medio de pago.
+ *
+ * Los dos conviven sin pisarse porque comparten lo único que importa para
+ * conciliar: `external_reference` es el id de nuestra orden, y el webhook es la
+ * fuente de verdad en los dos casos.
+ *
+ * ─── La comisión se llama distinto en cada uno ───
+ *
+ * En Checkout API es `application_fee`. En una preferencia es
+ * **`marketplace_fee`**. Es el mismo concepto —lo que Mercado Pago nos deposita
+ * a nosotros del cobro que entra en la cuenta del vendedor— con dos nombres,
+ * y mandar el de la otra API no da error: se ignora en silencio y la comisión
+ * no se cobra.
+ */
+export interface CreatePreferenceInput {
+  /** Nuestro id de orden. Es la llave para conciliar. */
+  externalReference: string;
+  titulo: string;
+  /** En unidades de moneda, no en centavos. */
+  monto: number;
+  payerEmail: string;
+  notificationUrl?: string;
+
+  /**
+   * La comisión de VendoX, en unidades de moneda.
+   *
+   * ⚠️ Sólo tiene sentido junto con `sellerAccessToken`: es lo que Mercado Pago
+   * descuenta del cobro que entra en la cuenta del vendedor. Sin cuenta del
+   * vendedor no hay de dónde descontarla.
+   */
+  marketplaceFee?: number;
+
+  /**
+   * A dónde vuelve la persona cuando termina.
+   *
+   * Son enlaces de `vendox.com.ar`, que es un App Link verificado: Android
+   * abre la app directamente. Si no está instalada, cae en la web.
+   */
+  backUrls: { success: string; pending: string; failure: string };
+
+  /**
+   * El token del vendedor. El cobro entra en SU cuenta.
+   *
+   * Es el mismo mecanismo de marketplace que ya usa el cobro con tarjeta. Sin
+   * esto, el dinero entraría en la cuenta de VendoX y tendríamos que girarlo a
+   * mano — exactamente lo que se decidió no hacer nunca.
+   */
+  sellerAccessToken?: string;
+}
+
+export interface MpPreference {
+  id: string;
+  /** La URL donde se paga. Es la que se abre en el teléfono. */
+  init_point?: string;
+  sandbox_init_point?: string;
+}
+
 export interface CreatePaymentInput {
   /** Token de tarjeta de un solo uso, generado en el cliente. Nunca se guarda. */
   token: string;
@@ -210,6 +280,68 @@ export class MercadoPagoService {
       // Con el token del vendedor, el cobro entra en SU cuenta y Mercado Pago
       // nos deposita la comisión en el mismo movimiento. Sin él, entra en la
       // nuestra — que es lo que hace el spike.
+      accessToken: input.sellerAccessToken,
+    });
+  }
+
+  /**
+   * Crea una preferencia de Checkout Pro.
+   *
+   * ⚠️ `idempotencyKey` es obligatoria por el mismo motivo que en `createPayment`:
+   * dos toques del botón no pueden dejar dos preferencias abiertas para la
+   * misma orden.
+   */
+  async createPreference(
+    input: CreatePreferenceInput,
+    idempotencyKey: string,
+  ): Promise<MpPreference> {
+    const body: Record<string, unknown> = {
+      items: [
+        {
+          title: input.titulo,
+          quantity: 1,
+          unit_price: input.monto,
+          currency_id: 'ARS',
+        },
+      ],
+      payer: { email: input.payerEmail },
+      external_reference: input.externalReference,
+      back_urls: input.backUrls,
+
+      /**
+       * Vuelve sola cuando el pago se aprueba.
+       *
+       * ⚠️ Sólo con `approved`. Con `all`, Mercado Pago devuelve también los
+       * pagos pendientes de la misma forma, y la app no tendría cómo distinguir
+       * «pagaste» de «falta que se acredite» sin preguntar igual. Prefiere que
+       * la persona toque «Volver» y que el estado lo diga el webhook.
+       */
+      auto_return: 'approved',
+
+      /**
+       * Que no ofrezca lo que no podemos cumplir.
+       *
+       * Un pago en efectivo se acredita en días. Para una compra en un vivo,
+       * donde el stock está reservado por minutos, eso es prometer algo que la
+       * reserva no aguanta.
+       */
+      payment_methods: {
+        excluded_payment_types: [{ id: 'ticket' }, { id: 'atm' }],
+      },
+    };
+
+    const notificationUrl = input.notificationUrl ?? this.notificationUrl;
+    if (notificationUrl) body.notification_url = notificationUrl;
+
+    // Igual que `application_fee`: cero lo rechaza, y una venta chica puede
+    // redondear a cero legítimamente.
+    if (input.marketplaceFee !== undefined && input.marketplaceFee > 0) {
+      body.marketplace_fee = input.marketplaceFee;
+    }
+
+    return this.request<MpPreference>('POST', '/checkout/preferences', {
+      body,
+      idempotencyKey,
       accessToken: input.sellerAccessToken,
     });
   }

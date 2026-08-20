@@ -2166,6 +2166,23 @@ model PaymentAttempt {
   /// Cuánto cobró el proveedor por este cobro, cuando lo informa.
   processorFeeAmount Int? @map("processor_fee_amount")
 
+  // ─── Checkout alojado del proveedor ───────────────────────────────────────
+  //
+  // Sólo los intentos de «Pagar con Mercado Pago» los llenan. Los de tarjeta
+  // quedan en `null`: ahí el cobro lo hacemos nosotros y no hay nada alojado.
+  //
+  // ⚠️ Se guardan para que un segundo toque devuelva LA MISMA preferencia en
+  // vez de crear otra. Sin esto, tocar dos veces dejaría dos checkouts vivos
+  // para la misma orden, y de ahí a pagar dos veces hay un paso.
+
+  /// El id de la preferencia en el proveedor.
+  providerPreferenceId String? @map("provider_preference_id")
+
+  /// A dónde se manda a la persona a pagar.
+  ///
+  /// No es un secreto: es una URL pública del proveedor, atada a esta orden.
+  checkoutUrl String? @map("checkout_url")
+
   createdAt     DateTime  @default(now()) @map("created_at")
   updatedAt     DateTime  @updatedAt @map("updated_at")
   approvedAt    DateTime? @map("approved_at")

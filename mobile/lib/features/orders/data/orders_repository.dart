@@ -155,6 +155,30 @@ class OrdersRepository {
     throw _error(res);
   }
 
+  /// Pide el checkout de Mercado Pago para este pedido.
+  ///
+  /// Devuelve a dónde mandar a la persona. La preferencia la crea el backend
+  /// con la cuenta del vendedor y la comisión de la orden: acá no se arma nada.
+  ///
+  /// ⚠️ Es idempotente del lado del servidor. Llamarlo dos veces devuelve la
+  /// MISMA URL, no dos checkouts abiertos para la misma orden.
+  Future<CheckoutDeProveedor> abrirCheckoutDeMercadoPago(String orderId) async {
+    final res = await _api.post<Map<String, dynamic>>('/orders/$orderId/checkout');
+    if ((res.statusCode != 201 && res.statusCode != 200) || res.data == null) {
+      throw _error(res);
+    }
+
+    final url = res.data!['checkoutUrl'] as String?;
+    if (url == null || url.isEmpty) {
+      throw PedidoException('No pudimos abrir el pago. Probá de nuevo.');
+    }
+
+    return CheckoutDeProveedor(
+      checkoutUrl: url,
+      attemptId: res.data!['attemptId'] as String? ?? '',
+    );
+  }
+
   Future<String> clavePublica() async {
     final res = await _api.get<Map<String, dynamic>>('/checkout/config');
     if (res.statusCode != 200 || res.data == null) throw _error(res);

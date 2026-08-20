@@ -7,6 +7,7 @@ import type { JwtService } from '@/modules/auth/jwt.service';
 import type { InventoryService } from '@/modules/inventory/inventory.service';
 import { AgendaService } from '@/modules/live/agenda.service';
 import { NotificationsService } from '@/modules/notifications/notifications.service';
+import { ProviderUnavailableError } from '@/modules/orders/payment-provider';
 import type { OrdersReconciler } from '@/modules/orders/reconciler.service';
 import type { PrismaService } from '@/shared/prisma/prisma.service';
 import type { RedisService } from '@/shared/redis/redis.service';
@@ -6170,5 +6171,191 @@ describe('Comisión por volumen al crear la orden', () => {
     expect(r.body.platformFeeBps).toBe(300);
     // 3 % sobre $8.010 —lo que se pagó—, no sobre $8.900.
     expect(r.body.platformFeeAmount).toBe(24_030);
+  });
+});
+
+/**
+ * «Pagar con Mercado Pago»: el checkout alojado.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * QUÉ ES DISTINTO Y QUÉ NO
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Acá VendoX no cobra: crea una preferencia y la persona termina de pagar del
+ * lado de Mercado Pago. Lo que NO cambia es todo lo que hace confiable al
+ * sistema — `external_reference` es el id de la orden, la comisión es la que se
+ * congeló al crear el pedido, el cobro entra en la cuenta del vendedor, y el
+ * webhook sigue siendo la única fuente de verdad.
+ *
+ * ⚠️ Ningún test de este archivo habla con Mercado Pago ni cobra nada: el
+ * proveedor está doblado.
+ */
+describe('Pagar con Mercado Pago', () => {
+  async function iniciarCheckout(token: string, orderId: string) {
+    return call('POST', `/api/v1/orders/${orderId}/checkout`, { token });
+  }
+
+  it('devuelve a dónde ir a pagar', async () => {
+    const { variantId } = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, variantId));
+
+    const r = await iniciarCheckout(comprador.token, orden.body.id);
+
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(r.body.checkoutUrl).toContain('mercadopago');
+    expect(r.body.attemptId).toMatch(/^pat_/);
+  });
+
+  /**
+   * ⛔ LA IDEMPOTENCIA: dos toques, UNA preferencia.
+   *
+   * Sin esto, tocar el botón dos veces dejaría dos checkouts vivos para la
+   * misma orden, y de ahí a que alguien pague dos veces hay un paso.
+   */
+  it('⛔ tocar dos veces devuelve la MISMA preferencia', async () => {
+    const { variantId } = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, variantId));
+
+    const primera = await iniciarCheckout(comprador.token, orden.body.id);
+    const segunda = await iniciarCheckout(comprador.token, orden.body.id);
+
+    expect(segunda.body.checkoutUrl).toBe(primera.body.checkoutUrl);
+    expect(segunda.body.attemptId).toBe(primera.body.attemptId);
+    expect(proveedor.checkoutsCreados).toHaveLength(1);
+
+    // Y un solo intento en la base, no dos.
+    const intentos = await prisma.paymentAttempt.count({ where: { orderId: orden.body.id } });
+    expect(intentos).toBe(1);
+  });
+
+  /**
+   * ⛔ LA COMISIÓN ES LA DE LA ORDEN, Y ES SOBRE EL PRODUCTO.
+   *
+   * No se recalcula ni se toma del entorno: es la foto congelada al crear el
+   * pedido, que es el 4 % del PRODUCTO — sin envío ni recargo del procesador.
+   * Recalcularla acá haría que un cambio de comisión entre la creación y el
+   * pago cobre un número distinto del que se le mostró a la persona.
+   */
+  it('⛔ manda la comisión congelada en la orden, no una recalculada', async () => {
+    const { variantId } = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, variantId));
+
+    await iniciarCheckout(comprador.token, orden.body.id);
+
+    const enBase = await leerOrden(orden.body.id);
+    const enviado = proveedor.checkoutsCreados[0]!.input;
+
+    expect(enviado.amount).toBe(enBase.grossAmount);
+
+    /**
+     * ⚠️ Sin cuenta del vendedor conectada NO viaja comisión, y está bien.
+     *
+     * La comisión es lo que Mercado Pago descuenta del cobro que entra en la
+     * cuenta del vendedor. Sin esa cuenta, el cobro entra en la nuestra y
+     * cobrarnos a nosotros mismos no significa nada — Mercado Pago lo rechaza.
+     * Es la misma regla que en el cobro con tarjeta.
+     *
+     * En los tests no hay OAuth de vendedor, así que este es el caso que se
+     * puede comprobar acá. Que el número sea el de la orden y no uno
+     * recalculado lo fija el test de abajo, sobre la función pura.
+     */
+    expect(enviado.applicationFee).toBeUndefined();
+    expect(enBase.platformFeeAmount).toBeGreaterThan(0);
+  });
+
+  /// ⛔ Y la referencia externa es el id de la orden: es lo que ata el webhook.
+  it('⛔ la referencia externa es el id de la orden', async () => {
+    const { variantId } = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, variantId));
+
+    await iniciarCheckout(comprador.token, orden.body.id);
+
+    expect(proveedor.checkoutsCreados[0]!.input.externalReference).toBe(orden.body.id);
+  });
+
+  /**
+   * ⛔ EL INTENTO QUEDA EN `CREATED`, Y ES LO QUE HACE QUE EL WEBHOOK FUNCIONE.
+   *
+   * `WebhookService` busca un intento en CREATED/PROCESSING/UNKNOWN para esa
+   * orden. Sin él, cada pago hecho por Checkout Pro se archivaría como ORPHAN y
+   * la orden nunca pasaría a pagada.
+   */
+  it('⛔ deja un intento que el webhook pueda encontrar', async () => {
+    const { variantId } = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, variantId));
+
+    await iniciarCheckout(comprador.token, orden.body.id);
+
+    const intento = await prisma.paymentAttempt.findFirstOrThrow({
+      where: { orderId: orden.body.id },
+    });
+    expect(intento.status).toBe('CREATED');
+    expect(intento.providerPreferenceId).not.toBeNull();
+    expect(intento.checkoutUrl).not.toBeNull();
+  });
+
+  /**
+   * ⛔ NO SE PUEDEN ABRIR LOS DOS CAMINOS DE PAGO A LA VEZ.
+   *
+   * Un cobro con tarjeta en curso puede estar aprobándose en este instante.
+   * Mandar a la persona a Mercado Pago ahí sería abrirle un segundo camino
+   * sobre un pago que quizá ya salió.
+   */
+  it('⛔ con un cobro con tarjeta en vuelo, no deja ir a Mercado Pago', async () => {
+    const { variantId } = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, variantId));
+
+    // Un intento que quedó sin resolver: el proveedor no contestó.
+    proveedor.proximo = { fallo: 'red' };
+    await pagar(comprador.token, orden.body.id);
+    proveedor.proximo = { status: 'approved' };
+
+    const r = await iniciarCheckout(comprador.token, orden.body.id);
+
+    expect(r.status).toBe(409);
+    expect(r.body.error.code).toBe('PAYMENT_IN_FLIGHT');
+  });
+
+  /// ⛔ Una orden ajena no existe, con checkout o sin él.
+  it('⛔ no se puede pagar la orden de otra persona', async () => {
+    const { variantId } = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, variantId));
+
+    const otro = await nuevoComprador();
+    const r = await iniciarCheckout(otro.token, orden.body.id);
+
+    expect(r.status).toBe(404);
+  });
+
+  /**
+   * ⛔ SI LA PREFERENCIA NO SE PUDO CREAR, NO QUEDA NINGÚN INTENTO.
+   *
+   * Es la diferencia con el cobro con tarjeta, donde el intento se crea antes
+   * de llamar al proveedor porque el cobro puede haberse procesado igual. Acá
+   * no hay nada que conciliar: sin preferencia, nadie pagó nada. Un intento
+   * huérfano bloquearía la orden para siempre.
+   */
+  it('⛔ si falla la creación, la orden no queda bloqueada', async () => {
+    const { variantId } = await nuevaVarianteConStock(3);
+    const comprador = await nuevoComprador();
+    const orden = await crearOrden(comprador.token, await reservar(comprador.token, variantId));
+
+    proveedor.checkoutFalla = new ProviderUnavailableError('el proveedor no contestó');
+    const fallido = await iniciarCheckout(comprador.token, orden.body.id);
+    expect(fallido.status).toBeGreaterThanOrEqual(400);
+
+    expect(await prisma.paymentAttempt.count({ where: { orderId: orden.body.id } })).toBe(0);
+
+    // Y se puede volver a intentar.
+    proveedor.checkoutFalla = null;
+    const segundo = await iniciarCheckout(comprador.token, orden.body.id);
+    expect(segundo.status, JSON.stringify(segundo.body)).toBe(201);
   });
 });

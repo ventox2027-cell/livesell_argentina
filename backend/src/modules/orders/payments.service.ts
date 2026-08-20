@@ -20,6 +20,7 @@ import {
   ProviderPaymentNotFoundError,
   ProviderRejectedError,
   ProviderUnavailableError,
+  type ProviderCheckout,
   type ProviderPayment,
 } from './payment-provider';
 
@@ -83,6 +84,26 @@ export class VendedorSinCuentaDeCobroError extends DomainError {
   }
 }
 
+/**
+ * No se pudo abrir el checkout del proveedor.
+ *
+ * ⚠️ Es distinto de `PaymentStateUnknownError`, y la diferencia no es
+ * cosmética: allá un cobro pudo haberse procesado y hay que esperar; acá NADIE
+ * pagó nada.
+ *
+ * Se puede volver a intentar sin ningún riesgo, y el mensaje lo dice. Lo
+ * encontró un test que esperaba un error y recibía un 202 con «estamos
+ * verificando tu pago» — para un pago que nunca existió.
+ */
+export class CheckoutNoDisponibleError extends DomainError {
+  constructor() {
+    super(
+      'CHECKOUT_UNAVAILABLE',
+      'No pudimos abrir el pago. No se te cobró nada: probá de nuevo.',
+    );
+  }
+}
+
 export class PaymentInFlightError extends DomainError {
   constructor() {
     super(
@@ -134,6 +155,234 @@ export class OrderPaymentsService {
   // ═══════════════════════════════════════════════════════════════════════
   // COBRAR
   // ═══════════════════════════════════════════════════════════════════════
+
+  /**
+   * «Pagar con Mercado Pago»: crea el checkout alojado y dice a dónde ir.
+   *
+   * ═══════════════════════════════════════════════════════════════════════════
+   * QUÉ CAMBIA Y QUÉ NO, RESPECTO DEL COBRO CON TARJETA
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * Cambia quién cobra. Con tarjeta, el CardForm genera un token en el teléfono
+   * y nosotros creamos el pago; acá se crea una **preferencia** y la persona
+   * termina de pagar del lado de Mercado Pago —en su app si la tiene, o en su
+   * web si no—.
+   *
+   * NO cambia nada de lo que hace que el sistema sea confiable:
+   *
+   *   · `external_reference` sigue siendo el id de nuestra orden;
+   *   · el **webhook sigue siendo la fuente de verdad** de PAID/CONFIRMED;
+   *   · el cobro entra en la cuenta del VENDEDOR, con nuestra comisión como
+   *     `marketplace_fee`;
+   *   · la comisión es la que se congeló al crear el pedido: 4 % del PRODUCTO,
+   *     sin envío ni recargo del procesador.
+   *
+   * ═══════════════════════════════════════════════════════════════════════════
+   * POR QUÉ SE CREA UN `PaymentAttempt` SI TODAVÍA NO PAGÓ NADIE
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * Porque si no, el webhook no tendría a qué atar el pago. `WebhookService`
+   * busca un intento en `CREATED`/`PROCESSING`/`UNKNOWN_PENDING_RECONCILIATION`
+   * para esa orden y, si no lo encuentra, archiva el pago como **ORPHAN** y no
+   * hace nada.
+   *
+   * O sea: sin este intento, cada pago hecho por Checkout Pro se perdería en
+   * silencio y la orden nunca pasaría a pagada. Con él, el webhook y el
+   * conciliador funcionan sin una sola línea nueva.
+   *
+   * Y de yapa da la idempotencia gratis: el índice parcial
+   * `intento_en_vuelo_unico_por_orden` ya garantiza **un solo intento activo
+   * por orden**, y ahora lo comparten los dos caminos de pago. Tocar el botón
+   * dos veces devuelve la misma preferencia; empezar por tarjeta y seguir por
+   * Mercado Pago choca contra el mismo índice.
+   */
+  async iniciarCheckoutAlojado(input: {
+    orderId: string;
+    buyerId: string;
+  }): Promise<{ attemptId: string; checkoutUrl: string; orderStatus: string }> {
+    const orden = await this.prisma.order.findFirst({
+      where: { id: input.orderId, buyerId: input.buyerId },
+      select: {
+        id: true,
+        status: true,
+        grossAmount: true,
+        reference: true,
+        buyerSnapshot: true,
+        sellerId: true,
+        platformFeeAmount: true,
+        items: { select: { productNameSnapshot: true }, take: 1 },
+      },
+    });
+    if (!orden) throw new DomainError('ORDER_NOT_FOUND_V2', 'Pedido no encontrado');
+
+    /**
+     * Si ya hay un checkout vivo para esta orden, se devuelve ESE.
+     *
+     * Es la idempotencia vista desde arriba: el segundo toque no crea otra
+     * preferencia ni falla, devuelve dónde estaba pagando. Volver del checkout
+     * sin pagar y tocar de nuevo tiene que llevar al mismo lado.
+     */
+    const enVuelo = await this.prisma.paymentAttempt.findFirst({
+      where: {
+        orderId: orden.id,
+        status: { in: ['CREATED', 'PROCESSING', 'UNKNOWN_PENDING_RECONCILIATION'] },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (enVuelo?.checkoutUrl) {
+      this.metrics.paymentAttempts.inc({ result: 'idempotent_replay' });
+      return {
+        attemptId: enVuelo.id,
+        checkoutUrl: enVuelo.checkoutUrl,
+        orderStatus: orden.status,
+      };
+    }
+
+    /**
+     * ⚠️ Un intento en vuelo SIN checkout es un cobro con tarjeta en curso.
+     *
+     * Mandarla a Mercado Pago ahí sería abrir un segundo camino de pago sobre
+     * un cobro que puede estar aprobándose en este mismo instante.
+     */
+    if (enVuelo) throw new PaymentInFlightError();
+
+    if (!admitePago(orden.status)) {
+      if (orden.status === 'PROCESSING_PAYMENT') throw new PaymentInFlightError();
+      if (orden.status === 'PAID' || orden.status === 'CONFIRMED') {
+        throw new DomainError('PAYMENT_ALREADY_APPROVED', 'Este pedido ya está pago');
+      }
+      throw new OrderNotPayableError(orden.status);
+    }
+
+    /**
+     * La misma regla que en el cobro con tarjeta: sin cuenta del vendedor
+     * conectada, no se cobra.
+     *
+     * Acá es todavía más claro que allá. Una preferencia creada con NUESTRO
+     * token cobra en NUESTRA cuenta, y esa plata habría que girarla a mano.
+     */
+    const sellerAccessToken = await this.tokenDelVendedor(orden.sellerId);
+    if (!sellerAccessToken && !env.ALLOW_PAYMENT_WITHOUT_SELLER_ACCOUNT) {
+      this.logger.error({
+        msg: '⛔ checkout rechazado: el vendedor no tiene Mercado Pago conectado',
+        orderId: orden.id,
+        sellerId: orden.sellerId,
+      });
+      throw new VendedorSinCuentaDeCobroError();
+    }
+
+    const attemptId = newId('pat');
+    const idempotencyKey = `mp-checkout-${orden.id}`;
+    const comprador = orden.buyerSnapshot as { email?: string } | null;
+    const titulo = orden.items[0]?.productNameSnapshot ?? `Pedido ${orden.reference}`;
+
+    let checkout: ProviderCheckout;
+    try {
+      checkout = await this.provider.crearCheckoutAlojado(
+        {
+          externalReference: orden.id,
+          titulo,
+          amount: orden.grossAmount,
+          payerEmail: comprador?.email ?? '',
+          applicationFee: sellerAccessToken ? orden.platformFeeAmount : undefined,
+          backUrls: this.dondeVolver(orden.id),
+          sellerAccessToken: sellerAccessToken ?? undefined,
+        },
+        idempotencyKey,
+      );
+    } catch (err) {
+      /**
+       * ⚠️ Si la preferencia no se pudo crear, NO queda ningún intento.
+       *
+       * Es la diferencia con el cobro con tarjeta, donde el intento se crea
+       * antes de llamar al proveedor porque el cobro puede haberse procesado
+       * igual. Acá no hay nada que conciliar: sin preferencia, nadie pagó nada.
+       * Dejar un intento en vuelo bloquearía la orden para siempre.
+       */
+      this.metrics.paymentAttempts.inc({ result: 'provider_error' });
+
+      /**
+       * ⚠️ Acá NO se usa `traducirFallo`, y la diferencia importa.
+       *
+       * `traducirFallo` está pensado para el cobro con tarjeta: ahí un
+       * proveedor caído significa «no sabemos si se cobró», y por eso devuelve
+       * un 202 con «estamos verificando tu pago».
+       *
+       * Para una preferencia eso es falso y confuso. Si no se pudo crear, nadie
+       * pagó nada: no hay pago que verificar, no hay nada que conciliar, y
+       * decirle a alguien que espere sin intentar de nuevo lo deja trabado por
+       * un error que se resuelve tocando el botón otra vez.
+       *
+       * Lo encontró un test: esperaba un error y recibía un 202.
+       */
+      this.logger.warn({
+        msg: 'no se pudo crear el checkout alojado',
+        orderId: orden.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err instanceof DomainError ? err : new CheckoutNoDisponibleError();
+    }
+
+    try {
+      await this.prisma.paymentAttempt.create({
+        data: {
+          id: attemptId,
+          orderId: orden.id,
+          idempotencyKey,
+          amount: orden.grossAmount,
+          status: 'CREATED',
+          providerPreferenceId: checkout.id,
+          checkoutUrl: checkout.url,
+        },
+      });
+    } catch (err) {
+      // Alguien ganó la carrera y creó su intento primero. Se devuelve el suyo.
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        const existente = await this.prisma.paymentAttempt.findUnique({
+          where: { idempotencyKey },
+        });
+        if (existente?.checkoutUrl) {
+          return {
+            attemptId: existente.id,
+            checkoutUrl: existente.checkoutUrl,
+            orderStatus: orden.status,
+          };
+        }
+        throw new PaymentInFlightError();
+      }
+      throw err;
+    }
+
+    this.metrics.paymentAttempts.inc({ result: 'created' });
+    this.events.publish(DomainEvent.paymentAttemptCreated, {
+      entityId: attemptId,
+      actorId: input.buyerId,
+      data: { orderId: orden.id, amount: orden.grossAmount },
+    });
+
+    return { attemptId, checkoutUrl: checkout.url, orderStatus: orden.status };
+  }
+
+  /**
+   * A dónde vuelve la persona cuando termina en Mercado Pago.
+   *
+   * Son enlaces de `vendox.com.ar`, que el `AndroidManifest` declara como App
+   * Link verificado sin prefijo de ruta: Android abre VendoX directamente. Si
+   * la app no está instalada, cae en la web y la página explica qué pasó.
+   *
+   * ⚠️ El estado que viene en la URL es sólo para MOSTRAR algo mientras tanto.
+   * Quien decide si la orden está paga es el webhook, siempre. Un enlace de
+   * vuelta lo puede escribir cualquiera.
+   */
+  private dondeVolver(orderId: string): { success: string; pending: string; failure: string } {
+    const base = `${env.PUBLIC_WEB_URL}/pago/${orderId}`;
+    return {
+      success: `${base}?estado=aprobado`,
+      pending: `${base}?estado=pendiente`,
+      failure: `${base}?estado=rechazado`,
+    };
+  }
 
   /**
    * Intenta cobrar una orden.

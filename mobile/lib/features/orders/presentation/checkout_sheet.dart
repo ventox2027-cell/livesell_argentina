@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../../core/config/runtime_config.dart';
@@ -277,6 +278,84 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
     }
   }
 
+  /// «Pagar con Mercado Pago»: se sale de la app y se vuelve.
+  ///
+  /// ═══════════════════════════════════════════════════════════════════════════
+  /// POR QUÉ NO ES UN DEEP LINK A MERCADO PAGO
+  /// ═══════════════════════════════════════════════════════════════════════════
+  ///
+  /// Un enlace genérico a su app no sabría qué se está comprando, ni a quién
+  /// pagarle, ni cuánto, ni con qué comisión. Lo que se abre acá es el
+  /// `init_point` de una **preferencia real**, creada por nuestro backend con
+  /// la cuenta del vendedor y atada a esta orden por `external_reference`.
+  ///
+  /// ─── Y por qué eso alcanza para abrir la app de Mercado Pago ───
+  ///
+  /// El `init_point` es un enlace de `mercadopago.com.ar`, y su app lo declara
+  /// como App Link verificado. Abrirlo con `externalApplication` deja que
+  /// Android haga lo suyo: si la app está instalada, la abre; si no, va al
+  /// navegador. Es el mecanismo oficial, y no hay nada nuestro que decidir ahí.
+  ///
+  /// Por eso NO se abre en un WebView: adentro de uno, Android no puede
+  /// derivar a la app, y quien tiene saldo en Mercado Pago tendría que volver a
+  /// escribir su usuario y su contraseña.
+  ///
+  /// ═══════════════════════════════════════════════════════════════════════════
+  /// LA VUELTA
+  /// ═══════════════════════════════════════════════════════════════════════════
+  ///
+  /// Mercado Pago redirige a `vendox.com.ar/pago/<orden>`, que es un App Link
+  /// nuestro: Android reabre VendoX en el detalle del pedido.
+  ///
+  /// ⚠️ Esta hoja NO se queda esperando ese regreso ni adivina el resultado.
+  /// Quien dice si la orden está paga es el webhook. Acá se muestra el estado
+  /// pendiente y se deja de bloquear la pantalla: el vivo sigue atrás, y volver
+  /// al vivo no rompe la reserva —el pedido ya existe y la mantiene—.
+  Future<void> _irAMercadoPago() async {
+    final pedido = _pedido;
+    if (pedido == null) return;
+
+    setState(() => _paso = _Paso.procesando);
+
+    try {
+      final checkout = await ref.read(ordersRepositoryProvider).abrirCheckoutDeMercadoPago(pedido.id);
+      if (!mounted) return;
+
+      final abrio = await launchUrl(
+        Uri.parse(checkout.checkoutUrl),
+        // Fuera de la app. Es lo que deja que Android derive a Mercado Pago.
+        mode: LaunchMode.externalApplication,
+      );
+      if (!mounted) return;
+
+      if (!abrio) {
+        setState(() {
+          _error = 'No pudimos abrir Mercado Pago. Probá con tarjeta.';
+          _paso = _Paso.resultado;
+        });
+        return;
+      }
+
+      /**
+       * La hoja se cierra con el pedido en la mano.
+       *
+       * No se queda esperando: la persona se fue a otra app y puede tardar
+       * minutos, o no volver. Dejar el checkout abierto encima del vivo sería
+       * taparle la transmisión sin que esté haciendo nada acá.
+       *
+       * Cuando vuelva —por el App Link o por su cuenta— el detalle del pedido
+       * muestra el estado real.
+       */
+      Navigator.of(context).pop(pedido);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = mensajeDeError(e);
+        _paso = _Paso.resultado;
+      });
+    }
+  }
+
   /// Llega el token del CardForm. Recién acá se cobra.
   Future<void> _cobrar(String cardToken, String paymentMethodId) async {
     final pedido = _pedido;
@@ -372,6 +451,7 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
                 _Paso.resumen => _Resumen(
                     pedido: _pedido!,
                     onPagar: _irAPagar,
+                    onPagarConMercadoPago: _irAMercadoPago,
                     onAplicarCupon: _aplicarCupon,
                     onQuitarCupon: _quitarCupon,
                   ),
@@ -474,11 +554,15 @@ class _Resumen extends StatelessWidget {
   const _Resumen({
     required this.pedido,
     required this.onPagar,
+    required this.onPagarConMercadoPago,
     required this.onAplicarCupon,
     required this.onQuitarCupon,
   });
   final Pedido pedido;
   final VoidCallback onPagar;
+
+  /// El otro camino: se completa del lado de Mercado Pago.
+  final VoidCallback onPagarConMercadoPago;
   final Future<String?> Function(String codigo) onAplicarCupon;
   final Future<void> Function() onQuitarCupon;
 
@@ -564,9 +648,47 @@ class _Resumen extends StatelessWidget {
         DesgloseDePrecio(pedido: pedido),
         const SizedBox(height: Gap.lg),
 
-        // El CTA de marca: es el toque donde sale plata de la cuenta de una
-        // persona. Tiene que ser lo más brillante de la pantalla.
-        BotonVendoX(etiqueta: 'Pagar', icono: Icons.lock_rounded, onTap: onPagar, alto: 52),
+        /**
+         * ═══════════════════════════════════════════════════════════════════
+         * DOS FORMAS DE PAGAR, Y SE VEN LAS DOS
+         * ═══════════════════════════════════════════════════════════════════
+         *
+         * Antes había una sola: el formulario de tarjeta embebido. Quien tiene
+         * saldo en Mercado Pago, o quiere pagar con su cuenta, no tenía por
+         * dónde — y la única pista de que Mercado Pago existía era la letra
+         * chica de abajo.
+         *
+         * ─── Por qué la tarjeta va primero ───
+         *
+         * Es el camino que no se va de la app. Salir a Mercado Pago y volver
+         * funciona bien, pero es un viaje: quien ya tiene la tarjeta a mano
+         * paga sin moverse de acá.
+         *
+         * Los dos son oficiales y los dos cobran en la cuenta del vendedor con
+         * nuestra comisión. Cambia dónde se completa el pago, no quién cobra.
+         */
+        BotonVendoX(
+          etiqueta: 'Pagar con tarjeta',
+          icono: Icons.credit_card_rounded,
+          onTap: onPagar,
+          alto: 52,
+        ),
+        const SizedBox(height: Gap.sm),
+        OutlinedButton.icon(
+          onPressed: onPagarConMercadoPago,
+          icon: const Icon(Icons.account_balance_wallet_outlined, size: 20),
+          label: const Text(
+            'Pagar con Mercado Pago',
+            style: TextStyle(fontWeight: FontWeight.w600),
+          ),
+          style: OutlinedButton.styleFrom(minimumSize: const Size(double.infinity, 52)),
+        ),
+        const SizedBox(height: Gap.sm),
+        const Text(
+          'Con tu cuenta, saldo o cualquier medio de Mercado Pago.',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 12, color: AppColor.textoDebil),
+        ),
         const SizedBox(height: Gap.sm),
         const Row(
           mainAxisAlignment: MainAxisAlignment.center,

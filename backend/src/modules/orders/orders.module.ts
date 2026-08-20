@@ -16,6 +16,7 @@ import { OrdersService } from './orders.service';
 import { PaymentProvider } from './payment-provider';
 import { OrderPaymentsService } from './payments.service';
 import { OrdersReconciler } from './reconciler.service';
+import { VueltaDelPagoController } from './vuelta-del-pago.controller';
 import { OrdersWebhookService } from './webhook.service';
 
 /**
@@ -43,7 +44,12 @@ import { OrdersWebhookService } from './webhook.service';
   // dirección de la flecha importa: órdenes conoce la conexión de pago, nunca
   // al revés.
   imports: [CommerceModule, InventoryModule, SellerOAuthModule, SellersModule],
-  controllers: [OrdersController, OrdersWebhookController, CheckoutPageController],
+  controllers: [
+    OrdersController,
+    OrdersWebhookController,
+    CheckoutPageController,
+    VueltaDelPagoController,
+  ],
   providers: [
     OrdersService,
     OrderPaymentsService,

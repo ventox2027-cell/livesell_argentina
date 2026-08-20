@@ -79,6 +79,57 @@ void main() {
     });
   });
 
+  group('La vuelta de Mercado Pago', () {
+    /**
+     * Cuando alguien termina de pagar en la app de Mercado Pago o en su web,
+     * Mercado Pago redirige a `vendox.com.ar/pago/<orden>`. Como el dominio
+     * está verificado como App Link, Android abre VendoX en vez del navegador.
+     *
+     * Que ese enlace resuelva al pedido es lo que cierra el círculo: la
+     * persona vuelve viendo su compra, no una pantalla en blanco.
+     */
+    test('vuelve al pedido que se pagó', () {
+      expect(
+        porUrl('https://vendox.com.ar/pago/ord_01M02SMF4EJ7KG5RYZV96CR52J'),
+        const DestinoEnApp(TipoDeDestino.pedido, 'ord_01M02SMF4EJ7KG5RYZV96CR52J'),
+      );
+    });
+
+    /**
+     * ⛔ EL `?estado=` DEL ENLACE NO DECIDE NADA.
+     *
+     * Lo escribe Mercado Pago al redirigir, y lo puede escribir cualquiera:
+     * es una URL. Quien decide si la orden está paga es el webhook.
+     *
+     * Acá se comprueba lo mínimo que le toca al resolutor: los cuatro estados
+     * llevan al MISMO lugar. Si alguna vez el estado empezara a cambiar el
+     * destino, este test cae — y esa es toda la intención.
+     */
+    test('⛔ aprobado, pendiente y rechazado llevan al mismo pedido', () {
+      const esperado = DestinoEnApp(TipoDeDestino.pedido, 'ord_9');
+
+      for (final estado in ['aprobado', 'pendiente', 'rechazado', 'inventado']) {
+        expect(
+          porUrl('https://vendox.com.ar/pago/ord_9?estado=$estado'),
+          esperado,
+          reason: estado,
+        );
+      }
+      expect(porUrl('https://vendox.com.ar/pago/ord_9'), esperado);
+    });
+
+    /**
+     * ⛔ Y sigue valiendo la regla del dominio.
+     *
+     * Un enlace de vuelta apuntando a otro host es exactamente cómo se arma
+     * una redirección abierta: alguien manda `evil.com/pago/ord_9` y la app
+     * abriría el pedido de otra persona si el host no se mirara.
+     */
+    test('⛔ una vuelta desde otro dominio no abre nada', () {
+      expect(porUrl('https://vendox.com.ar.evil.com/pago/ord_9'), isNull);
+    });
+  });
+
   group('Las páginas web se quedan en la web', () {
     test('privacidad', () {
       /**

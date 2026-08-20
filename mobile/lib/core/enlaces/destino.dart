@@ -101,6 +101,18 @@ const _prefijos = <String, TipoDeDestino>{
   'v': TipoDeDestino.vivo,
   't': TipoDeDestino.tienda,
   'u': TipoDeDestino.vendedor,
+
+  /**
+   * La vuelta de Mercado Pago.
+   *
+   * La URL la arma el backend al crear la preferencia y la abre Mercado Pago
+   * al redirigir. Lleva además un `?estado=` que acá NO se mira: quien decide
+   * si la orden está paga es el webhook, y un enlace de vuelta lo puede
+   * escribir cualquiera.
+   *
+   * Va al detalle del pedido, que es donde se ve el estado de verdad.
+   */
+  'pago': TipoDeDestino.pedido,
 };
 
 /// Largo máximo de un id o slug.

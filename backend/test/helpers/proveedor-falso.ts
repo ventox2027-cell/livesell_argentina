@@ -3,7 +3,9 @@ import {
   ProviderPaymentNotFoundError,
   ProviderRejectedError,
   ProviderUnavailableError,
+  type CheckoutAlojadoInput,
   type CobrarInput,
+  type ProviderCheckout,
   type ProviderPayment,
   type ProviderRefund,
 } from '@/modules/orders/payment-provider';
@@ -86,6 +88,8 @@ export class ProveedorFalso extends PaymentProvider {
     this.llamadasADevolver = 0;
     this.cobrados.clear();
     this.porToken.clear();
+    this.checkoutsCreados.length = 0;
+    this.checkoutFalla = null;
   }
 
   get clavePublica(): string {
@@ -177,6 +181,28 @@ export class ProveedorFalso extends PaymentProvider {
       return [{ ...encontrados[0], ...this.desdeGuion(guion) }];
     }
     return encontrados;
+  }
+
+  /// Los checkouts alojados que se pidieron. El test mira qué se le mandó.
+  readonly checkoutsCreados: { input: CheckoutAlojadoInput; idempotencyKey: string }[] = [];
+
+  /// Si crear el checkout tiene que fallar, y con qué.
+  checkoutFalla: Error | null = null;
+
+  async crearCheckoutAlojado(
+    input: CheckoutAlojadoInput,
+    idempotencyKey: string,
+  ): Promise<ProviderCheckout> {
+    this.checkoutsCreados.push({ input, idempotencyKey });
+    await Promise.resolve();
+
+    if (this.checkoutFalla) throw this.checkoutFalla;
+
+    return {
+      id: `pref_${this.checkoutsCreados.length}`,
+      // Una URL con la forma de la real. ⚠️ Ningún test la abre ni cobra nada.
+      url: `https://www.mercadopago.com.ar/checkout/v1/redirect?pref_id=pref_${this.checkoutsCreados.length}`,
+    };
   }
 
   async devolver(
