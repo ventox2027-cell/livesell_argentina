@@ -5,7 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/design/componentes.dart';
 import '../../../core/design/tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
-import '../../lives/presentation/shop_sheet.dart' show plata;
+import '../../lives/presentation/widgets/catalogo_de_tienda.dart' show plata;
 import '../data/guardados_api.dart';
 
 /// Guardados y vistos recientemente, en una pantalla con dos pestañas.

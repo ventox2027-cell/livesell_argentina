@@ -1042,3 +1042,149 @@ describe('Bloquear a un vendedor lo saca del listado de vivos', () => {
     expect(await vivosQueVe(espectador.token)).toContain(vendedor.liveId);
   });
 });
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * EL BOTÓN «TIENDA» DEL VIVO
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * El recorrido completo, de punta a punta: entrar a un vivo, sacar del contexto
+ * comercial el id de la tienda, y pedir con ese id el catálogo público.
+ *
+ * Cada pieza estaba probada por su lado —el contexto del vivo acá, el catálogo
+ * en `tienda-flow`— y el recorrido entero, que es lo que la persona toca, no lo
+ * probaba nadie. Un id que no encaja con el endpoint del otro lado no rompe
+ * ningún test de esos, y en el teléfono se ve como un botón que no hace nada.
+ */
+describe('La tienda del vendedor, desde el vivo', () => {
+  /** Deja un vivo al aire y devuelve lo que ve un espectador. */
+  async function vivoAlAire() {
+    const v = await nuevoVendedorConProducto();
+    const espectador = await nuevoUsuario();
+
+    const creado = await call('POST', '/api/v1/live', {
+      token: v.token,
+      body: { title: 'Vendiendo en vivo', productIds: [v.productId] },
+    });
+    expect(creado.status, JSON.stringify(creado.body)).toBe(201);
+
+    const alAire = await call('POST', `/api/v1/live/${creado.body.id}/start`, { token: v.token });
+    expect(alAire.status, JSON.stringify(alAire.body)).toBe(201);
+
+    const visto = await call('GET', `/api/v1/live/${creado.body.id}`, {
+      token: espectador.token,
+    });
+    expect(visto.status, JSON.stringify(visto.body)).toBe(200);
+
+    return { vendedor: v, espectador, liveId: creado.body.id as string, live: visto.body };
+  }
+
+  /**
+   * ⛔ EL CONTEXTO DEL VIVO TRAE CON QUÉ ABRIR LA TIENDA.
+   *
+   * Sin `tienda.id`, la app no tiene a qué tienda ir: el botón queda con las
+   * manos vacías y no puede hacer nada.
+   */
+  it('⛔ el vivo trae el id de la tienda del vendedor', async () => {
+    const { live } = await vivoAlAire();
+
+    expect(live.tienda).toBeTruthy();
+    expect(live.tienda.id).toMatch(/^sto_/);
+    expect(live.tienda.nombre).toBeTruthy();
+  });
+
+  /**
+   * ⛔ Y ESE ID SIRVE PARA PEDIR EL CATÁLOGO.
+   *
+   * Es el test que ata las dos mitades. El endpoint del catálogo resuelve por
+   * **id de tienda**; si algún día resolviera por slug —como hace la vidriera
+   * pública— este recorrido devolvería 404 sin que nada más se entere.
+   */
+  it('⛔ con ese id se abre el catálogo, y trae los productos', async () => {
+    const { live, espectador, vendedor } = await vivoAlAire();
+
+    const catalogo = await call('GET', `/api/v1/stores/${live.tienda.id}/catalog?limit=20`, {
+      token: espectador.token,
+    });
+
+    expect(catalogo.status, JSON.stringify(catalogo.body)).toBe(200);
+    expect(catalogo.body.items.map((p: { id: string }) => p.id)).toContain(vendedor.productId);
+  });
+
+  /**
+   * ⛔ LA TIENDA NO DEPENDE DE QUE EL VIVO SIGA AL AIRE.
+   *
+   * Es una vidriera permanente: existe antes del vivo y sigue existiendo
+   * después. Si el catálogo se apagara al terminar la transmisión, quien
+   * entrara por un enlace viejo vería una tienda vacía.
+   */
+  it('⛔ el catálogo sigue estando cuando el vivo termina', async () => {
+    const { live, liveId, vendedor, espectador } = await vivoAlAire();
+
+    const fin = await call('POST', `/api/v1/live/${liveId}/end`, { token: vendedor.token });
+    expect([200, 201], JSON.stringify(fin.body)).toContain(fin.status);
+
+    const catalogo = await call('GET', `/api/v1/stores/${live.tienda.id}/catalog?limit=20`, {
+      token: espectador.token,
+    });
+
+    expect(catalogo.status).toBe(200);
+    expect(catalogo.body.items.map((p: { id: string }) => p.id)).toContain(vendedor.productId);
+  });
+
+  /**
+   * Un vendedor sin nada publicado devuelve una lista vacía, no un error.
+   *
+   * Es lo que deja a la app dibujar un estado vacío amigable en vez de la
+   * pantalla de error técnico.
+   */
+  it('una tienda sin productos publicados devuelve vacío, no error', async () => {
+    const v = await nuevoVendedorConProducto();
+    const espectador = await nuevoUsuario();
+
+    // Se pausa el único producto: la tienda queda sin nada que mostrar.
+    const pausa = await call('PATCH', `/api/v1/products/${v.productId}`, {
+      token: v.token,
+      body: { status: 'PAUSED' },
+    });
+    expect(pausa.status, JSON.stringify(pausa.body)).toBe(200);
+
+    const tienda = await call('GET', '/api/v1/stores/me', { token: v.token });
+    const catalogo = await call('GET', `/api/v1/stores/${tienda.body.id}/catalog?limit=20`, {
+      token: espectador.token,
+    });
+
+    expect(catalogo.status).toBe(200);
+    expect(catalogo.body.items).toEqual([]);
+  });
+
+  /**
+   * ⛔ Y EL PERFIL DEL VENDEDOR DICE SI ESTÁ TRANSMITIENDO.
+   *
+   * Es lo que permite mostrar «EN VIVO» en la tienda y ofrecer volver a la
+   * transmisión. Sin este dato, alguien que llega a la tienda desde otro lado
+   * no se entera de que el vendedor está al aire en ese momento.
+   */
+  it('⛔ el perfil del vendedor avisa que hay un vivo, y cuál', async () => {
+    const { vendedor, espectador, liveId } = await vivoAlAire();
+
+    const perfil = await call('GET', `/api/v1/sellers/${vendedor.sellerId}/profile`, {
+      token: espectador.token,
+    });
+
+    expect(perfil.status, JSON.stringify(perfil.body)).toBe(200);
+    expect(perfil.body.enVivo).toBeTruthy();
+    expect(perfil.body.enVivo.id).toBe(liveId);
+  });
+
+  it('y cuando no transmite, no lo dice', async () => {
+    const { vendedor, espectador, liveId } = await vivoAlAire();
+    await call('POST', `/api/v1/live/${liveId}/end`, { token: vendedor.token });
+
+    const perfil = await call('GET', `/api/v1/sellers/${vendedor.sellerId}/profile`, {
+      token: espectador.token,
+    });
+
+    expect(perfil.body.enVivo ?? null).toBeNull();
+  });
+});

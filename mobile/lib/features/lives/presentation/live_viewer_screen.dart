@@ -22,7 +22,7 @@ import 'widgets/acciones_de_mensaje.dart';
 import 'widgets/video_live.dart';
 import 'seller_profile_screen.dart';
 import '../../social/data/seguimientos.dart';
-import 'shop_sheet.dart';
+import 'tienda_screen.dart';
 import 'variant_sheet.dart';
 
 /// El vivo, a pantalla completa.
@@ -266,19 +266,31 @@ class _LiveViewerScreenState extends ConsumerState<LiveViewerScreen> {
     }
   }
 
+  /// Abre la tienda del vendedor, encima del vivo.
+  ///
+  /// ⚠️ `push`, no una hoja, y el vivo NO se desmonta: Flutter conserva las
+  /// rutas de abajo. Está medido en `tienda_desde_el_vivo_test.dart` con un
+  /// centinela que cuenta sus propios `initState`/`dispose` — si algún día eso
+  /// dejara de ser cierto, LiveKit se desconectaría al abrir la tienda y ese
+  /// test lo dice.
+  ///
+  /// Volver es el botón de atrás: devuelve al vivo tal como estaba, sin
+  /// reconectar y sin perder los mensajes del chat.
   Future<void> _abrirTienda() async {
     final live = _live;
     if (live == null) return;
 
-    final productId = await ShopSheet.mostrar(
-      context,
-      storeId: live.storeId,
-      nombreTienda: live.tiendaNombre,
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => TiendaScreen(
+          storeId: live.storeId,
+          nombreTienda: live.tiendaNombre,
+          // Con esto la tienda muestra «EN VIVO» y ofrece volver. Y es lo que
+          // habilita el precio exclusivo del vivo al comprar desde el catálogo.
+          liveEnCurso: live.video == null ? null : live.id,
+        ),
+      ),
     );
-
-    // Se eligió un producto del catálogo: se sigue con el mismo flujo de
-    // compra, y el vivo sigue atrás.
-    if (productId != null && mounted) await _comprar(productId);
   }
 
   /// Comparte el vivo por la hoja nativa del sistema.

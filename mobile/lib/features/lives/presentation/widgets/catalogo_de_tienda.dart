@@ -4,73 +4,44 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../core/design/tokens.dart';
-import '../../moderation/presentation/reportar_sheet.dart';
-import '../data/live_api.dart';
-import '../domain/live_models.dart';
+import '../../../../core/design/tokens.dart';
+import '../../../moderation/presentation/reportar_sheet.dart';
+import '../../data/live_api.dart';
+import '../../domain/live_models.dart';
 
-/// La tienda completa, como hoja sobre el vivo.
+/// El catálogo de una tienda: buscador, grilla y scroll infinito.
 ///
 /// ═══════════════════════════════════════════════════════════════════════════
-/// POR QUÉ ES UNA HOJA Y NO UNA PANTALLA
+/// UNA SOLA VIDRIERA PARA TODA LA APP
 /// ═══════════════════════════════════════════════════════════════════════════
 ///
-/// `showModalBottomSheet` deja la pantalla del vivo **montada abajo**. El video
-/// sigue corriendo, LiveKit no se desconecta, el chat sigue llegando. Con un
-/// `Navigator.push` a una ruta de catálogo el vivo se desmontaría: al volver
-/// habría que reconectar, esperar el primer cuadro otra vez, y perder los
-/// mensajes de ese rato.
+/// La tienda se abre desde el vivo y desde el perfil del vendedor, y antes cada
+/// camino tenía su propia copia. Dos catálogos con la misma pinta es cómo se
+/// llega a que uno filtre agotados y el otro no, sin que nadie se entere hasta
+/// que un comprador lo cuenta.
 ///
-/// La hoja arranca al 75% de la pantalla, no al 100%: la franja de video que
-/// queda arriba es el recordatorio de que el vivo sigue ahí. Ocupar todo se
-/// siente como haberse ido.
-///
-/// ─── Devuelve un id, no un producto ───
-///
-/// Al elegir, esta hoja se cierra devolviendo el `productId` y quien la abrió
-/// sigue con el flujo de compra. Así el catálogo no conoce nada de reservas,
-/// variantes ni pagos: sólo muestra y elige.
-class ShopSheet extends ConsumerStatefulWidget {
-  const ShopSheet({super.key, required this.storeId, required this.nombreTienda});
+/// Este widget sólo muestra y avisa qué se eligió. No sabe de reservas, ni de
+/// variantes, ni de pagos: quien lo usa decide qué hacer con el `productId`.
+class CatalogoDeTienda extends ConsumerStatefulWidget {
+  const CatalogoDeTienda({
+    super.key,
+    required this.storeId,
+    required this.onElegir,
+    this.padding = const EdgeInsets.fromLTRB(Gap.lg, 0, Gap.lg, Gap.xxl),
+  });
 
   final String storeId;
-  final String nombreTienda;
 
-  /// Devuelve el `productId` elegido, o `null` si se cerró sin elegir.
-  static Future<String?> mostrar(
-    BuildContext context, {
-    required String storeId,
-    required String nombreTienda,
-  }) {
-    return showModalBottomSheet<String>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      // Un velo tenue: el vivo se sigue viendo detrás. Con el velo por omisión
-      // —negro al 60%— la franja de arriba queda casi opaca y la hoja se siente
-      // como haber salido del vivo.
-      barrierColor: Colors.black38,
-      /**
-       * Alto fijo, no `DraggableScrollableSheet`.
-       *
-       * El arrastrable exige que la lista de adentro use SU `ScrollController`,
-       * y esta hoja necesita el propio para el scroll infinito. Compartir uno
-       * solo mezcla dos responsabilidades —expandir la hoja y pedir la página
-       * siguiente— sobre el mismo gesto, y el catálogo termina pidiendo páginas
-       * cuando alguien sólo quería agrandar el panel.
-       */
-      builder: (ctx) => SizedBox(
-        height: MediaQuery.sizeOf(ctx).height * 0.78,
-        child: ShopSheet(storeId: storeId, nombreTienda: nombreTienda),
-      ),
-    );
-  }
+  /// Se tocó un producto que se puede comprar.
+  final void Function(String productId) onElegir;
+
+  final EdgeInsets padding;
 
   @override
-  ConsumerState<ShopSheet> createState() => _ShopSheetState();
+  ConsumerState<CatalogoDeTienda> createState() => _CatalogoDeTiendaState();
 }
 
-class _ShopSheetState extends ConsumerState<ShopSheet> {
+class _CatalogoDeTiendaState extends ConsumerState<CatalogoDeTienda> {
   final _scroll = ScrollController();
   final _buscador = TextEditingController();
 
@@ -81,7 +52,7 @@ class _ShopSheetState extends ConsumerState<ShopSheet> {
   bool _hayMas = true;
   Object? _error;
 
-  /// La búsqueda vigente. Ver `_buscar()`.
+  /// La búsqueda vigente. Ver [_buscar].
   String _consulta = '';
   Timer? _rebote;
 
@@ -192,68 +163,31 @@ class _ShopSheetState extends ConsumerState<ShopSheet> {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        color: AppColor.superficie,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(Redondeo.xl)),
-      ),
-      child: Column(
-        children: [
-          const SizedBox(height: Gap.sm),
-          Container(
-            width: 36,
-            height: 4,
-            decoration: BoxDecoration(
-              color: AppColor.borde,
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(Gap.lg, Gap.md, Gap.sm, Gap.sm),
-            child: Row(
-              children: [
-                const Icon(Icons.storefront_rounded, size: 19, color: AppColor.acento),
-                const SizedBox(width: Gap.sm),
-                Expanded(
-                  child: Text(
-                    widget.nombreTienda.isEmpty ? 'Tienda' : widget.nombreTienda,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 16.5, fontWeight: FontWeight.w800),
-                  ),
-                ),
-                IconButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  icon: const Icon(Icons.close_rounded, size: 20),
-                  color: AppColor.textoSuave,
-                ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: Gap.lg),
-            child: TextField(
-              controller: _buscador,
-              onChanged: _buscar,
-              textInputAction: TextInputAction.search,
-              style: const TextStyle(fontSize: 14.5),
-              decoration: InputDecoration(
-                hintText: 'Buscar en la tienda…',
-                prefixIcon: const Icon(Icons.search_rounded, size: 20),
-                isDense: true,
-                filled: true,
-                fillColor: AppColor.superficieAlta,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(Redondeo.md),
-                  borderSide: BorderSide.none,
-                ),
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: Gap.lg),
+          child: TextField(
+            controller: _buscador,
+            onChanged: _buscar,
+            textInputAction: TextInputAction.search,
+            style: const TextStyle(fontSize: 14.5),
+            decoration: InputDecoration(
+              hintText: 'Buscar en la tienda…',
+              prefixIcon: const Icon(Icons.search_rounded, size: 20),
+              isDense: true,
+              filled: true,
+              fillColor: AppColor.superficieAlta,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(Redondeo.md),
+                borderSide: BorderSide.none,
               ),
             ),
           ),
-          const SizedBox(height: Gap.md),
-          Expanded(child: _cuerpo()),
-        ],
-      ),
+        ),
+        const SizedBox(height: Gap.md),
+        Expanded(child: _cuerpo()),
+      ],
     );
   }
 
@@ -281,7 +215,7 @@ class _ShopSheetState extends ConsumerState<ShopSheet> {
 
     return GridView.builder(
       controller: _scroll,
-      padding: const EdgeInsets.fromLTRB(Gap.lg, 0, Gap.lg, Gap.xxl),
+      padding: widget.padding,
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 2,
         crossAxisSpacing: Gap.md,
@@ -307,7 +241,7 @@ class _ShopSheetState extends ConsumerState<ShopSheet> {
           item: item,
           // Un producto agotado se muestra igual —el catálogo es la tienda, no
           // sólo lo que hay hoy— pero no se puede elegir.
-          onTap: item.agotado ? null : () => Navigator.of(context).pop(item.id),
+          onTap: item.agotado ? null : () => widget.onElegir(item.id),
           /**
            * Mantener apretado un producto lo reporta.
            *

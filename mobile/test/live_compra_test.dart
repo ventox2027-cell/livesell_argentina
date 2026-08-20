@@ -8,7 +8,6 @@ import 'package:vendox/core/config/runtime_config.dart';
 import 'package:vendox/core/network/api_client.dart';
 import 'package:vendox/features/lives/data/live_api.dart';
 import 'package:vendox/features/lives/domain/live_models.dart';
-import 'package:vendox/features/lives/presentation/shop_sheet.dart';
 import 'package:vendox/features/lives/presentation/variant_sheet.dart';
 
 /// El recorrido de compra desde un vivo.
@@ -60,116 +59,13 @@ void main() {
     );
   }
 
-  group('La tienda se abre encima del vivo', () {
-    testWidgets('abrir y cerrar no desmonta lo que hay debajo', (tester) async {
-      _Centinela.reiniciar();
-
-      await tester.pumpWidget(
-        montar(
-          const _Anfitrion(),
-          api: _ApiFalsa(
-            catalogo: const PaginaDeCatalogo(
-              items: [
-                ItemDeCatalogo(
-                  id: 'prd_x',
-                  nombre: 'Vela lavanda',
-                  precioCentavos: 990000,
-                  disponible: 4,
-                  variantes: 2,
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-
-      expect(_Centinela.montajes, 1);
-      expect(_Centinela.desmontajes, 0);
-
-      await tester.tap(find.text('Abrir tienda'));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Vela lavanda'), findsOneWidget);
-
-      // ⚠️ Lo que importa: el vivo sigue vivo con la tienda abierta.
-      expect(_Centinela.montajes, 1, reason: 'El vivo se volvió a montar');
-      expect(_Centinela.desmontajes, 0, reason: 'El vivo se desmontó al abrir la tienda');
-
-      await tester.tap(find.byIcon(Icons.close_rounded));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Vela lavanda'), findsNothing);
-      expect(_Centinela.montajes, 1, reason: 'El vivo se reconstruyó al cerrar la tienda');
-      expect(_Centinela.desmontajes, 0);
-    });
-
-    testWidgets('elegir un producto devuelve su id', (tester) async {
-      _Centinela.reiniciar();
-
-      await tester.pumpWidget(
-        montar(
-          const _Anfitrion(),
-          api: _ApiFalsa(
-            catalogo: const PaginaDeCatalogo(
-              items: [
-                ItemDeCatalogo(
-                  id: 'prd_elegido',
-                  nombre: 'Vela lavanda',
-                  precioCentavos: 990000,
-                  disponible: 4,
-                  variantes: 2,
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-
-      await tester.tap(find.text('Abrir tienda'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Vela lavanda'));
-      await tester.pumpAndSettle();
-
-      expect(find.text('elegido: prd_elegido'), findsOneWidget);
-      expect(_Centinela.desmontajes, 0);
-    });
-
-    testWidgets('un producto agotado no se puede elegir', (tester) async {
-      _Centinela.reiniciar();
-
-      await tester.pumpWidget(
-        montar(
-          const _Anfitrion(),
-          api: _ApiFalsa(
-            catalogo: const PaginaDeCatalogo(
-              items: [
-                ItemDeCatalogo(
-                  id: 'prd_agotado',
-                  nombre: 'Vela agotada',
-                  precioCentavos: 990000,
-                  disponible: 0,
-                  variantes: 1,
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-
-      await tester.tap(find.text('Abrir tienda'));
-      await tester.pumpAndSettle();
-
-      // Se sigue viendo —el catálogo es la tienda, no sólo lo que hay hoy—
-      // pero tocarlo no hace nada.
-      expect(find.text('AGOTADO'), findsOneWidget);
-
-      await tester.tap(find.text('Vela agotada'));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Vela agotada'), findsOneWidget, reason: 'La hoja se cerró');
-      expect(find.textContaining('elegido:'), findsNothing);
-    });
-  });
+  /**
+   * La tienda vive ahora en `tienda_desde_el_vivo_test.dart`.
+   *
+   * Dejo de ser una hoja para ser una pantalla completa —ver `TiendaScreen`— y
+   * el centinela de aquel archivo cubre lo mismo que cubria este grupo, mas el
+   * aviso de EN VIVO y la vuelta al vivo.
+   */
 
   group('El selector de variantes', () {
     // La forma que arma `detalleParaComprar` en `stores.service.ts`, que es la
@@ -328,81 +224,6 @@ void main() {
 }
 
 // ─── Andamiaje ───────────────────────────────────────────────────────────────
-
-/// Hace de vivo: cuenta sus montajes y desmontajes.
-class _Centinela extends StatefulWidget {
-  const _Centinela();
-
-  static int montajes = 0;
-  static int desmontajes = 0;
-
-  static void reiniciar() {
-    montajes = 0;
-    desmontajes = 0;
-  }
-
-  @override
-  State<_Centinela> createState() => _CentinelaState();
-}
-
-class _CentinelaState extends State<_Centinela> {
-  @override
-  void initState() {
-    super.initState();
-    _Centinela.montajes++;
-  }
-
-  @override
-  void dispose() {
-    _Centinela.desmontajes++;
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => const SizedBox.expand();
-}
-
-/// Una pantalla mínima con el centinela y el botón de la tienda.
-class _Anfitrion extends StatefulWidget {
-  const _Anfitrion();
-
-  @override
-  State<_Anfitrion> createState() => _AnfitrionState();
-}
-
-class _AnfitrionState extends State<_Anfitrion> {
-  String? _elegido;
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: Stack(
-        children: [
-          const _Centinela(),
-          Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (_elegido != null) Text('elegido: $_elegido'),
-                ElevatedButton(
-                  onPressed: () async {
-                    final id = await ShopSheet.mostrar(
-                      context,
-                      storeId: 'sto_x',
-                      nombreTienda: 'Aroma Deco',
-                    );
-                    if (mounted) setState(() => _elegido = id);
-                  },
-                  child: const Text('Abrir tienda'),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 class _AnfitrionDeVariantes extends StatelessWidget {
   const _AnfitrionDeVariantes();

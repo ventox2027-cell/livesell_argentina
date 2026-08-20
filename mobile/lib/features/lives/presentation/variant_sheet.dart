@@ -14,7 +14,7 @@ import '../../inventory/presentation/reserve_sheet.dart';
 import '../../orders/domain/order_models.dart';
 import '../data/live_api.dart';
 import '../domain/live_models.dart';
-import 'shop_sheet.dart' show plata;
+import 'widgets/catalogo_de_tienda.dart' show plata;
 import 'widgets/envio_y_politicas.dart';
 
 /// Elegir talle, color y cantidad. El paso previo a apartar.

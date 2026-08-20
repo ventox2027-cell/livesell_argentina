@@ -12,8 +12,7 @@ import '../../moderation/presentation/reportar_sheet.dart';
 import '../data/live_api.dart';
 import '../domain/live_models.dart';
 import '../../social/data/seguimientos.dart';
-import 'shop_sheet.dart';
-import 'variant_sheet.dart';
+import 'tienda_screen.dart';
 
 /// El perfil del vendedor.
 ///
@@ -141,23 +140,24 @@ class _SellerProfileScreenState extends ConsumerState<SellerProfileScreen> {
     }
   }
 
+  /// La tienda de este vendedor, en su propia pantalla.
+  ///
+  /// La misma que se abre desde el vivo: una sola vidriera en toda la app.
   Future<void> _abrirTienda() async {
     final perfil = _perfil;
     final storeId = perfil?.storeId;
     if (storeId == null) return;
 
-    final productId = await ShopSheet.mostrar(
-      context,
-      storeId: storeId,
-      nombreTienda: perfil?.tiendaNombre ?? perfil?.nombre ?? '',
-    );
-
-    if (productId == null || !mounted) return;
-
-    await VariantSheet.mostrar(
-      context,
-      productId: productId,
-      storeId: storeId,
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => TiendaScreen(
+          storeId: storeId,
+          nombreTienda: perfil?.tiendaNombre ?? perfil?.nombre ?? '',
+          // Si está transmitiendo, la tienda lo dice. Volver desde acá lleva al
+          // perfil, que es de donde se vino.
+          liveEnCurso: perfil?.liveEnCursoId,
+        ),
+      ),
     );
   }
 
