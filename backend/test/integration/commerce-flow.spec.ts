@@ -4526,6 +4526,66 @@ describe('Límite de productos publicados (Free)', () => {
     expect((await intentarPublicar(v.token, 'Ahora entra')).status).toBe(201);
   });
 
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * DOS PUBLICACIONES A LA VEZ: EL CERROJO, PROBADO
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * «Contar y después escribir» es una carrera. Dos peticiones simultáneas del
+   * mismo vendedor leen 2, las dos concluyen que pueden, y las dos publican:
+   * queda en 4.
+   *
+   * `pg_advisory_xact_lock` las serializa. Este test es lo único que lo
+   * ejercita: sin él, sacar el cerrojo no rompe ningún test, porque las
+   * peticiones de a una nunca chocan.
+   *
+   * ⚠️ La app hace su propia cuenta para no mostrar un cuarto publicado que va
+   * a deshacerse —ver `motivoParaNoPublicar` en Flutter—, pero eso es una
+   * comodidad, no la regla. Un cliente viejo, uno modificado o dos toques que
+   * viajan juntos llegan igual hasta acá.
+   */
+  it('⛔ dos publicaciones simultáneas no dejan cuatro publicados', async () => {
+    const v = await nuevoVendedor();
+    for (let i = 1; i <= 2; i += 1) await intentarPublicar(v.token, `Carrera ${i}`);
+
+    // Las dos salen sin esperar a que la otra termine.
+    const [a, b] = await Promise.all([
+      intentarPublicar(v.token, 'Simultáneo A'),
+      intentarPublicar(v.token, 'Simultáneo B'),
+    ]);
+
+    const estados = [a.status, b.status].sort();
+    expect(estados, JSON.stringify([a.body, b.body])).toEqual([201, 409]);
+
+    const lista = await call('GET', '/api/v1/products/mine', { token: v.token });
+    expect(lista.body.catalogo.publicados).toBe(3);
+    expect(lista.body.catalogo.puedePublicar).toBe(false);
+  });
+
+  /**
+   * Y con muchas a la vez, entran exactamente las que caben.
+   *
+   * Seis peticiones desde cero: tres publican y tres se rechazan. Ningún
+   * número intermedio es aceptable — cuatro sería el tope roto, y dos sería el
+   * cerrojo rechazando de más.
+   */
+  it('⛔ seis publicaciones a la vez dejan exactamente tres', async () => {
+    const v = await nuevoVendedor();
+
+    const respuestas = await Promise.all(
+      Array.from({ length: 6 }, (_, i) => intentarPublicar(v.token, `Tropel ${i + 1}`)),
+    );
+
+    const creados = respuestas.filter((r) => r.status === 201).length;
+    const rechazados = respuestas.filter((r) => r.status === 409).length;
+
+    expect(creados, JSON.stringify(respuestas.map((r) => r.status))).toBe(3);
+    expect(rechazados).toBe(3);
+
+    const lista = await call('GET', '/api/v1/products/mine', { token: v.token });
+    expect(lista.body.catalogo.publicados).toBe(3);
+  });
+
   it('⛔ el tope es del vendedor, no de cada uno de sus productos', async () => {
     // Dos vendedores distintos no comparten cupo: el de al lado publicando tres
     // no puede dejar sin publicar a nadie.
@@ -5347,22 +5407,52 @@ describe('El feed no habla de más con la base', () => {
     });
   }
 
-  /** Cuenta las consultas que dispara `accion`. */
+  /**
+   * Cuenta las consultas que dispara `accion`.
+   *
+   * ═══════════════════════════════════════════════════════════════════════════
+   * SE MIDE TRES VECES Y SE TOMA EL MÍNIMO
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * El contador es una ventana de tiempo sobre un log global, así que cualquier
+   * cosa que hable con la base durante esa ventana se cuenta. Y hay de sobra:
+   * los eventos `query` de Prisma llegan DESPUÉS de que la petición contestó, y
+   * estos tests preparan el terreno creando cinco productos, que son decenas de
+   * consultas cuyo eco sigue llegando.
+   *
+   * El síntoma era «esperaba menos de 3, recibí 18», y sólo con la suite entera
+   * —con el archivo solo la máquina va sobrada y el eco alcanza a llegar antes—.
+   * Un test que falla según qué más se esté ejecutando es peor que uno que falla
+   * siempre: se lo termina culpando al último cambio.
+   *
+   * El ruido sólo puede SUMAR, nunca restar. Así que el mínimo de varias
+   * mediciones es la cota buena, y no hace falta adivinar cuánto esperar.
+   *
+   * ⚠️ Por eso `accion` tiene que ser de sólo lectura: se ejecuta tres veces.
+   */
   async function consultasDe(accion: () => Promise<unknown>): Promise<number> {
     empezarAEscuchar();
-    const antes = consultasDeLaSesion.length;
 
-    await accion();
+    let minimo = Number.MAX_SAFE_INTEGER;
+    for (let intento = 0; intento < 3; intento += 1) {
+      // Deja que se apague el eco de la medición anterior antes de contar.
+      await new Promise((r) => setTimeout(r, 300));
+      const antes = consultasDeLaSesion.length;
 
-    /**
-     * ⚠️ Los eventos de Prisma llegan DESPUÉS de que la promesa se resuelve.
-     *
-     * Sin esta espera el contador da cero y los tests pasan por la razón
-     * equivocada: «0 consultas con 3 productos y 0 con 12» cumple la igualdad
-     * y no prueba nada. Pasó exactamente eso al escribirlos.
-     */
-    await new Promise((r) => setTimeout(r, 200));
-    return consultasDeLaSesion.length - antes;
+      await accion();
+
+      /**
+       * ⚠️ Los eventos de Prisma llegan DESPUÉS de que la promesa se resuelve.
+       *
+       * Sin esta espera el contador da cero y los tests pasan por la razón
+       * equivocada: «0 consultas con 3 productos y 0 con 12» cumple la igualdad
+       * y no prueba nada. Pasó exactamente eso al escribirlos.
+       */
+      await new Promise((r) => setTimeout(r, 200));
+      minimo = Math.min(minimo, consultasDeLaSesion.length - antes);
+    }
+
+    return minimo;
   }
 
   async function tiendaConProductos(cantidad: number) {

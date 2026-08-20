@@ -21,6 +21,7 @@ import 'pro_screen.dart';
 import 'widgets/conectar_mp_sheet.dart';
 import 'widgets/limite_del_plan_sheet.dart';
 import '../domain/desglose_de_precio.dart';
+import '../domain/estado_optimista.dart';
 import '../domain/fotos_en_vuelo.dart';
 import '../domain/seller_models.dart';
 
@@ -333,6 +334,31 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
 
     /**
      * ═══════════════════════════════════════════════════════════════════════
+     * Y EL CUPO DEL PLAN, TAMBIÉN ANTES DE VIAJAR
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * Sin esto, publicar el cuarto producto de un plan Free se veía publicado
+     * al instante, con su «Ya lo pueden comprar», y dos segundos después el
+     * rechazo del backend lo deshacía todo.
+     *
+     * `cambiar` lo comprueba igual —la regla no puede depender de que cada
+     * pantalla se acuerde— pero acá hace falta preguntarlo antes para no
+     * anunciar un éxito que no va a pasar: el aviso sale en el mismo frame que
+     * el interruptor, y para entonces ya es tarde para desdecirse.
+     */
+    final bloqueo = ref
+        .read(cambiosDeEstadoProvider.notifier)
+        .porQueNoSePuedePublicar(actual: p.status, nuevo: nuevo);
+    if (bloqueo != null) {
+      AppSnack.error(
+        context,
+        mensajeDeBloqueo(bloqueo, ref.read(cupoVisibleProvider)),
+      );
+      return;
+    }
+
+    /**
+     * ═══════════════════════════════════════════════════════════════════════
      * EL INTERRUPTOR SE MUEVE AHORA. EL `PATCH` VIAJA DESPUÉS.
      * ═══════════════════════════════════════════════════════════════════════
      *
@@ -359,6 +385,7 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
     try {
       final r = await ref.read(cambiosDeEstadoProvider.notifier).cambiar(
             productId: p.id,
+            actual: p.status,
             nuevo: nuevo,
             categoryId: _categoriaId,
           );
