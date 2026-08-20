@@ -154,6 +154,20 @@ async function bootstrap(): Promise<void> {
       env: env.NODE_ENV,
       version: env.GIT_SHA,
       sitio: raizWeb ?? 'no encontrado',
+      /**
+       * ⚠️ Si los pagos con tarjeta pueden funcionar. NUNCA la clave.
+       *
+       * Se agregó después de un bug de QA que costó una sesión entera de
+       * diagnóstico: el modal de tarjeta mostraba «Error interno del
+       * formulario» y no había forma de pagar. La causa era que
+       * `MP_PUBLIC_KEY` estaba vacía en el entorno, así que la página se
+       * renderizaba con `new MercadoPago('')` y el SDK no podía montar nada.
+       *
+       * Nada fallaba al arrancar: la API subía perfecta y el problema sólo
+       * aparecía al intentar comprar. Un despliegue sin esta variable ahora lo
+       * dice en la primera línea del log.
+       */
+      pagosConTarjeta: env.MP_PUBLIC_KEY ? 'configurados' : 'SIN CLAVE PÚBLICA',
       spikeEnabled: env.SPIKE_ENABLED,
     },
     'API escuchando',

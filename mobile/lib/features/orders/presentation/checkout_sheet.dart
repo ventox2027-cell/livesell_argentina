@@ -230,6 +230,53 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
     await _crearPedido();
   }
 
+  /// Antes de abrir el formulario, se comprueba que pueda funcionar.
+  ///
+  /// ═══════════════════════════════════════════════════════════════════════════
+  /// EL BUG DE QA: UN FORMULARIO QUE NUNCA PUDO EXISTIR
+  /// ═══════════════════════════════════════════════════════════════════════════
+  ///
+  /// Reportado: aparecía el modal «Datos de la tarjeta» con «Error interno del
+  /// formulario» y ninguna manera de pagar.
+  ///
+  /// Pedida la página real a producción, el HTML traía `new MercadoPago('')`:
+  /// la clave pública venía vacía, el SDK no podía montar sus iframes, y el
+  /// `catch` de la página mostraba ese mensaje. No fallaba el formulario;
+  /// nunca hubo formulario.
+  ///
+  /// `clavePublica()` existía en el repositorio desde el principio y **no lo
+  /// llamaba nadie**: la hoja iba derecho al WebView. Preguntar primero cuesta
+  /// una petición y convierte un callejón sin salida en un mensaje claro.
+  ///
+  /// ⚠️ Sin clave NO se abre el formulario. Mostrarlo igual —confiando en que
+  /// la página del servidor ahora avisa— dejaría a la persona escribiendo su
+  /// tarjeta en algo que va a fallar al final.
+  Future<void> _irAPagar() async {
+    setState(() => _paso = _Paso.procesando);
+
+    try {
+      final clave = await ref.read(ordersRepositoryProvider).clavePublica();
+      if (!mounted) return;
+
+      if (clave.trim().isEmpty) {
+        setState(() {
+          _error = 'No podemos cobrar con tarjeta en este momento. '
+              'Tu pedido no se cobró. Probá de nuevo en un rato.';
+          _paso = _Paso.resultado;
+        });
+        return;
+      }
+
+      setState(() => _paso = _Paso.tarjeta);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = mensajeDeError(e);
+        _paso = _Paso.resultado;
+      });
+    }
+  }
+
   /// Llega el token del CardForm. Recién acá se cobra.
   Future<void> _cobrar(String cardToken, String paymentMethodId) async {
     final pedido = _pedido;
@@ -324,7 +371,7 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
                 _Paso.direccion => _PedirDireccion(onCargar: _pedirDireccion),
                 _Paso.resumen => _Resumen(
                     pedido: _pedido!,
-                    onPagar: () => setState(() => _paso = _Paso.tarjeta),
+                    onPagar: _irAPagar,
                     onAplicarCupon: _aplicarCupon,
                     onQuitarCupon: _quitarCupon,
                   ),
@@ -333,10 +380,13 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
                 _Paso.resultado => _Resultado(
                     pedido: _pedido,
                     error: _error,
-                    onReintentar: () => setState(() {
-                      _error = null;
-                      _paso = _Paso.tarjeta;
-                    }),
+                    // ⚠️ Reintentar vuelve a comprobar que se pueda cobrar, no
+                    // directo al formulario: si el error fue justamente que no
+                    // hay con qué armarlo, volver ahí es volver al callejón.
+                    onReintentar: () {
+                      setState(() => _error = null);
+                      unawaited(_irAPagar());
+                    },
                     onListo: () => Navigator.of(context).pop(_pedido),
                   ),
               },

@@ -42,7 +42,76 @@ export interface CheckoutPageParams {
   description: string;
 }
 
+/// Si el formulario de tarjeta puede siquiera arrancar.
+///
+/// ═══════════════════════════════════════════════════════════════════════════
+/// EL BUG QUE ESTO CIERRA
+/// ═══════════════════════════════════════════════════════════════════════════
+///
+/// Reportado en QA: al iniciar una compra aparecía el modal «Datos de la
+/// tarjeta» con **«Error interno del formulario»** y sin forma de pagar.
+///
+/// Comprobado pidiendo la página real a producción, el HTML traía esto:
+///
+///     new MercadoPago('', { locale: 'es-AR' })
+///
+/// La clave pública venía **vacía**. El SDK de Mercado Pago no puede montar
+/// sus iframes sin ella, tira, y el `catch` de la página muestra el mensaje
+/// genérico. O sea: no era un fallo del formulario, era que nunca hubo
+/// formulario.
+///
+/// Es un problema de configuración —falta `MP_PUBLIC_KEY` en el entorno— y no
+/// se puede arreglar desde acá. Lo que SÍ se arregla es que la página deje de
+/// pretender que funciona: sin clave no se dibuja un formulario roto, se dice
+/// qué pasa.
+export function hayClavePublica(publicKey: string): boolean {
+  return publicKey.trim().length > 0;
+}
+
+/// La página cuando los pagos con tarjeta no están configurados.
+///
+/// ⚠️ No dice «falta MP_PUBLIC_KEY». Quien lee esto es alguien que quería
+/// comprar algo, y el nombre de una variable de entorno no le sirve para nada
+/// —además de contarle a cualquiera cómo está armado el sistema—. El detalle
+/// va al log del servidor, que es donde alguien puede hacer algo con él.
+function paginaSinPagos(): string {
+  return `<!doctype html>
+<html lang="es-AR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pagar</title>
+<style>
+  body {
+    margin: 0; padding: 28px 20px;
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: #f5f5f7; color: #16181d;
+    display: grid; place-items: center; min-height: 60vh; text-align: center;
+  }
+  .caja { background: #fff; border-radius: 14px; padding: 24px 20px; max-width: 22rem; }
+  h1 { font-size: 17px; margin: 0 0 8px; }
+  p { font-size: 14px; line-height: 1.5; color: #555; margin: 0; }
+</style>
+</head>
+<body>
+  <div class="caja">
+    <h1>No podemos cobrar con tarjeta ahora</h1>
+    <p>Es un problema nuestro, no de tu tarjeta. Tu pedido no se cobró.
+    Probá de nuevo en un rato.</p>
+  </div>
+</body>
+</html>`;
+}
+
 export function renderCheckoutPage(p: CheckoutPageParams): string {
+  /**
+   * Sin clave pública no hay formulario posible. Ver `hayClavePublica`.
+   *
+   * Devolver la página normal dejaría a la persona frente a «Error interno del
+   * formulario» sin ninguna salida, que es exactamente lo que se reportó.
+   */
+  if (!hayClavePublica(p.publicKey)) return paginaSinPagos();
+
   // Todo lo que viene de afuera se escapa antes de entrar al HTML.
   const orderId = escapeHtml(p.orderId);
   const email = escapeHtml(p.buyerEmail);
