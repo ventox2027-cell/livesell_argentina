@@ -203,6 +203,124 @@ void main() {
       expect(c.read(subidasDeFotosProvider).subidasDe('prd_1').map((i) => i.id), ['img_9']);
     });
   });
+
+  /// Sacar una foto.
+  ///
+  /// ═══════════════════════════════════════════════════════════════════════════
+  /// EL BUG CONFIRMADO EN EL TELÉFONO
+  /// ═══════════════════════════════════════════════════════════════════════════
+  ///
+  /// Tocar la X tardaba ~5 segundos y la foto **no desaparecía**. El segundo
+  /// toque respondía «imagen no encontrada». Saliendo del producto y volviendo
+  /// a entrar, ya no estaba.
+  ///
+  /// O sea: el backend y R2 borraban perfecto. Lo que quedaba viejo era la
+  /// pantalla — y el segundo toque mandaba un `DELETE` de algo ya borrado.
+  group('Borrar una foto', () {
+    /// ⛔ EL TEST DEL BUG: la foto se va aunque el servidor no conteste.
+    test('⛔ desaparece antes de que el servidor confirme', () async {
+      final c = contenedor();
+      repo.cuelgaAlBorrar = true;
+
+      unawaited(c.read(subidasDeFotosProvider.notifier).borrarFoto(
+            productId: 'prd_1',
+            imageId: 'img_1',
+          ));
+      await Future<void>.delayed(Duration.zero);
+
+      final tira = armarTira(
+        delServidor: [_imagen('img_1'), _imagen('img_2')],
+        recienSubidas: const [],
+        enVuelo: const [],
+        borradas: c.read(subidasDeFotosProvider).borradasDe('prd_1'),
+      );
+
+      expect(tira.subidas.map((i) => i.id), ['img_2']);
+    });
+
+    /// ⛔ EL SEGUNDO TOQUE NO MANDA NADA.
+    ///
+    /// Era la otra mitad del bug: como la foto seguía a la vista, volver a
+    /// tocar la X mandaba un `DELETE` de algo que el servidor ya había borrado,
+    /// y de ahí el «imagen no encontrada».
+    test('⛔ tocar dos veces manda un solo DELETE', () async {
+      final c = contenedor();
+      repo.cuelgaAlBorrar = true;
+      final n = c.read(subidasDeFotosProvider.notifier);
+
+      unawaited(n.borrarFoto(productId: 'prd_1', imageId: 'img_1'));
+      unawaited(n.borrarFoto(productId: 'prd_1', imageId: 'img_1'));
+      await Future<void>.delayed(Duration.zero);
+
+      expect(repo.vecesQueBorro, 1);
+    });
+
+    /// ⛔ Y si el servidor la rechaza, la foto VUELVE.
+    test('⛔ si el DELETE falla, la foto vuelve a la tira', () async {
+      final c = contenedor();
+      repo.fallaAlBorrar = true;
+
+      await expectLater(
+        c.read(subidasDeFotosProvider.notifier).borrarFoto(
+              productId: 'prd_1',
+              imageId: 'img_1',
+            ),
+        throwsA(anything),
+      );
+
+      expect(c.read(subidasDeFotosProvider).borradasDe('prd_1'), isEmpty);
+    });
+
+    /// ⛔ Y DESPUÉS de fallar se puede volver a intentar.
+    ///
+    /// Si la marca quedara puesta, el segundo intento se frenaría solo y la
+    /// foto no se podría sacar nunca más sin reiniciar la app.
+    test('⛔ después de fallar, el siguiente intento sí sale', () async {
+      final c = contenedor();
+      final n = c.read(subidasDeFotosProvider.notifier);
+      repo.fallaAlBorrar = true;
+
+      await n.borrarFoto(productId: 'prd_1', imageId: 'img_1').catchError((_) {});
+      repo.fallaAlBorrar = false;
+      await n.borrarFoto(productId: 'prd_1', imageId: 'img_1');
+
+      expect(repo.vecesQueBorro, 2);
+      expect(c.read(subidasDeFotosProvider).borradasDe('prd_1'), {'img_1'});
+    });
+
+    /// ⛔ La marca sobrevive a que el servidor confirme.
+    ///
+    /// Es lo que impide que la foto reaparezca: el editor guarda el producto en
+    /// memoria y esa copia sigue teniéndola hasta que vuelva a pedirlo.
+    test('⛔ al confirmar, la foto NO vuelve a la tira', () async {
+      final c = contenedor();
+
+      await c.read(subidasDeFotosProvider.notifier).borrarFoto(
+            productId: 'prd_1',
+            imageId: 'img_1',
+          );
+
+      final tira = armarTira(
+        delServidor: [_imagen('img_1')],
+        recienSubidas: const [],
+        enVuelo: const [],
+        borradas: c.read(subidasDeFotosProvider).borradasDe('prd_1'),
+      );
+
+      expect(tira.subidas, isEmpty);
+    });
+
+    /// Y al recargar el producto se olvida: ahí ya no viene.
+    test('recargar el producto limpia las borradas', () async {
+      final c = contenedor();
+      final n = c.read(subidasDeFotosProvider.notifier);
+
+      await n.borrarFoto(productId: 'prd_1', imageId: 'img_1');
+      n.olvidarSubidas('prd_1');
+
+      expect(c.read(subidasDeFotosProvider).borradasDe('prd_1'), isEmpty);
+    });
+  });
 }
 
 ImagenProducto _imagen(String id) =>
@@ -228,9 +346,20 @@ class _RepoDeFotos extends Fake implements SellerRepository {
     return _imagen('img_$vecesQueSubio');
   }
 
+  int vecesQueBorro = 0;
+  bool cuelgaAlBorrar = false;
+  bool fallaAlBorrar = false;
+
+  @override
+  Future<void> borrarImagen(String productId, String imageId) async {
+    vecesQueBorro += 1;
+    if (cuelgaAlBorrar) return Completer<void>().future;
+    if (fallaAlBorrar) throw ComercioException('no se pudo borrar');
+  }
+
   @override
   Future<Producto> producto(String id) async {
     vecesQuePidioElProducto += 1;
-    throw StateError('nadie tiene que pedir el producto para subir una foto');
+    throw StateError('nadie tiene que pedir el producto para tocar una foto');
   }
 }

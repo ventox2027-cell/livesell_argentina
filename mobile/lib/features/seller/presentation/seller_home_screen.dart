@@ -16,7 +16,9 @@ import '../../lives/data/broadcaster_api.dart';
 import '../../lives/presentation/prepare_live_screen.dart';
 import '../../orders/presentation/seller_orders_screen.dart';
 import '../data/borrados_en_curso.dart';
+import '../data/cambios_de_estado.dart';
 import '../data/seller_repository.dart';
+import '../domain/estado_optimista.dart';
 import '../domain/seller_models.dart';
 import 'interesados_screen.dart';
 import 'pro_screen.dart';
@@ -523,7 +525,20 @@ class _Panel extends ConsumerWidget {
               );
             },
             data: (pagina) {
-              final catalogo = pagina.catalogo;
+              /**
+               * El cupo que se VE, contando lo que se esta publicando o
+               * pausando ahora mismo.
+               *
+               * Sin esto, el contador se queda con el numero del servidor hasta
+               * que llega el refresco: la persona publica, ve el chip cambiar
+               * al instante, y "2 de 3" sigue diciendo lo mismo unos segundos.
+               * Ver `catalogoVisible`.
+               */
+              final catalogo = catalogoVisible(
+                delServidor: pagina.catalogo,
+                productos: pagina.items,
+                cambios: ref.watch(cambiosDeEstadoProvider),
+              );
               if (pagina.items.isEmpty) {
                 return const _SinProductos();
               }
@@ -695,7 +710,9 @@ class _FilaProducto extends ConsumerWidget {
                 ],
               ),
             ),
-            _ChipEstado(producto.status),
+            // El estado que se ve, no el que trajo el servidor: mientras un
+            // cambio viaja manda la eleccion local. Ver `CambiosDeEstado`.
+            _ChipEstado(ref.watch(cambiosDeEstadoProvider).estadoDe(producto)),
           ],
         ),
       ),

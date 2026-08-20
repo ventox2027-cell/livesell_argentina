@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/api_client.dart';
 import '../../auth/state/auth_providers.dart';
 import '../domain/inventory_models.dart';
+import '../domain/stock_optimista.dart';
+import 'ajustes_en_vuelo.dart';
 
 /// Cliente de inventario y reservas.
 class InventoryRepository {
@@ -161,4 +163,50 @@ final stockDeProductoProvider =
 final disponibilidadProvider =
     FutureProvider.family<Disponibilidad, String>((ref, variantId) async {
   return ref.watch(inventoryRepositoryProvider).disponibilidad(variantId);
+});
+
+/// El stock TAL COMO SE VE, con los toques que todavía no llegaron al servidor.
+///
+/// ═══════════════════════════════════════════════════════════════════════════
+/// DOS PANTALLAS MOSTRABAN NÚMEROS DISTINTOS DEL MISMO PRODUCTO
+/// ═══════════════════════════════════════════════════════════════════════════
+///
+/// Medido en un teléfono: sumar unidades adentro de Stock funcionaba, pero al
+/// volver atrás el resumen del editor seguía con el número viejo entre dos y
+/// cinco segundos.
+///
+/// La causa no era la red: era que había dos fuentes. `StockScreen` armaba el
+/// `StockOptimista` —servidor + toques pendientes— y `_AccesoStock` leía
+/// `stockDeProductoProvider` pelado. Al volver, el editor invalidaba y pedía de
+/// nuevo... y el servidor devolvía el número VIEJO, porque el ajuste todavía
+/// estaba esperando los 450 ms del rebote antes de salir.
+///
+/// O sea: un viaje de red entero para traer un dato desactualizado, y después
+/// otro cuando el ajuste por fin llegaba.
+///
+/// Acá se arma una sola vez y las dos pantallas leen de acá. La coherencia deja
+/// de depender de que alguien se acuerde de mezclar lo mismo en los dos lados.
+///
+/// ⚠️ NO cuesta ninguna petición: es la respuesta que ya está en caché más un
+/// mapa en memoria.
+final stockVisibleProvider =
+    Provider.family<AsyncValue<StockOptimista>, String>((ref, productId) {
+  final delServidor = ref.watch(stockDeProductoProvider(productId));
+  final enVuelo = ref.watch(ajustesEnVueloProvider);
+  final notifier = ref.read(ajustesEnVueloProvider.notifier);
+
+  return delServidor.whenData((s) {
+    // Las claves del servicio llevan el productId adelante; acá sólo interesan
+    // las de este producto.
+    final ajustes = {
+      for (final v in s.variants)
+        if (enVuelo[claveDe(productId, v.variantId)] != null)
+          v.variantId: enVuelo[claveDe(productId, v.variantId)]!,
+    };
+
+    return StockOptimista(delServidor: s, ajustes: ajustes).conDatosDelServidor(
+      s,
+      (variantId) => notifier.sigueEnCurso(productId, variantId),
+    );
+  });
 });

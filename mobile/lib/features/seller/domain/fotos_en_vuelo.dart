@@ -70,20 +70,38 @@ class TiraDeFotos {
   int get largo => subidas.length + enVuelo.length;
 }
 
-/// Junta las tres fuentes en una sola tira, sin repetir.
+/// Junta las tres fuentes en una sola tira, sin repetir y sin las borradas.
 ///
 /// ⚠️ La deduplicación por id es lo que evita que una foto aparezca dos veces
 /// cuando el editor vuelve a pedir el producto: ahí la imagen llega por el
 /// servidor Y sigue en la lista de recién subidas.
+///
+/// ═══════════════════════════════════════════════════════════════════════════
+/// POR QUÉ HACE FALTA `borradas`
+/// ═══════════════════════════════════════════════════════════════════════════
+///
+/// Medido en un teléfono: tocar la X tardaba ~5 segundos y la foto **no
+/// desaparecía**. Tocarla de nuevo respondía «imagen no encontrada». Saliendo
+/// del producto y volviendo a entrar, ya no estaba.
+///
+/// O sea: el backend y R2 borraban bien. Lo que quedaba viejo era la pantalla.
+/// El editor guarda el producto en `_producto` y esa copia sigue teniendo la
+/// imagen hasta que alguien vuelva a pedirla — y el segundo toque mandaba un
+/// `DELETE` de algo que ya no existía.
+///
+/// Con esto, la foto se va de la tira apenas se confirma el borrado y no vuelve
+/// aunque `_producto` siga teniéndola.
 TiraDeFotos armarTira({
   required List<ImagenProducto> delServidor,
   required List<ImagenProducto> recienSubidas,
   required List<FotoEnVuelo> enVuelo,
+  Set<String> borradas = const {},
 }) {
   final vistas = <String>{};
   final subidas = <ImagenProducto>[];
 
   for (final img in [...delServidor, ...recienSubidas]) {
+    if (borradas.contains(img.id)) continue;
     if (img.id.isEmpty || vistas.add(img.id)) subidas.add(img);
   }
 

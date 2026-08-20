@@ -38,10 +38,39 @@ import 'widgets/composer.dart';
 /// creara acá, ir de la vista previa a esta pantalla cortaría el video justo
 /// cuando el vendedor acaba de decir "¡arrancamos!".
 class SellerLiveScreen extends ConsumerStatefulWidget {
-  const SellerLiveScreen({super.key, required this.liveId, required this.sala});
+  const SellerLiveScreen({
+    super.key,
+    required this.liveId,
+    required this.sala,
+    this.terminarDeSalirAlAire,
+  });
 
   final String liveId;
   final BroadcasterRoom sala;
+
+  /// Lo que falta para estar al aire, si esta pantalla se abrió antes.
+  ///
+  /// ═══════════════════════════════════════════════════════════════════════════
+  /// DOCE SEGUNDOS MIRANDO LA PANTALLA DE PREPARACIÓN
+  /// ═══════════════════════════════════════════════════════════════════════════
+  ///
+  /// Medido en un teléfono. Salir al aire son tres tramos —preparar en el
+  /// backend, conectar a LiveKit, marcar y publicar— y la pantalla del vivo no
+  /// aparecía hasta que terminaban los tres.
+  ///
+  /// La cámara, en cambio, ya estaba encendida desde la pantalla anterior. O
+  /// sea que había algo que mostrar mucho antes de mostrarlo.
+  ///
+  /// Ahora se navega apenas el backend devuelve el vivo —un solo viaje— y lo
+  /// que falta se termina acá, con la cámara propia ya a la vista.
+  ///
+  /// ⚠️ Esto NO es fingir que está al aire. El encabezado dice «Saliendo al
+  /// aire» hasta que LiveKit y el backend confirman, y nadie puede ver la
+  /// transmisión antes de eso —justamente porque el backend todavía no la marcó
+  /// como iniciada—.
+  ///
+  /// `null` cuando se vuelve a un vivo que ya estaba andando.
+  final Future<bool> Function()? terminarDeSalirAlAire;
 
   @override
   ConsumerState<SellerLiveScreen> createState() => _SellerLiveScreenState();
@@ -70,6 +99,12 @@ class _SellerLiveScreenState extends ConsumerState<SellerLiveScreen> {
   bool _terminando = false;
   bool _bandejaAbierta = false;
 
+  /// Si todavía falta terminar de salir al aire.
+  ///
+  /// ⚠️ Arranca en `true` sólo cuando esta pantalla se abrió antes de estar al
+  /// aire. Volver a un vivo que ya andaba no pasa por acá.
+  late bool _saliendoAlAire = widget.terminarDeSalirAlAire != null;
+
   /// El estado que ya le informamos al backend, para no repetir la llamada.
   EstadoDeTransmision? _ultimoEstadoInformado;
 
@@ -81,6 +116,14 @@ class _SellerLiveScreenState extends ConsumerState<SellerLiveScreen> {
     unawaited(WakelockPlus.enable());
 
     widget.sala.addListener(_alCambiarLaSala);
+
+    /**
+     * Lo que falta para estar al aire, si esta pantalla se abrió antes de
+     * terminar. Va sin `await`: el resto del arranque —panel y chat— no
+     * depende de eso y no tiene por qué esperarlo.
+     */
+    unawaited(_completarSalida());
+
     unawaited(_cargarPanel());
     unawaited(_conectarChat());
 
@@ -126,6 +169,26 @@ class _SellerLiveScreenState extends ConsumerState<SellerLiveScreen> {
     if (estado == EstadoDeTransmision.alAire) {
       unawaited(ref.read(broadcasterApiProvider).reanudar(widget.liveId).catchError((_) {}));
     }
+  }
+
+  /// Termina de salir al aire, con la pantalla ya visible.
+  ///
+  /// Si falla, se avisa y se vuelve: quedarse acá con una transmisión que no
+  /// arrancó le haría creer al vendedor que está vendiendo.
+  Future<void> _completarSalida() async {
+    final falta = widget.terminarDeSalirAlAire;
+    if (falta == null) return;
+
+    final ok = await falta();
+    if (!mounted) return;
+
+    if (!ok) {
+      AppSnack.error(context, widget.sala.error ?? 'No pudimos salir al aire.');
+      Navigator.of(context).pop();
+      return;
+    }
+
+    setState(() => _saliendoAlAire = false);
   }
 
   Future<void> _cargarPanel() async {
@@ -268,8 +331,25 @@ class _SellerLiveScreenState extends ConsumerState<SellerLiveScreen> {
     setState(() => _terminando = true);
 
     try {
+      /**
+       * ═══════════════════════════════════════════════════════════════════════
+       * CORTAR EL VIDEO NO TIENE POR QUÉ ESPERAR AL RESUMEN
+       * ═══════════════════════════════════════════════════════════════════════
+       *
+       * Medido en un teléfono: ~3 segundos desde tocar «Terminar» hasta salir.
+       * Eran dos cosas en fila —el `POST` a Railway que devuelve el resumen, y
+       * desconectar de LiveKit— y no se necesitan entre sí.
+       *
+       * El resumen SÍ hay que esperarlo: es lo que se muestra a continuación, y
+       * son números reales de la transmisión que acaba de terminar. Inventarlos
+       * o mostrarlos vacíos sería peor que esperar.
+       *
+       * Cortar el video, no. Va en paralelo y el diálogo aparece cuando llega
+       * el resumen, sin sumarle la desconexión.
+       */
+      final corte = widget.sala.cortar();
       final resumen = await ref.read(broadcasterApiProvider).terminar(widget.liveId);
-      await widget.sala.cortar();
+      unawaited(corte);
       if (!mounted) return;
 
       await showDialog<void>(
@@ -322,6 +402,7 @@ class _SellerLiveScreenState extends ConsumerState<SellerLiveScreen> {
               child: Column(
                 children: [
                   _Encabezado(
+                    saliendoAlAire: _saliendoAlAire,
                     segundos: _segundos,
                     espectadores: panel?.espectadores ?? 0,
                     ventas: panel?.ventas,
@@ -397,12 +478,20 @@ class _Encabezado extends StatelessWidget {
   const _Encabezado({
     required this.segundos,
     required this.espectadores,
+    required this.saliendoAlAire,
     required this.ventas,
     required this.onTerminar,
   });
 
   final int segundos;
   final int espectadores;
+
+  /// Si todavia falta que LiveKit y el backend confirmen.
+  ///
+  /// â ï¸ El chip NO puede decir EN VIVO antes de eso. La pantalla se abre
+  /// temprano para que la persona vea su camara cuanto antes, y eso solo es
+  /// honesto si el estado dice la verdad mientras tanto.
+  final bool saliendoAlAire;
   final VentasDelVivo? ventas;
   final VoidCallback? onTerminar;
 
@@ -412,7 +501,9 @@ class _Encabezado extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(Gap.md, Gap.sm, Gap.sm, 0),
       child: Row(
         children: [
-          const _Chip(color: AppColor.vivo, texto: 'EN VIVO'),
+          saliendoAlAire
+              ? const _Chip(color: Colors.black54, texto: 'SALIENDO AL AIRE')
+              : const _Chip(color: AppColor.vivo, texto: 'EN VIVO'),
           const SizedBox(width: Gap.sm),
           _Chip(color: Colors.black54, texto: comoDuracion(segundos)),
           const SizedBox(width: Gap.sm),

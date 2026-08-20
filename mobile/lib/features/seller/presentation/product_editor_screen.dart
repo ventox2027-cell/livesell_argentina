@@ -12,6 +12,7 @@ import '../../../shared/widgets/app_snack.dart';
 import '../../inventory/data/inventory_repository.dart';
 import '../../inventory/presentation/stock_screen.dart';
 import '../data/borrados_en_curso.dart';
+import '../data/cambios_de_estado.dart';
 import '../data/categorias_api.dart';
 import '../data/subidas_de_fotos.dart';
 import '../data/tasas_api.dart';
@@ -330,26 +331,42 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
       return;
     }
 
-    setState(() => _guardando = true);
+    /**
+     * ═══════════════════════════════════════════════════════════════════════
+     * EL INTERRUPTOR SE MUEVE AHORA. EL `PATCH` VIAJA DESPUÉS.
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * Medido en un teléfono: pausar ~5 s, volver a publicar ~8 s, y todo ese
+     * rato el botón seguía diciendo lo de antes.
+     *
+     * Publicar o pausar es un interruptor: la persona ya decidió, lo único que
+     * falta es que el servidor lo anote. Hacerla mirar la pantalla mientras eso
+     * viaja a otro continente es pedirle que espere algo que no le aporta nada.
+     *
+     * ⚠️ Sin `_guardando`: eso bloqueaba el formulario entero. Quien frena el
+     * segundo toque es `CambiosDeEstadoDeProducto`, que además lo frena también
+     * desde la fila de Mi tienda — el mismo interruptor está en dos lados.
+     */
+    final aviso = nuevo == 'ACTIVE'
+        ? 'Publicado. Ya lo pueden comprar.'
+        : nuevo == 'PAUSED'
+            ? 'Producto pausado'
+            : 'Producto guardado';
+
+    setState(() => _huboCambios = true);
+    AppSnack.exito(context, aviso);
+
     try {
-      final r = await ref
-          .read(sellerRepositoryProvider)
-          .actualizarProducto(p.id, status: nuevo, categoryId: _categoriaId);
-      if (!mounted) return;
-      setState(() {
-        _producto = r;
-        _huboCambios = true;
-      });
-      AppSnack.exito(
-        context,
-        nuevo == 'ACTIVE'
-            ? 'Publicado. Ya lo pueden comprar.'
-            : 'Producto ${r.etiquetaEstado.toLowerCase()}',
-      );
+      final r = await ref.read(cambiosDeEstadoProvider.notifier).cambiar(
+            productId: p.id,
+            nuevo: nuevo,
+            categoryId: _categoriaId,
+          );
+      if (!mounted || r == null) return;
+      setState(() => _producto = r);
     } catch (e) {
+      // El estado local ya volvió a lo que era. Falta decir por qué.
       if (mounted) await _mostrarError(e);
-    } finally {
-      if (mounted) setState(() => _guardando = false);
     }
   }
 
@@ -403,23 +420,40 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
     );
   }
 
+  /// Sacar una foto se ve ahora. El `DELETE` viaja solo.
+  ///
+  /// ═══════════════════════════════════════════════════════════════════════════
+  /// EL BUG MEDIDO EN EL TELÉFONO
+  /// ═══════════════════════════════════════════════════════════════════════════
+  ///
+  /// Tocar la X tardaba ~5 segundos y la foto NO desaparecía. El segundo toque
+  /// respondía «imagen no encontrada». Saliendo del producto y volviendo, ya no
+  /// estaba.
+  ///
+  /// Eran dos viajes en serie —`DELETE` y después `GET /products/:id` para
+  /// traer el producto entero— y mientras tanto la pantalla seguía dibujando su
+  /// copia vieja. El segundo toque mandaba un `DELETE` de algo ya borrado.
+  ///
+  /// Ahora la foto se va en el mismo frame, el `DELETE` va por atrás en un
+  /// servicio que sobrevive a esta pantalla, y el segundo toque no hace nada
+  /// porque el id ya está marcado. Ver `SubidasDeFotos.borrarFoto`.
+  ///
+  /// ⚠️ Sin `_guardando`: bloquear el formulario entero por sacar una foto
+  /// impide seguir cargando el producto.
   Future<void> _borrarFoto(String imageId) async {
     final p = _producto;
     if (p == null) return;
 
-    setState(() => _guardando = true);
+    setState(() => _huboCambios = true);
+
     try {
-      await ref.read(sellerRepositoryProvider).borrarImagen(p.id, imageId);
-      final actualizado = await ref.read(sellerRepositoryProvider).producto(p.id);
-      if (!mounted) return;
-      setState(() {
-        _producto = actualizado;
-        _huboCambios = true;
-      });
+      await ref.read(subidasDeFotosProvider.notifier).borrarFoto(
+            productId: p.id,
+            imageId: imageId,
+          );
     } catch (e) {
+      // La foto ya volvió a la tira: sólo falta decir por qué.
       if (mounted) await _mostrarError(e);
-    } finally {
-      if (mounted) setState(() => _guardando = false);
     }
   }
 
@@ -532,7 +566,7 @@ class _ProductEditorScreenState extends ConsumerState<ProductEditorScreen> {
                     _SeccionFotos(
                       producto: p,
                       onAgregar: _guardando ? null : _agregarFoto,
-                      onBorrar: _guardando ? null : _borrarFoto,
+                      onBorrar: _borrarFoto,
                     ),
                   ],
 
@@ -654,6 +688,7 @@ class _SeccionFotos extends ConsumerWidget {
       delServidor: producto.images,
       recienSubidas: subidas.subidasDe(producto.id),
       enVuelo: subidas.deProducto(producto.id),
+      borradas: subidas.borradasDe(producto.id),
     );
 
     return Column(
@@ -1170,7 +1205,23 @@ class _AccesoStock extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final stock = ref.watch(stockDeProductoProvider(producto.id));
+    /**
+     * ═══════════════════════════════════════════════════════════════════════
+     * EL MISMO NÚMERO QUE MUESTRA LA PANTALLA DE STOCK
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * Acá se leía `stockDeProductoProvider` pelado —lo que dijo el servidor la
+     * última vez— mientras `StockScreen` mostraba el valor con los toques
+     * pendientes encima. Dos fuentes para el mismo dato.
+     *
+     * El síntoma medido: sumar unidades, volver atrás, y ver el número viejo
+     * entre dos y cinco segundos.
+     *
+     * `stockVisibleProvider` es esa mezcla, hecha una sola vez. No cuesta
+     * ninguna petición: es la respuesta que ya está en caché más un mapa en
+     * memoria.
+     */
+    final stock = ref.watch(stockVisibleProvider(producto.id));
 
     return InkWell(
       onTap: () async {
@@ -1179,7 +1230,15 @@ class _AccesoStock extends ConsumerWidget {
             builder: (_) => StockScreen(productId: producto.id, nombreProducto: producto.name),
           ),
         );
-        ref.invalidate(stockDeProductoProvider(producto.id));
+        /**
+         * ⚠️ Y acá NO se invalida nada.
+         *
+         * El `ref.invalidate` que había disparaba un viaje entero al volver, y
+         * traía el número VIEJO: el ajuste todavía estaba esperando los 450 ms
+         * del rebote antes de salir. Después llegaba el ajuste de verdad y
+         * `AjustesEnVuelo` invalidaba por su cuenta — o sea que el viaje de acá
+         * no aportaba nada más que la espera.
+         */
       },
       borderRadius: BorderRadius.circular(Redondeo.lg),
       child: Container(
@@ -1568,15 +1627,25 @@ class _SelectorDeCategoria extends ConsumerWidget {
   }
 }
 
-class _EstadoPublicacion extends StatelessWidget {
+class _EstadoPublicacion extends ConsumerWidget {
   const _EstadoPublicacion({required this.producto, this.onCambiar});
 
   final Producto producto;
   final void Function(String)? onCambiar;
 
   @override
-  Widget build(BuildContext context) {
-    final publicado = producto.publicado;
+  Widget build(BuildContext context, WidgetRef ref) {
+    /**
+     * El estado que se VE, no el que trajo el servidor.
+     *
+     * Mientras un cambio viaja, manda la eleccion local: el interruptor se
+     * mueve en el mismo frame del toque en vez de a los cinco u ocho segundos
+     * que se median. Ver
+     * `CambiosDeEstado`.
+     */
+    final cambios = ref.watch(cambiosDeEstadoProvider);
+    final publicado = cambios.estadoDe(producto) == 'ACTIVE';
+    final enCurso = cambios.enCurso(producto.id);
 
     return Container(
       padding: const EdgeInsets.all(Gap.lg),
@@ -1610,14 +1679,17 @@ class _EstadoPublicacion extends StatelessWidget {
             style: const TextStyle(fontSize: 12.5, color: AppColor.textoSuave),
           ),
           const SizedBox(height: Gap.md),
+          // ⚠️ Apagado mientras el cambio viaja. Dos toques seguidos mandan dos
+          // `PATCH` y el estado final lo decide el orden en que contesten, que
+          // no es el orden en que se tocó.
           if (publicado)
             OutlinedButton(
-              onPressed: onCambiar == null ? null : () => onCambiar!('PAUSED'),
+              onPressed: onCambiar == null || enCurso ? null : () => onCambiar!('PAUSED'),
               child: const Text('Pausar'),
             )
           else
             FilledButton(
-              onPressed: onCambiar == null ? null : () => onCambiar!('ACTIVE'),
+              onPressed: onCambiar == null || enCurso ? null : () => onCambiar!('ACTIVE'),
               child: const Text('Publicar'),
             ),
         ],

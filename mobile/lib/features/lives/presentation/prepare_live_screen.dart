@@ -12,6 +12,7 @@ import '../../seller/data/seller_repository.dart';
 import '../data/broadcaster_api.dart';
 import '../../seller/presentation/widgets/conectar_mp_sheet.dart';
 import '../data/broadcaster_room.dart';
+import '../domain/broadcaster_models.dart';
 import '../domain/tramos_del_vivo.dart';
 import 'seller_live_screen.dart';
 
@@ -85,6 +86,44 @@ class _PrepareLiveScreenState extends ConsumerState<PrepareLiveScreen> {
   /// Son dos llamadas porque son dos cosas distintas —crear la sesión y
   /// publicar— pero para quien transmite es un botón: ya vio su encuadre y ya
   /// eligió sus productos, no hay nada más que confirmar.
+  /// Lo que falta para estar al aire, ya con la pantalla del vivo abierta.
+  ///
+  /// ⚠️ Vive acá y no en la pantalla del vivo a propósito: es la continuación
+  /// de lo que empezó `_salirAlAire`, con los datos que devolvió `preparar`.
+  /// Duplicarlo del otro lado obligaría a pasar el token de LiveKit, la URL y
+  /// la bandeja por el constructor, y a mantener dos copias del mismo orden.
+  ///
+  /// ─── Los dos pares que salen juntos ───
+  ///
+  /// La bandeja y la conexión no se necesitan entre sí: una guarda qué
+  /// productos van a estar disponibles, la otra abre el video. Marcar el vivo
+  /// como iniciado y publicar la cámara, tampoco.
+  Future<bool> _completarSalida(VivoPreparado vivo) async {
+    final api = ref.read(broadcasterApiProvider);
+
+    final desde = _tramos.ahora;
+    final resultados = await Future.wait([
+      if (_elegidos.isNotEmpty)
+        api.guardarBandeja(vivo.id, _elegidos).then((_) => true)
+      else
+        Future.value(true),
+      _sala.conectar(wsUrl: vivo.wsUrl, token: vivo.token),
+    ]);
+    _tramos.tramo('bandeja + LiveKit', desdeMs: desde);
+
+    if (!resultados.last) return false;
+
+    final desdeAlAire = _tramos.ahora;
+    final alAire = await Future.wait([
+      api.iniciar(vivo.id).then((_) => true),
+      _sala.salirAlAire(),
+    ]);
+    _tramos.tramo('iniciar + publicar', desdeMs: desdeAlAire);
+    _tramos.informar();
+
+    return alAire.last;
+  }
+
   Future<void> _salirAlAire() async {
     final titulo = _titulo.text.trim();
     if (titulo.length < 3) {
@@ -105,78 +144,36 @@ class _PrepareLiveScreenState extends ConsumerState<PrepareLiveScreen> {
         return;
       }
 
-      /**
-       * ═══════════════════════════════════════════════════════════════════════
-       * LA BANDEJA Y LA CONEXIÓN NO SE NECESITAN ENTRE SÍ
-       * ═══════════════════════════════════════════════════════════════════════
-       *
-       * Estaban en fila: primero `PUT /live/:id/products` —un viaje a
-       * Railway— y recién después el WebSocket a LiveKit. Uno guarda qué
-       * productos van a estar en la bandeja; el otro abre el video. No
-       * comparten nada.
-       *
-       * Ahora salen juntos y el tramo dura lo que dure el más lento en vez de
-       * la suma de los dos.
-       *
-       * La bandeja se guarda aparte de `preparar` porque `preparar` es
-       * idempotente: si ya había un vivo abierto devuelve ESE, con SU bandeja
-       * vieja.
-       */
-      final desde = _tramos.ahora;
-      final resultados = await Future.wait([
-        if (_elegidos.isNotEmpty)
-          api.guardarBandeja(vivo.id, _elegidos).then((_) => true)
-        else
-          Future.value(true),
-        _sala.conectar(wsUrl: vivo.wsUrl, token: vivo.token),
-      ]);
-      _tramos.tramo('bandeja + LiveKit', desdeMs: desde);
-
-      final conectado = resultados.last;
-      if (!conectado) {
-        if (mounted) AppSnack.error(context, _sala.error ?? 'No pudimos conectar.');
-        return;
-      }
-
-      /**
-       * ═══════════════════════════════════════════════════════════════════════
-       * MARCAR EL VIVO Y PUBLICAR LA CÁMARA TAMPOCO
-       * ═══════════════════════════════════════════════════════════════════════
-       *
-       * `iniciar` es un `POST` a Railway que pasa el vivo a LIVE; publicar es
-       * una operación de LiveKit sobre una sala que ya está conectada. También
-       * estaban en fila.
-       *
-       * ⚠️ Se esperan los DOS antes de navegar. Es la diferencia entre
-       * paralelizar y fingir: nadie ve la pantalla del vivo hasta que el
-       * backend confirmó el estado Y la cámara está publicando. Publicar unos
-       * milisegundos antes de que el backend diga LIVE no adelanta nada para
-       * nadie —todavía no hay espectadores, justamente porque el backend no lo
-       * dijo—.
-       */
-      final desdeAlAire = _tramos.ahora;
-      final alAire = await Future.wait([
-        api.iniciar(vivo.id).then((_) => true),
-        _sala.salirAlAire(),
-      ]);
-      _tramos.tramo('iniciar + publicar', desdeMs: desdeAlAire);
-      _tramos.informar();
-
-      final publicando = alAire.last;
-      if (!publicando) {
-        if (mounted) AppSnack.error(context, _sala.error ?? 'No pudimos publicar tu cámara.');
-        return;
-      }
-
       if (!mounted) return;
 
-      // La sala pasa a ser de la pantalla del vivo. Sin esto, `dispose` de
-      // acá cortaría la transmisión que se acaba de encender.
+      /**
+       * ═══════════════════════════════════════════════════════════════════════
+       * SE NAVEGA ACÁ, CON UN SOLO VIAJE HECHO
+       * ═══════════════════════════════════════════════════════════════════════
+       *
+       * Medido en un teléfono: doce segundos desde tocar el botón hasta ver la
+       * pantalla del vivo. Eran tres tramos esperados en fila antes de navegar,
+       * y la cámara ya estaba encendida desde que se abrió esta pantalla — o
+       * sea que había algo que mostrar mucho antes de mostrarlo.
+       *
+       * Ahora alcanza con que el backend haya creado el vivo. Lo que falta
+       * —guardar la bandeja, conectar a LiveKit, marcar el inicio y publicar—
+       * se termina en la pantalla del vivo, con la cámara propia a la vista y
+       * el encabezado diciendo «SALIENDO AL AIRE».
+       *
+       * ⚠️ NO es fingir que está al aire: el chip no dice EN VIVO hasta que
+       * LiveKit y el backend confirman, y nadie puede ver la transmisión antes
+       * de eso porque el backend todavía no la marcó como iniciada.
+       */
       _saliendo = true;
 
       await Navigator.of(context).pushReplacement(
         MaterialPageRoute<void>(
-          builder: (_) => SellerLiveScreen(liveId: vivo.id, sala: _sala),
+          builder: (_) => SellerLiveScreen(
+            liveId: vivo.id,
+            sala: _sala,
+            terminarDeSalirAlAire: () => _completarSalida(vivo),
+          ),
         ),
       );
     } catch (e) {

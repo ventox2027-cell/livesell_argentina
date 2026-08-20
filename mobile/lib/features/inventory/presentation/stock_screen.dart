@@ -107,7 +107,7 @@ class _StockScreenState extends ConsumerState<StockScreen> {
   Widget build(BuildContext context) {
     final productId = widget.productId;
     final nombreProducto = widget.nombreProducto;
-    final stock = ref.watch(stockDeProductoProvider(productId));
+    final stock = ref.watch(stockVisibleProvider(productId));
 
     return Scaffold(
       appBar: AppBar(
@@ -138,36 +138,19 @@ class _StockScreenState extends ConsumerState<StockScreen> {
             child: _Error(mensaje: mensajeDeError(e), onReintentar: recargar),
           );
         },
-        data: (s) {
+        data: (vista) {
           /**
-           * ⚠️ ACÁ SE ARMA LA ÚNICA VERDAD DE LA PANTALLA.
+           * ⚠️ LA MEZCLA YA NO SE ARMA ACÁ.
            *
-           * El resumen y las filas leen de `vista`. No pueden discrepar aunque
-           * alguien mañana se olvide de refrescar uno de los dos: no hay dos
-           * lugares de donde leer.
+           * Estaba escrita en esta pantalla, y el resumen del editor —
+           * `_AccesoStock`— leía el provider pelado. Dos fuentes para el mismo
+           * dato: sumar unidades acá y volver atrás mostraba el número viejo
+           * durante dos a cinco segundos.
            *
-           * Los ajustes de las variantes que ya no tienen trabajo pendiente se
-           * descartan —manda el servidor— pero los de las que SÍ lo tienen se
-           * conservan: si no, la respuesta de una petición anterior pisaría los
-           * toques que la persona dio mientras esa petición viajaba, y el
-           * número saltaría hacia atrás bajo el dedo.
+           * Ahora la mezcla vive en `stockVisibleProvider` y las dos pantallas
+           * leen de ahí. La coherencia deja de depender de que alguien se
+           * acuerde de hacer lo mismo en los dos lados.
            */
-          final enVuelo = ref.watch(ajustesEnVueloProvider);
-          final notifier = ref.read(ajustesEnVueloProvider.notifier);
-
-          // Las claves del servicio llevan el productId adelante; acá sólo
-          // interesan las de este producto.
-          final ajustes = {
-            for (final v in s.variants)
-              if (enVuelo[claveDe(productId, v.variantId)] != null)
-                v.variantId: enVuelo[claveDe(productId, v.variantId)]!,
-          };
-
-          final vista = StockOptimista(delServidor: s, ajustes: ajustes).conDatosDelServidor(
-            s,
-            (variantId) => notifier.sigueEnCurso(productId, variantId),
-          );
-
           return RefreshIndicator(
             onRefresh: () async => ref.invalidate(stockDeProductoProvider(productId)),
             child: ListView(

@@ -8,17 +8,37 @@ import 'seller_repository.dart';
 
 /// El estado de las subidas de fotos, por producto.
 class EstadoDeSubidas {
-  const EstadoDeSubidas({this.enVuelo = const [], this.recienSubidas = const {}});
+  const EstadoDeSubidas({
+    this.enVuelo = const [],
+    this.recienSubidas = const {},
+    this.borradas = const {},
+  });
 
   final List<FotoEnVuelo> enVuelo;
 
   /// Lo que ya subió y el producto en memoria todavía no tiene, por producto.
   final Map<String, List<ImagenProducto>> recienSubidas;
 
+  /// Las fotos que se sacaron: las que están viajando y las que ya se fueron.
+  ///
+  /// ⚠️ Un id se queda acá DESPUÉS de que el servidor confirma, y no es un
+  /// olvido: el editor guarda el producto en memoria y esa copia sigue teniendo
+  /// la imagen. Si se soltara al confirmar, la foto reaparecería.
+  ///
+  /// Se limpia cuando el editor vuelve a pedir el producto — ahí la copia nueva
+  /// ya no la trae. Ver `olvidarSubidas`.
+  final Map<String, Set<String>> borradas;
+
   List<FotoEnVuelo> deProducto(String productId) =>
       enVuelo.where((f) => f.productId == productId).toList();
 
   List<ImagenProducto> subidasDe(String productId) => recienSubidas[productId] ?? const [];
+
+  Set<String> borradasDe(String productId) => borradas[productId] ?? const {};
+
+  /// Si esta foto ya se está borrando. Es lo que frena el segundo toque.
+  bool seEstaBorrando(String productId, String imageId) =>
+      borradasDe(productId).contains(imageId);
 }
 
 /// Sube las fotos por atrás, sin hacer esperar a nadie.
@@ -64,6 +84,7 @@ class SubidasDeFotos extends Notifier<EstadoDeSubidas> {
     state = EstadoDeSubidas(
       enVuelo: [...state.enVuelo, foto],
       recienSubidas: state.recienSubidas,
+      borradas: state.borradas,
     );
 
     await _enviar(foto, archivo);
@@ -84,6 +105,7 @@ class SubidasDeFotos extends Notifier<EstadoDeSubidas> {
             f,
       ],
       recienSubidas: state.recienSubidas,
+      borradas: state.borradas,
     );
 
     await _enviar(foto, File(foto.rutaLocal));
@@ -94,6 +116,7 @@ class SubidasDeFotos extends Notifier<EstadoDeSubidas> {
     state = EstadoDeSubidas(
       enVuelo: state.enVuelo.where((f) => f.clave != clave).toList(),
       recienSubidas: state.recienSubidas,
+      borradas: state.borradas,
     );
   }
 
@@ -103,12 +126,68 @@ class SubidasDeFotos extends Notifier<EstadoDeSubidas> {
   /// partir de ahí las fotos vienen ahí adentro y mantener la copia sería
   /// arrastrar una segunda lista que puede quedar vieja.
   void olvidarSubidas(String productId) {
-    if (!state.recienSubidas.containsKey(productId)) return;
+    final tieneSubidas = state.recienSubidas.containsKey(productId);
+    final tieneBorradas = state.borradas.containsKey(productId);
+    if (!tieneSubidas && !tieneBorradas) return;
+
     state = EstadoDeSubidas(
       enVuelo: state.enVuelo,
       recienSubidas: {...state.recienSubidas}..remove(productId),
+      borradas: {...state.borradas}..remove(productId),
     );
   }
+
+  /// Saca una foto: de la pantalla ahora, del servidor después.
+  ///
+  /// ═══════════════════════════════════════════════════════════════════════════
+  /// EL BUG QUE ESTO CIERRA
+  /// ═══════════════════════════════════════════════════════════════════════════
+  ///
+  /// Medido en un teléfono: tocar la X tardaba ~5 segundos y la foto **no
+  /// desaparecía**. El segundo toque respondía «imagen no encontrada». Saliendo
+  /// del producto y volviendo a entrar, ya no estaba.
+  ///
+  /// El backend y R2 borraban perfecto. Lo que quedaba viejo era la pantalla: el
+  /// editor pedía el producto ENTERO después del `DELETE` —otro viaje a otro
+  /// continente— y hasta que llegaba seguía dibujando su copia vieja, con la
+  /// foto adentro. El segundo toque mandaba entonces un `DELETE` de algo que ya
+  /// no existía, y de ahí el «imagen no encontrada».
+  ///
+  /// Ahora la foto se va en el mismo frame y el `DELETE` viaja solo.
+  ///
+  /// ⚠️ El id se marca ANTES de mandar nada, y eso hace dos cosas a la vez: la
+  /// saca de la tira y bloquea el segundo toque.
+  Future<void> borrarFoto({required String productId, required String imageId}) async {
+    if (state.seEstaBorrando(productId, imageId)) return;
+
+    state = _conBorrada(productId, imageId);
+
+    try {
+      await ref.read(sellerRepositoryProvider).borrarImagen(productId, imageId);
+    } catch (_) {
+      // Vuelve a la tira: el servidor no la borró.
+      state = _sinBorrada(productId, imageId);
+      rethrow;
+    }
+  }
+
+  EstadoDeSubidas _conBorrada(String productId, String imageId) => EstadoDeSubidas(
+        enVuelo: state.enVuelo,
+        recienSubidas: state.recienSubidas,
+        borradas: {
+          ...state.borradas,
+          productId: {...state.borradasDe(productId), imageId},
+        },
+      );
+
+  EstadoDeSubidas _sinBorrada(String productId, String imageId) => EstadoDeSubidas(
+        enVuelo: state.enVuelo,
+        recienSubidas: state.recienSubidas,
+        borradas: {
+          ...state.borradas,
+          productId: {...state.borradasDe(productId)}..remove(imageId),
+        },
+      );
 
   Future<void> _enviar(FotoEnVuelo foto, File archivo) async {
     try {
