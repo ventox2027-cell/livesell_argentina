@@ -341,6 +341,7 @@ class _RepoDeFeed extends Fake implements FeedRepository {
     String? cursor,
     int limit = 20,
     String? q,
+    bool soloSeguidos = false,
   }) async {
     veces += 1;
     return (items: <PublicacionFeed>[], nextCursor: null);

@@ -21,6 +21,7 @@ import '../../auth/domain/session.dart';
 import 'widgets/acciones_de_mensaje.dart';
 import 'widgets/video_live.dart';
 import 'seller_profile_screen.dart';
+import '../../social/data/seguimientos.dart';
 import 'shop_sheet.dart';
 import 'variant_sheet.dart';
 
@@ -613,11 +614,13 @@ class _FilaDeVendedorState extends ConsumerState<_FilaDeVendedor> {
     if (_enviando) return;
     setState(() => _enviando = true);
 
-    final api = ref.read(liveApiProvider);
+    // ⚠️ Por `Seguimientos`, no por `LiveApi`: es lo que avisa a la pestaña
+    // «Siguiendo» del feed. Ver `seguimientos.dart`.
+    final seguimientos = ref.read(seguimientosProvider.notifier);
     try {
       final r = _siguiendo == true
-          ? await api.dejarDeSeguir(widget.live.vendedorId)
-          : await api.seguir(widget.live.vendedorId);
+          ? await seguimientos.dejarDeSeguir(widget.live.vendedorId)
+          : await seguimientos.seguir(widget.live.vendedorId);
       if (mounted) setState(() => _siguiendo = r.siguiendo);
     } catch (_) {
       // El estado no cambia: mejor que mostrar "Siguiendo" sobre algo que

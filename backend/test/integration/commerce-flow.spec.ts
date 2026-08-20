@@ -5625,3 +5625,182 @@ describe('Retención de «vistos recientemente»', () => {
     expect(await prisma.recentlyViewed.findUnique({ where: { id: reciente.id } })).not.toBeNull();
   });
 });
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * LA PESTAÑA «SIGUIENDO»
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Es el mismo feed de siempre, restringido a los vendedores que esta persona
+ * eligió seguir. Por eso es un filtro de `/discover/products` y no un endpoint
+ * propio: la tarjeta del producto —imágenes, precio, variantes, stock— es la
+ * parte cara de armar, y duplicarla para cambiar un `WHERE` es cómo se llega a
+ * dos feeds que muestran cosas distintas.
+ */
+describe('Feed de vendedores que sigo', () => {
+  /** Sigue a un vendedor, comprobando que el backend lo aceptó. */
+  async function seguir(token: string, sellerId: string) {
+    const r = await call('POST', `/api/v1/sellers/${sellerId}/follow`, { token });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+  }
+
+  async function feedSiguiendo(token?: string) {
+    return call('GET', '/api/v1/discover/products?siguiendo=true&limit=50', { token });
+  }
+
+  it('sin seguir a nadie, la lista viene vacía', async () => {
+    const yo = await nuevoUsuario();
+    await nuevoVendedorConProducto();
+
+    const r = await feedSiguiendo(yo.token);
+
+    expect(r.status).toBe(200);
+    expect(r.body.items).toEqual([]);
+    expect(r.body.nextCursor).toBeNull();
+  });
+
+  /**
+   * ⛔ VACÍO NO ES ERROR.
+   *
+   * La app dibuja un estado vacío amigable con esto. Un 4xx la mandaría a la
+   * pantalla de error técnico, que es justo lo que no puede pasar cuando la
+   * respuesta correcta es «todavía no seguís a nadie».
+   */
+  it('⛔ no seguir a nadie devuelve 200, no un error', async () => {
+    const yo = await nuevoUsuario();
+
+    expect((await feedSiguiendo(yo.token)).status).toBe(200);
+  });
+
+  it('siguiendo a alguien, aparecen sus productos', async () => {
+    const yo = await nuevoUsuario();
+    const v = await nuevoVendedorConProducto();
+    await seguir(yo.token, v.sellerId);
+
+    const r = await feedSiguiendo(yo.token);
+
+    expect(r.status).toBe(200);
+    expect(r.body.items.map((p: { id: string }) => p.id)).toContain(v.productId);
+  });
+
+  /**
+   * ⛔ Y NO APARECE NADIE MÁS.
+   *
+   * Es la mitad del filtro que un test de «aparece lo mío» no comprueba: sin
+   * el `WHERE`, el feed entero pasaría igual y el test de arriba seguiría en
+   * verde, porque el producto seguido también está en el feed entero.
+   */
+  it('⛔ no aparecen productos de vendedores que no sigo', async () => {
+    const yo = await nuevoUsuario();
+    const seguido = await nuevoVendedorConProducto();
+    const otro = await nuevoVendedorConProducto();
+    await seguir(yo.token, seguido.sellerId);
+
+    const ids = (await feedSiguiendo(yo.token)).body.items.map((p: { id: string }) => p.id);
+
+    expect(ids).toContain(seguido.productId);
+    expect(ids).not.toContain(otro.productId);
+  });
+
+  /** Seguir a alguien nuevo se ve en el feed siguiente, sin nada más. */
+  it('un follow nuevo aparece en el pedido siguiente', async () => {
+    const yo = await nuevoUsuario();
+    const v = await nuevoVendedorConProducto();
+
+    expect((await feedSiguiendo(yo.token)).body.items).toEqual([]);
+
+    await seguir(yo.token, v.sellerId);
+
+    expect((await feedSiguiendo(yo.token)).body.items).toHaveLength(1);
+  });
+
+  it('dejar de seguir lo saca', async () => {
+    const yo = await nuevoUsuario();
+    const v = await nuevoVendedorConProducto();
+    await seguir(yo.token, v.sellerId);
+
+    const baja = await call('DELETE', `/api/v1/sellers/${v.sellerId}/follow`, { token: yo.token });
+    expect(baja.status).toBe(200);
+
+    expect((await feedSiguiendo(yo.token)).body.items).toEqual([]);
+  });
+
+  /**
+   * ⛔ SEGUIR NO ES ESTAR EN VIVO.
+   *
+   * Un vendedor seguido que no está transmitiendo igual muestra su catálogo:
+   * «Siguiendo» es «lo de la gente que me interesa», no «lo que está pasando
+   * ahora». Si sólo mostrara vivos, la pestaña estaría vacía casi siempre —hay
+   * pocas transmisiones simultáneas— y no serviría para nada.
+   */
+  it('⛔ un vendedor seguido sin vivo igual muestra sus productos', async () => {
+    const yo = await nuevoUsuario();
+    const v = await nuevoVendedorConProducto();
+    await seguir(yo.token, v.sellerId);
+
+    const r = await feedSiguiendo(yo.token);
+
+    expect(r.body.items).toHaveLength(1);
+    expect(r.body.items[0].id).toBe(v.productId);
+  });
+
+  /**
+   * ⛔ Y LOS DOS FILTROS SE COMBINAN, NO SE PISAN.
+   *
+   * `siguiendo` y `enVivo` terminan los dos en un `store.sellerId`. Escritos
+   * como dos propiedades del mismo objeto literal, la segunda pisa a la
+   * primera y el feed muestra cualquiera de las dos cosas en silencio.
+   *
+   * Acá el vendedor está seguido pero no transmite: la intersección tiene que
+   * dar vacío.
+   */
+  it('⛔ «siguiendo» y «en vivo» se combinan', async () => {
+    const yo = await nuevoUsuario();
+    const v = await nuevoVendedorConProducto();
+    await seguir(yo.token, v.sellerId);
+
+    const r = await call(
+      'GET',
+      '/api/v1/discover/products?siguiendo=true&enVivo=true&limit=50',
+      { token: yo.token },
+    );
+
+    expect(r.status).toBe(200);
+    expect(r.body.items).toEqual([]);
+  });
+
+  /**
+   * ⛔ SIN SESIÓN, VACÍO Y NO UN 401.
+   *
+   * El feed es público: pedir sesión acá rompería «Para vos» para quien
+   * todavía no se registró. La app no ofrece la pestaña sin sesión, así que
+   * llegar sin usuario es alguien probando la URL.
+   */
+  it('⛔ sin sesión devuelve vacío, no un error', async () => {
+    await nuevoVendedorConProducto();
+
+    const r = await feedSiguiendo();
+
+    expect(r.status).toBe(200);
+    expect(r.body.items).toEqual([]);
+  });
+
+  /**
+   * ⛔ «PARA VOS» NO SE TOCA.
+   *
+   * El mismo endpoint sirve a las dos pestañas. Sin el filtro, «Para vos»
+   * tiene que seguir mostrando a todo el mundo, siga la persona a quien siga.
+   */
+  it('⛔ sin el filtro, el feed sigue mostrando a todos', async () => {
+    const yo = await nuevoUsuario();
+    const seguido = await nuevoVendedorConProducto();
+    const otro = await nuevoVendedorConProducto();
+    await seguir(yo.token, seguido.sellerId);
+
+    const r = await call('GET', '/api/v1/discover/products?limit=50', { token: yo.token });
+    const ids = r.body.items.map((p: { id: string }) => p.id);
+
+    expect(ids).toContain(seguido.productId);
+    expect(ids).toContain(otro.productId);
+  });
+});

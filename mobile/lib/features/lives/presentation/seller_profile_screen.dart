@@ -11,6 +11,7 @@ import '../../moderation/data/bloqueos_api.dart';
 import '../../moderation/presentation/reportar_sheet.dart';
 import '../data/live_api.dart';
 import '../domain/live_models.dart';
+import '../../social/data/seguimientos.dart';
 import 'shop_sheet.dart';
 import 'variant_sheet.dart';
 
@@ -120,12 +121,14 @@ class _SellerProfileScreenState extends ConsumerState<SellerProfileScreen> {
     if (perfil == null || _alternandoFollow) return;
 
     setState(() => _alternandoFollow = true);
-    final api = ref.read(liveApiProvider);
+    // ⚠️ Por `Seguimientos`, no por `LiveApi`: es lo que avisa a la pestaña
+    // «Siguiendo» del feed. Ver `seguimientos.dart`.
+    final seguimientos = ref.read(seguimientosProvider.notifier);
 
     try {
       final r = perfil.loSigo == true
-          ? await api.dejarDeSeguir(widget.sellerId)
-          : await api.seguir(widget.sellerId);
+          ? await seguimientos.dejarDeSeguir(widget.sellerId)
+          : await seguimientos.seguir(widget.sellerId);
 
       if (mounted) {
         setState(() => _perfil = perfil.conFollow(r.siguiendo, r.seguidores));

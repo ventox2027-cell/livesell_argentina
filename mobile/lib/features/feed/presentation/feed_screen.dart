@@ -9,13 +9,16 @@ import '../../../core/design/tokens.dart';
 import '../../../core/network/errores_de_red.dart';
 import '../../../core/network/reintentar_al_volver_la_red.dart';
 import '../../../shared/widgets/app_snack.dart';
+import '../../auth/domain/session.dart';
 import '../../auth/state/auth_providers.dart';
 import '../../inventory/presentation/reserve_sheet.dart';
 import '../../lives/data/live_api.dart';
 import '../../lives/presentation/seller_profile_screen.dart';
 import '../../seller/presentation/seller_home_screen.dart';
+import '../../social/data/seguimientos.dart';
 import '../data/feed_repository.dart';
 import '../domain/feed_models.dart';
+import '../domain/pestana_del_feed.dart';
 
 /// Feed vertical.
 ///
@@ -47,12 +50,32 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final feed = ref.watch(feedProvider);
+    /**
+     * ═══════════════════════════════════════════════════════════════════════
+     * DOS PESTAÑAS, DOS PROVIDERS — Y SE OBSERVA UNO SOLO
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * Cada pestaña tiene su provider, con su lista y su cursor. Ir y volver no
+     * pierde el lugar donde alguien estaba mirando: ninguno de los dos es
+     * `autoDispose`, así que el que ya cargó se conserva mientras la app viva.
+     *
+     * ⚠️ Y SE OBSERVA SÓLO EL DE LA PESTAÑA ACTIVA.
+     *
+     * La primera versión observaba los dos —para que el inactivo no se
+     * desechara— y eso pedía el feed DOS VECES al abrir la app: la segunda, de
+     * una pestaña que nadie está mirando, compitiendo por la misma conexión.
+     * Lo encontró `arranque_test.dart`, que cuenta peticiones.
+     *
+     * «Siguiendo» se pide la primera vez que alguien la toca, y no antes.
+     */
+    final pestana = ref.watch(pestanaDelFeedProvider);
+    final cual = pestana.esSiguiendo ? feedDeSeguidosProvider : feedProvider;
+    final feed = ref.watch(cual);
 
     return feed.when(
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (e, _) {
-        void recargar() => ref.read(feedProvider.notifier).recargar();
+        void recargar() => ref.read(cual.notifier).recargar();
         return ReintentarAlVolverLaRed(
           error: e,
           onReintentar: recargar,
@@ -75,7 +98,18 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
           TrazaDeArranque.instancia.informar('arranque');
         }
 
-        if (publicaciones.isEmpty) return const _FeedVacio();
+        /**
+         * Vacío no es lo mismo en las dos pestañas.
+         *
+         * En «Para vos», que no haya nada significa que todavía no hay
+         * catálogo: lo que corresponde es invitar a publicar. En «Siguiendo»
+         * significa que esta persona no sigue a nadie —o que a quienes sigue no
+         * les queda nada publicado—, y decirle «sé el primero en publicar» ahí
+         * no tiene ningún sentido.
+         */
+        if (publicaciones.isEmpty) {
+          return pestana.esSiguiendo ? const _SinSeguidos() : const _FeedVacio();
+        }
 
         // El índice puede quedar fuera de rango si el feed se recarga con menos
         // publicaciones de las que había.
@@ -93,7 +127,8 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
                 // final. Esperar a la última deja un hueco visible mientras
                 // llega la respuesta.
                 if (i >= publicaciones.length - 3) {
-                  ref.read(feedProvider.notifier).cargarMas();
+                  // La pestaña que se está mirando, no siempre «Para vos».
+                  ref.read(cual.notifier).cargarMas();
                 }
               },
               itemBuilder: (_, i) => _Publicacion(datos: publicaciones[i]),
@@ -118,6 +153,8 @@ class _BarraSuperior extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final pestana = ref.watch(pestanaDelFeedProvider);
+
     return Positioned(
       top: 0,
       left: 0,
@@ -130,12 +167,30 @@ class _BarraSuperior extends ConsumerWidget {
             padding: const EdgeInsets.symmetric(horizontal: Gap.lg, vertical: Gap.sm),
             child: Row(
               children: [
-                const _Pestana('Siguiendo', activa: false),
+                _Pestana(
+                  'Siguiendo',
+                  activa: pestana.esSiguiendo,
+                  onTap: () => ref
+                      .read(pestanaDelFeedProvider.notifier)
+                      .elegir(PestanaDelFeed.siguiendo),
+                ),
                 const SizedBox(width: Gap.xl),
-                const _Pestana('Para vos', activa: true),
+                _Pestana(
+                  'Para vos',
+                  activa: !pestana.esSiguiendo,
+                  onTap: () =>
+                      ref.read(pestanaDelFeedProvider.notifier).elegir(PestanaDelFeed.paraVos),
+                ),
                 const Spacer(),
                 IconButton(
-                  onPressed: () => ref.read(feedProvider.notifier).recargar(),
+                  // Recarga la pestaña que se está mirando.
+                  onPressed: () => ref
+                      .read(
+                        pestana.esSiguiendo
+                            ? feedDeSeguidosProvider.notifier
+                            : feedProvider.notifier,
+                      )
+                      .recargar(),
                   icon: const Icon(Icons.refresh_rounded),
                   tooltip: 'Actualizar',
                   color: AppColor.texto,
@@ -149,38 +204,54 @@ class _BarraSuperior extends ConsumerWidget {
   }
 }
 
+/// Una de las dos pestañas del feed.
+///
+/// ⚠️ Tiene `onTap`. Parece obvio y es justo lo que faltaba: «Siguiendo» estaba
+/// dibujada al lado de «Para vos», con su subrayado apagado, y no la escuchaba
+/// nadie. Tocarla no hacía nada porque no había nada que hacer.
+///
+/// El área táctil se agranda con `padding` y `HitTestBehavior.opaque`: el texto
+/// solo mide unos 14 píxeles de alto, que es la mitad de lo que un dedo puede
+/// apuntar con confianza.
 class _Pestana extends StatelessWidget {
-  const _Pestana(this.texto, {required this.activa});
+  const _Pestana(this.texto, {required this.activa, required this.onTap});
   final String texto;
   final bool activa;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(
-          texto,
-          style: TextStyle(
-            fontSize: 16,
-            fontWeight: activa ? FontWeight.w700 : FontWeight.w500,
-            color: activa ? AppColor.texto : AppColor.textoSuave,
-          ),
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: Gap.sm, vertical: Gap.sm),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              texto,
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: activa ? FontWeight.w700 : FontWeight.w500,
+                color: activa ? AppColor.texto : AppColor.textoSuave,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Container(
+              width: activa ? 22 : 0,
+              height: 2.5,
+              decoration: BoxDecoration(
+                color: AppColor.texto,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ],
         ),
-        const SizedBox(height: 4),
-        Container(
-          width: activa ? 22 : 0,
-          height: 2.5,
-          decoration: BoxDecoration(
-            color: AppColor.texto,
-            borderRadius: BorderRadius.circular(2),
-          ),
-        ),
-      ],
+      ),
     );
   }
 }
-
 class _Publicacion extends StatelessWidget {
   const _Publicacion({required this.datos});
   final PublicacionFeed datos;
@@ -426,11 +497,13 @@ class _BotonSeguirState extends ConsumerState<_BotonSeguir> {
     if (_enviando) return;
     setState(() => _enviando = true);
 
-    final api = ref.read(liveApiProvider);
+    // ⚠️ Por `Seguimientos`, no por `LiveApi`: es lo que avisa a la pestaña
+    // «Siguiendo» de que a quién sigo cambió. Ver `seguimientos.dart`.
+    final seguimientos = ref.read(seguimientosProvider.notifier);
     try {
       final r = _siguiendo == true
-          ? await api.dejarDeSeguir(widget.sellerId)
-          : await api.seguir(widget.sellerId);
+          ? await seguimientos.dejarDeSeguir(widget.sellerId)
+          : await seguimientos.seguir(widget.sellerId);
       if (mounted) setState(() => _siguiendo = r.siguiendo);
     } catch (_) {
       // El estado no cambia: mejor que mostrar "Siguiendo" sobre algo que falló.
@@ -735,6 +808,81 @@ class _Accion extends StatelessWidget {
 /// No se rellena con productos de ejemplo. Un catálogo falso hace que el
 /// vendedor crea que la app ya tiene contenido y no publique el suyo — que es
 /// justamente lo único que puede llenar este feed hoy.
+/// «Siguiendo» sin nada que mostrar.
+///
+/// ═══════════════════════════════════════════════════════════════════════════
+/// UNA PANTALLA VACÍA NO ES UNA PANTALLA ROTA
+/// ═══════════════════════════════════════════════════════════════════════════
+///
+/// Quien entra acá el primer día no sigue a nadie, y eso es lo normal, no un
+/// error. Lo que hace falta es decir qué se gana siguiendo a alguien y cómo se
+/// hace — el botón «Seguir» está en el perfil del vendedor y en cada
+/// publicación, y desde acá no se ve ninguno.
+///
+/// ⚠️ Sin sesión el mensaje es otro. No es que no siga a nadie: es que todavía
+/// no hay cuenta a la que atarle nada. Decirle «seguí vendedores» a alguien que
+/// no puede seguir a nadie es mandarlo a buscar un botón que no va a encontrar.
+class _SinSeguidos extends ConsumerWidget {
+  const _SinSeguidos();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final haySesion = ref.watch(sesionProvider) is ConSesion;
+
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(Gap.xl),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 72,
+              height: 72,
+              decoration: BoxDecoration(
+                color: AppColor.superficieAlta,
+                borderRadius: BorderRadius.circular(Redondeo.lg),
+              ),
+              child: const Icon(
+                Icons.person_add_alt_1_outlined,
+                size: 32,
+                color: AppColor.textoSuave,
+              ),
+            ),
+            const SizedBox(height: Gap.xl),
+            Text(
+              haySesion ? 'Todavía no seguís a nadie' : 'Seguí a tus vendedores',
+              style: Theme.of(context).textTheme.headlineSmall,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: Gap.sm),
+            Text(
+              haySesion
+                  ? 'Cuando sigas a un vendedor, sus productos y sus vivos '
+                      'aparecen acá. Tocá «Seguir» en su perfil o en cualquier '
+                      'publicación.'
+                  : 'Entrá a tu cuenta para seguir vendedores y tener acá lo '
+                      'que publican.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: AppColor.textoSuave, fontSize: 15, height: 1.5),
+            ),
+            const SizedBox(height: Gap.xl),
+            FilledButton(
+              onPressed: () =>
+                  ref.read(pestanaDelFeedProvider.notifier).elegir(PestanaDelFeed.paraVos),
+              child: const Text('Descubrir vendedores'),
+            ),
+            const SizedBox(height: Gap.sm),
+            TextButton(
+              onPressed: () => ref.read(feedDeSeguidosProvider.notifier).recargar(),
+              child: const Text('Actualizar'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _FeedVacio extends ConsumerWidget {
   const _FeedVacio();
 

@@ -192,6 +192,7 @@ class _RepoFalso extends FeedRepository {
     String? cursor,
     int limit = 20,
     String? q,
+    bool soloSeguidos = false,
   }) async {
     _consultas.add(q ?? '');
     return (items: _resultados, nextCursor: null);

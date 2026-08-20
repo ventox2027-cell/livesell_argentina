@@ -365,6 +365,25 @@ export const DiscoverQuerySchema = PageQuerySchema.extend({
    */
   enVivo: z.coerce.boolean().optional(),
 
+  /**
+   * Sólo productos de vendedores que esta persona sigue.
+   *
+   * ═══════════════════════════════════════════════════════════════════════════
+   * ES UN FILTRO, NO UN FEED APARTE
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * «Siguiendo» muestra lo mismo que «Para vos» —los mismos productos, la misma
+   * tarjeta, el mismo orden— restringido a quienes la persona eligió seguir. Un
+   * endpoint propio duplicaría el armado de la tarjeta, que es la parte más
+   * compleja de la respuesta, para no cambiar nada más que un `WHERE`.
+   *
+   * ⚠️ Sin sesión devuelve vacío, no un error. La ruta es pública y se puede
+   * mirar sin cuenta; pedir sesión con un 401 rompería el feed de quien todavía
+   * no se registró. La app, del otro lado, ni siquiera ofrece la pestaña sin
+   * sesión.
+   */
+  siguiendo: z.coerce.boolean().optional(),
+
   /** Productos de una tienda. Sirve para «más de esta tienda». */
   tienda: z.string().trim().max(40).optional(),
 

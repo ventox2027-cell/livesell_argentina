@@ -731,7 +731,12 @@ export class ProductsService {
    * cambio es materializar el puntaje en una columna y ordenar por ahí. La
    * fórmula ya está aparte, así que no habría que reescribirla.
    */
-  async listDiscover(query: DiscoverQueryDto) {
+  /**
+   * `userId` es opcional: la ruta es pública y casi siempre no hay sesión.
+   *
+   * Sólo lo usa el filtro «siguiendo», que sin sesión no tiene a quién seguir.
+   */
+  async listDiscover(query: DiscoverQueryDto, userId?: string) {
     /**
      * Con texto, la búsqueda manda.
      *
@@ -744,31 +749,64 @@ export class ProductsService {
     }
 
     /**
-     * «En vivo ahora»: se resuelve ANTES de la consulta principal.
+     * ═══════════════════════════════════════════════════════════════════════
+     * LOS FILTROS QUE NO SE PUEDEN ESCRIBIR COMO UN `WHERE` SOBRE `product`
+     * ═══════════════════════════════════════════════════════════════════════
      *
-     * ⚠️ Es el único filtro que no se puede expresar como una condición sobre
-     * `product`: depende de qué vendedores están transmitiendo en este
-     * instante, que vive en otra tabla y cambia cada pocos minutos.
+     * Son dos, y los dos terminan en lo mismo: una lista de vendedores.
      *
-     * Se resuelve pidiendo primero la lista de vendedores al aire y filtrando
-     * por ella.
+     *   **«en vivo ahora»** — depende de quién está transmitiendo en este
+     *   instante, que vive en `liveSession` y cambia cada pocos minutos.
      *
-     * El corte con cero vendedores es un atajo, no una corrección. Escribiendo
-     * esto se asumió que Prisma traduciría `in: []` a algo que devuelve todo;
-     * se comprobó contra la base y no: lo traduce a `WHERE false` y devuelve
-     * vacío, que es lo correcto. Lo que el corte ahorra es una consulta con
-     * seis joins que ya se sabe que no va a traer nada — y esta es la pantalla
-     * más visitada de la app.
+     *   **«siguiendo»** — depende de a quién sigue ESTA persona, que vive en
+     *   `follows`.
+     *
+     * ⚠️ Se combinan en UNA sola lista, con la intersección. Antes cada uno
+     * escribía su propio `store: { sellerId: ... }` en el `where`, y dos
+     * propiedades con la misma clave en un objeto literal no se suman: la
+     * segunda pisa a la primera. «Siguiendo» + «en vivo» habría mostrado
+     * cualquiera de los dos, en silencio.
+     *
+     * El corte con lista vacía es un atajo, no una corrección: Prisma traduce
+     * `in: []` a `WHERE false`, que ya es lo correcto. Lo que ahorra es una
+     * consulta con seis joins que se sabe que no va a traer nada — y esta es la
+     * pantalla más visitada de la app.
      */
-    let sellersEnVivo: string[] | null = null;
+    let vendedores: string[] | null = null;
+
+    const restringirA = (lista: string[]): boolean => {
+      vendedores = vendedores === null ? lista : vendedores.filter((id) => lista.includes(id));
+      return vendedores.length > 0;
+    };
+
     if (query.enVivo) {
       const sesiones = await this.prisma.liveSession.findMany({
         where: { state: { in: ['LIVE', 'RECONNECTING'] } },
         select: { sellerId: true },
         distinct: ['sellerId'],
       });
-      sellersEnVivo = sesiones.map((s) => s.sellerId);
-      if (sellersEnVivo.length === 0) return { items: [], nextCursor: null };
+      if (!restringirA(sesiones.map((s) => s.sellerId))) {
+        return { items: [], nextCursor: null };
+      }
+    }
+
+    if (query.siguiendo) {
+      /**
+       * Sin sesión no hay a quién seguir, y eso NO es un error.
+       *
+       * La app no ofrece la pestaña sin sesión, así que llegar acá sin usuario
+       * es alguien probando la URL. Devolver vacío es lo mismo que decirle a
+       * quien no sigue a nadie: no hay nada para mostrar.
+       */
+      if (!userId) return { items: [], nextCursor: null };
+
+      const seguidos = await this.prisma.follow.findMany({
+        where: { userId },
+        select: { sellerId: true },
+      });
+      if (!restringirA(seguidos.map((f) => f.sellerId))) {
+        return { items: [], nextCursor: null };
+      }
     }
 
     /**
@@ -834,7 +872,7 @@ export class ProductsService {
         // dentro de Calzado es una búsqueda legítima.
         ...(query.categoria ? { categoryId: query.categoria } : {}),
         ...(query.tienda ? { storeId: query.tienda } : {}),
-        ...(sellersEnVivo ? { store: { sellerId: { in: sellersEnVivo } } } : {}),
+        ...(vendedores ? { store: { sellerId: { in: vendedores } } } : {}),
 
         /**
          * El precio filtra por `basePriceCents`, el precio del PRODUCTO.

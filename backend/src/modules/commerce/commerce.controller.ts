@@ -193,11 +193,18 @@ export class CommerceController {
    * Alguien que todavía no se registró tiene que poder ver qué se vende acá.
    * Pedir sesión para mirar la vidriera es la forma más rápida de no tener
    * usuarios: la cuenta se pide cuando quiere comprar, no antes.
+   *
+   * ⚠️ `@CurrentUser()` es opcional, y lo usa un solo filtro: `siguiendo`, que
+   * necesita saber a quién sigue esta persona. Sin sesión ese filtro devuelve
+   * vacío; el resto del feed anda igual que siempre.
    */
   @Public()
   @Get('discover/products')
-  discover(@Query(new ZodValidationPipe(DiscoverQuerySchema)) query: DiscoverQueryDto) {
-    return this.products.listDiscover(query);
+  discover(
+    @Query(new ZodValidationPipe(DiscoverQuerySchema)) query: DiscoverQueryDto,
+    @CurrentUser() user?: AuthenticatedUser,
+  ) {
+    return this.products.listDiscover(query, user?.id);
   }
 
   /**
