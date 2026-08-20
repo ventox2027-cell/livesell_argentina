@@ -1,8 +1,11 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:dio/dio.dart';
+import 'package:dio/io.dart';
 
 import '../auth/token_store.dart';
+import '../config/traza_de_arranque.dart';
 import '../config/runtime_config.dart';
 
 /// Cliente HTTP de la aplicación.
@@ -41,8 +44,117 @@ class ApiClient {
       // interceptor puede reintentar tras refrescar.
       ..validateStatus = (s) => s != null && s < 500;
 
+    /**
+     * ═══════════════════════════════════════════════════════════════════════
+     * LA CONEXIÓN SE REUSA TRES MINUTOS, NO QUINCE SEGUNDOS
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * Medido desde Argentina contra `api.vendox.com.ar`:
+     *
+     *     TCP  ≈ 135 ms   ← un viaje de ida y vuelta. Es la distancia.
+     *     TLS  ≈ 143 ms   ← otro viaje.
+     *     ────────────
+     *     ≈ 280 ms sólo para poder EMPEZAR a pedir algo.
+     *
+     * `HttpClient` de Dart cierra las conexiones ociosas a los **15 segundos**.
+     * Un vendedor que mira su tienda, piensa, y toca un producto, ya pasó ese
+     * tiempo: la petición siguiente vuelve a pagar los 280 ms enteros.
+     *
+     * Y no es sólo eso. `/health` responde en 166 ms cuando la conexión está
+     * abierta y en ~500 con una nueva. O sea que **la mitad larga de una
+     * petición rápida es abrir la conexión**, y se estaba tirando cada quince
+     * segundos de quietud.
+     *
+     * ⚠️ Esto NO es subir un timeout ni esconder nada: los timeouts quedan
+     * donde estaban. Es dejar de tirar una conexión que sigue siendo válida.
+     * HTTP tiene keep-alive precisamente para esto, y el servidor la cierra
+     * cuando quiere — el cliente no puede forzarlo a mantenerla.
+     *
+     * Tres minutos y no más: una conexión ociosa consume un socket del lado del
+     * servidor, y pasado ese rato la app probablemente esté en segundo plano,
+     * donde Android la corta igual.
+     */
+    /**
+     * ⚠️ Sólo si el `Dio` lo creamos NOSOTROS.
+     *
+     * Quien inyecta un `Dio` ya eligió su adaptador —los tests le ponen uno de
+     * mentira para no salir a la red— y pisárselo desde acá lo deja hablando
+     * con Internet de verdad.
+     *
+     * Se descubrió rompiendo tres tests de categorías: esperaban un 404 del
+     * doble y recibían un 400 del mundo real. Sin esa guarda, cualquier test
+     * que inyecte un `Dio` deja de probar lo que cree.
+     */
+    if (dio == null) {
+      _dio.httpClientAdapter = IOHttpClientAdapter(
+        createHttpClient: () => HttpClient()
+          ..idleTimeout = const Duration(minutes: 3)
+          /**
+           * Seis en paralelo, como un navegador.
+           *
+           * Sin tope, `HttpClient` abre una conexión por petición concurrente
+           * y cada una paga su propio handshake. Con seis, las que sobran
+           * esperan un hueco en vez de gastar 280 ms en abrir su propio túnel.
+           */
+          ..maxConnectionsPerHost = 6,
+      );
+    }
+
+    /**
+     * ⚠️ Los interceptores van SIEMPRE, con `Dio` propio o inyectado.
+     *
+     * Sólo el adaptador queda afuera del `if`: es lo único que un doble de
+     * pruebas reemplaza. Meter los interceptores adentro dejaría a cualquier
+     * test con `Dio` inyectado sin autenticación ni refresco de token — o sea
+     * probando un cliente que no es el que corre.
+     */
     _dio.interceptors.add(
       InterceptorsWrapper(onRequest: _alPedir, onResponse: _alResponder),
+    );
+
+    /**
+     * ═══════════════════════════════════════════════════════════════════════
+     * QUÉ PETICIÓN SE LLEVA EL ARRANQUE
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * «La primera apertura tarda muchísimo» no dice cuál de las peticiones es.
+     * Y son varias, con costos muy distintos: la primera paga además abrir la
+     * conexión —unos 280 ms de TCP y TLS desde Argentina— y las siguientes no.
+     *
+     * Esto anota cada petición mientras la traza del arranque sigue corriendo,
+     * o sea hasta que el feed se ve. Después se apaga solo y no cuesta nada.
+     *
+     * ⚠️ Sólo el método y la RUTA. Nunca la cadena de consulta —ahí viaja el
+     * término de búsqueda—, nunca las cabeceras, nunca el cuerpo.
+     */
+    _dio.interceptors.add(
+      InterceptorsWrapper(
+        onRequest: (opciones, siguiente) {
+          if (TrazaDeArranque.instancia.corriendo) {
+            opciones.extra['_desdeMs'] = TrazaDeArranque.instancia.ahora;
+          }
+          siguiente.next(opciones);
+        },
+        onResponse: (respuesta, siguiente) {
+          _anotar(respuesta.requestOptions, respuesta.statusCode);
+          siguiente.next(respuesta);
+        },
+        onError: (error, siguiente) {
+          _anotar(error.requestOptions, null);
+          siguiente.next(error);
+        },
+      ),
+    );
+  }
+
+  void _anotar(RequestOptions opciones, int? codigo) {
+    final desde = opciones.extra['_desdeMs'];
+    if (desde is! int || !TrazaDeArranque.instancia.corriendo) return;
+
+    final etiqueta = codigo == null ? 'falló' : '$codigo';
+    TrazaDeArranque.instancia.tramo(
+      '${opciones.method} ${opciones.path} $etiqueta',
+      desdeMs: desde,
     );
   }
 

@@ -35,10 +35,97 @@ import 'package:dio/dio.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Qué salió mal, en las categorías que le importan a quien está mirando.
+///
+/// ═══════════════════════════════════════════════════════════════════════════
+/// «SIN CONEXIÓN» ERA MENTIRA LA MITAD DE LAS VECES
+/// ═══════════════════════════════════════════════════════════════════════════
+///
+/// Reportado en QA: con el wifi andando perfecto, abrir la app mostraba «No
+/// pudimos conectarnos. Revisá tu conexión». La persona miraba el teléfono,
+/// veía las barras llenas, y no entendía nada.
+///
+/// La causa es que todo lo que no fuera una respuesta del servidor se metía en
+/// la misma bolsa. Y ahí adentro hay tres cosas muy distintas:
+///
+///   · **No hay Internet.** El DNS no resuelve, la red no está. Revisar la
+///     conexión es exactamente lo que hay que hacer.
+///   · **No llegamos al servidor.** Hay Internet, pero VendoX no contesta el
+///     saludo. Revisar la conexión no sirve de nada: el problema es nuestro.
+///   · **El servidor es lento.** Conectamos bien y se está tomando su tiempo.
+///     Decirle a alguien que revise su wifi mientras nuestro backend piensa es
+///     mandarlo a arreglar algo que no está roto.
+///
+/// Los tres se ven igual desde el código si uno no mira el tipo. Por eso esto
+/// existe.
+enum ClaseDeFallo {
+  /// El teléfono no tiene red. El DNS no resuelve o la red no está.
+  sinInternet,
+
+  /// Hay red pero no llegamos: rechazo o tiempo agotado al conectar.
+  noLlegamosAlServidor,
+
+  /// Conectamos y no contesta a tiempo. El problema es nuestro, no de la red.
+  servidorLento,
+
+  /// Nada de lo anterior: una respuesta del servidor, o un error del programa.
+  noEsDeRed,
+}
+
+/// Clasifica el fallo. Es lo que decide QUÉ SE LE DICE a la persona.
+///
+/// ⚠️ Distinto de [esFalloDeRed], que decide OTRA cosa: si conviene reintentar
+/// cuando vuelva la conectividad. Las dos preguntas tienen respuestas distintas
+/// y juntarlas fue el origen del mensaje equivocado.
+ClaseDeFallo claseDeFallo(Object e) {
+  final socket = e is SocketException ? e : (e is DioException ? e.error : null);
+
+  if (socket is SocketException) {
+    /**
+     * Un fallo de resolución es, en la práctica, no tener Internet.
+     *
+     * `Failed host lookup` aparece cuando el DNS no contesta, y eso pasa
+     * cuando la red no está. Un servidor caído NO produce esto: el nombre
+     * resuelve igual y después falla la conexión, que es el caso de abajo.
+     */
+    final texto = socket.message;
+    if (texto.contains('Failed host lookup') ||
+        texto.contains('Network is unreachable') ||
+        texto.contains('No address associated with hostname')) {
+      return ClaseDeFallo.sinInternet;
+    }
+    return ClaseDeFallo.noLlegamosAlServidor;
+  }
+
+  if (e is! DioException) return ClaseDeFallo.noEsDeRed;
+
+  return switch (e.type) {
+    DioExceptionType.connectionTimeout ||
+    DioExceptionType.connectionError =>
+      ClaseDeFallo.noLlegamosAlServidor,
+
+    /**
+     * ⚠️ Acá está el arreglo.
+     *
+     * `receiveTimeout` significa que la conexión se abrió, la petición viajó, y
+     * el servidor no contestó a tiempo. La red funcionó de punta a punta. Decir
+     * «revisá tu conexión» es señalar al único componente que anduvo bien.
+     */
+    DioExceptionType.receiveTimeout || DioExceptionType.sendTimeout => ClaseDeFallo.servidorLento,
+    _ => ClaseDeFallo.noEsDeRed,
+  };
+}
+
 /// Si el problema es la red y no una respuesta del servidor.
 ///
 /// Se distingue porque cambia qué hacer: un fallo de red se reintenta solo
 /// cuando vuelve la señal; un 409 del backend no se reintenta nunca.
+///
+/// ⚠️ A propósito es MÁS AMPLIO que `ClaseDeFallo.sinInternet`. Acá la pregunta
+/// es «¿conviene reintentar cuando vuelva la conectividad?», y la respuesta es
+/// sí también para un tiempo agotado: un corte de red de dos segundos se ve
+/// como timeout, no como DNS caído. Angostarlo rompería la recuperación
+/// automática, que hoy funciona.
 bool esFalloDeRed(Object e) {
   if (e is SocketException) return true;
   if (e is! DioException) return false;
@@ -62,10 +149,16 @@ bool esFalloDeRed(Object e) {
 /// ⚠️ Nunca incluye hostnames, errno, nombres de excepción ni rutas. Si algo de
 /// eso hace falta para diagnosticar, va al log — no a la pantalla.
 String mensajeDeError(Object e) {
-  if (esFalloDeRed(e)) {
-    return 'No pudimos conectarnos. Revisá tu conexión: lo reintentamos solos '
-        'en cuanto vuelva.';
-  }
+  final mensajeDelFallo = switch (claseDeFallo(e)) {
+    ClaseDeFallo.sinInternet =>
+      'Sin conexión a Internet. Lo reintentamos solos en cuanto vuelva.',
+    ClaseDeFallo.noLlegamosAlServidor =>
+      'No pudimos conectarnos con VendoX. Lo reintentamos solos en un momento.',
+    ClaseDeFallo.servidorLento =>
+      'VendoX está tardando más de lo esperado. Lo reintentamos solos.',
+    ClaseDeFallo.noEsDeRed => null,
+  };
+  if (mensajeDelFallo != null) return mensajeDelFallo;
 
   if (e is DioException) {
     final codigo = e.response?.statusCode ?? 0;

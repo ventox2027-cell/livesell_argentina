@@ -506,6 +506,96 @@ void main() {
     });
   });
 
+  /// Qué se le dice a la persona, según qué falló.
+  ///
+  /// ═══════════════════════════════════════════════════════════════════════════
+  /// «SIN CONEXIÓN» ERA MENTIRA LA MITAD DE LAS VECES
+  /// ═══════════════════════════════════════════════════════════════════════════
+  ///
+  /// Reportado en QA de la v0.1.2: con el wifi andando perfecto, abrir la app
+  /// mostraba «No pudimos conectarnos. Revisá tu conexión». La persona miraba
+  /// el teléfono, veía las barras llenas, y no entendía nada.
+  ///
+  /// Todo lo que no fuera una respuesta del servidor caía en la misma bolsa. Y
+  /// ahí adentro hay tres cosas distintas, con acciones distintas.
+  group('Sin Internet no es lo mismo que servidor lento', () {
+    /// Sin red: el DNS no resuelve. Ahí sí hay algo que revisar.
+    test('un fallo de DNS es falta de Internet', () {
+      expect(claseDeFallo(sinDns()), ClaseDeFallo.sinInternet);
+      expect(mensajeDeError(sinDns()), contains('Sin conexión a Internet'));
+    });
+
+    /// ⛔ EL CASO DEL REPORTE.
+    ///
+    /// `receiveTimeout` significa que la conexión se abrió, la petición viajó,
+    /// y el servidor no contestó a tiempo. La red funcionó de punta a punta.
+    /// Decir «revisá tu conexión» es señalar al único componente que anduvo
+    /// bien.
+    test('⛔ un servidor lento NO dice que revises la conexión', () {
+      final lento = DioException(
+        requestOptions: RequestOptions(path: '/discover/products'),
+        type: DioExceptionType.receiveTimeout,
+      );
+
+      expect(claseDeFallo(lento), ClaseDeFallo.servidorLento);
+
+      final mensaje = mensajeDeError(lento);
+      expect(mensaje, contains('tardando'));
+      expect(mensaje, isNot(contains('Revisá tu conexión')));
+      expect(mensaje, isNot(contains('Sin conexión a Internet')));
+    });
+
+    /// ⛔ Y no llegar al servidor tampoco es culpa de la red de la persona.
+    ///
+    /// Hay Internet: el nombre resolvió. Lo que no contesta somos nosotros.
+    test('⛔ no llegar al servidor se dice como lo que es', () {
+      final noLlega = DioException(
+        requestOptions: RequestOptions(path: '/health'),
+        type: DioExceptionType.connectionTimeout,
+      );
+
+      expect(claseDeFallo(noLlega), ClaseDeFallo.noLlegamosAlServidor);
+      expect(mensajeDeError(noLlega), contains('VendoX'));
+      expect(mensajeDeError(noLlega), isNot(contains('Sin conexión a Internet')));
+    });
+
+    /// Una conexión rechazada tampoco es falta de Internet.
+    test('conexión rechazada: hay red, no hay servidor', () {
+      const rechazo = SocketException('Connection refused', osError: OSError('', 111));
+      expect(claseDeFallo(rechazo), ClaseDeFallo.noLlegamosAlServidor);
+    });
+
+    /// Una respuesta del servidor no es un fallo de red.
+    test('un 409 no es ninguna de las tres', () {
+      final e = DioException(
+        requestOptions: RequestOptions(path: '/x'),
+        type: DioExceptionType.badResponse,
+        response: Response<dynamic>(requestOptions: RequestOptions(path: '/x'), statusCode: 409),
+      );
+
+      expect(claseDeFallo(e), ClaseDeFallo.noEsDeRed);
+    });
+
+    /// ⛔ LOS TRES SIGUEN REINTENTÁNDOSE SOLOS.
+    ///
+    /// Es la parte que no se puede romper: `esFalloDeRed` decide OTRA pregunta
+    /// —si conviene reintentar cuando vuelva la conectividad— y es a propósito
+    /// más amplia. Un corte de red de dos segundos se ve como timeout, no como
+    /// DNS caído; angostarla dejaría pantallas sin recuperarse.
+    test('⛔ los tres se siguen reintentando al volver la red', () {
+      final casos = <Object>[
+        sinDns(),
+        DioException(requestOptions: RequestOptions(path: '/'), type: DioExceptionType.receiveTimeout),
+        DioException(
+            requestOptions: RequestOptions(path: '/'), type: DioExceptionType.connectionTimeout),
+      ];
+
+      for (final caso in casos) {
+        expect(esFalloDeRed(caso), isTrue, reason: '$caso dejó de reintentarse');
+      }
+    });
+  });
+
   group('Qué cuenta como fallo de red', () {
     test('los timeouts y los cortes de conexión, sí', () {
       for (final tipo in [
