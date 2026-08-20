@@ -1188,3 +1188,154 @@ describe('La tienda del vendedor, desde el vivo', () => {
     expect(perfil.body.enVivo ?? null).toBeNull();
   });
 });
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * `vendox.com.ar/t/<slug>` — RESOLVER EL SLUG
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Los enlaces que se comparten llevan el slug; el catálogo y el horario
+ * resuelven por id. Este endpoint traduce, y de paso decide si esa tienda se
+ * puede mostrar.
+ */
+describe('La tienda por su slug', () => {
+  /** El slug que le tocó a la tienda de este vendedor. */
+  async function slugDeSuTienda(token: string): Promise<string> {
+    const tienda = await call('GET', '/api/v1/stores/me', { token });
+    expect(tienda.status, JSON.stringify(tienda.body)).toBe(200);
+    return tienda.body.slug as string;
+  }
+
+  it('un slug válido devuelve la tienda', async () => {
+    const v = await nuevoVendedorConProducto();
+    const slug = await slugDeSuTienda(v.token);
+
+    const r = await call('GET', `/api/v1/stores/by-slug/${slug}`);
+
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.body.slug).toBe(slug);
+    expect(r.body.id).toMatch(/^sto_/);
+    expect(r.body.name).toBeTruthy();
+    expect(r.body.seller.id).toBe(v.sellerId);
+  });
+
+  /**
+   * ⛔ Y ESE ID SIRVE PARA EL CATÁLOGO.
+   *
+   * Es lo que ata el enlace compartido con la pantalla de tienda: el mismo
+   * camino que ya usa quien la abre desde un vivo. Sin esto, resolver el slug
+   * no serviría de nada.
+   */
+  it('⛔ el id que devuelve abre el catálogo', async () => {
+    const v = await nuevoVendedorConProducto();
+    const slug = await slugDeSuTienda(v.token);
+
+    const tienda = await call('GET', `/api/v1/stores/by-slug/${slug}`);
+    const catalogo = await call('GET', `/api/v1/stores/${tienda.body.id}/catalog?limit=20`);
+
+    expect(catalogo.status, JSON.stringify(catalogo.body)).toBe(200);
+    expect(catalogo.body.items.map((p: { id: string }) => p.id)).toContain(v.productId);
+  });
+
+  /**
+   * ⛔ UN SLUG QUE NO EXISTE ES 404, NO 500 NI UNA TIENDA CUALQUIERA.
+   *
+   * Pasa con un enlace viejo o mal copiado. La app dibuja «no encontramos esta
+   * tienda» con esto; un 500 la mandaría a la pantalla de error técnico.
+   */
+  it('⛔ un slug inexistente da 404', async () => {
+    const r = await call('GET', '/api/v1/stores/by-slug/esta-tienda-no-existe-jamas');
+
+    expect(r.status).toBe(404);
+    expect(r.body.error.code).toBe('STORE_NOT_FOUND');
+  });
+
+  /** Sin sesión también: un enlace compartido lo abre cualquiera. */
+  it('se puede abrir sin cuenta', async () => {
+    const v = await nuevoVendedorConProducto();
+    const slug = await slugDeSuTienda(v.token);
+
+    expect((await call('GET', `/api/v1/stores/by-slug/${slug}`)).status).toBe(200);
+  });
+
+  /**
+   * ⛔ UN VENDEDOR SUSPENDIDO NO TIENE VIDRIERA.
+   *
+   * Es la razón por la que esto vive en el servidor y no en la app. Si la app
+   * resolviera el slug por su cuenta, o si acá se devolviera cualquier tienda,
+   * bastaría con tener el enlace guardado para seguir viendo —y comprando— lo
+   * de alguien suspendido.
+   */
+  it('⛔ la tienda de un vendedor suspendido no se resuelve', async () => {
+    const v = await nuevoVendedorConProducto();
+    const slug = await slugDeSuTienda(v.token);
+
+    await prisma.seller.update({
+      where: { id: v.sellerId },
+      data: { status: 'SUSPENDED' },
+    });
+
+    const r = await call('GET', `/api/v1/stores/by-slug/${slug}`);
+
+    expect(r.status).toBe(404);
+  });
+
+  /**
+   * ⛔ Y DICE SI ESTÁ TRANSMITIENDO, PARA MOSTRAR «EN VIVO».
+   *
+   * Quien llega por un enlace no sabe si hay alguien mostrando esto ahora
+   * mismo, y es lo primero que le sirve saber.
+   */
+  it('⛔ con el vendedor al aire, trae el vivo', async () => {
+    const v = await nuevoVendedorConProducto();
+    const slug = await slugDeSuTienda(v.token);
+
+    const creado = await call('POST', '/api/v1/live', {
+      token: v.token,
+      body: { title: 'Al aire', productIds: [v.productId] },
+    });
+    await call('POST', `/api/v1/live/${creado.body.id}/start`, { token: v.token });
+
+    const r = await call('GET', `/api/v1/stores/by-slug/${slug}`);
+
+    expect(r.body.enVivo).toBeTruthy();
+    expect(r.body.enVivo.id).toBe(creado.body.id);
+  });
+
+  /**
+   * ⛔ Y CUANDO NO TRANSMITE, NO LO INVENTA.
+   *
+   * «EN VIVO» sobre un vendedor offline manda a la persona a buscar una
+   * transmisión que no existe.
+   */
+  it('⛔ offline, enVivo viene en null', async () => {
+    const v = await nuevoVendedorConProducto();
+    const slug = await slugDeSuTienda(v.token);
+
+    const r = await call('GET', `/api/v1/stores/by-slug/${slug}`);
+
+    expect(r.body.enVivo).toBeNull();
+  });
+
+  /**
+   * ⛔ Y AL TERMINAR EL VIVO, DEJA DE DECIRLO.
+   *
+   * La tienda es permanente; el vivo no. Un `enVivo` que quedara pegado
+   * mandaría a la gente a una transmisión terminada.
+   */
+  it('⛔ terminado el vivo, vuelve a null', async () => {
+    const v = await nuevoVendedorConProducto();
+    const slug = await slugDeSuTienda(v.token);
+
+    const creado = await call('POST', '/api/v1/live', {
+      token: v.token,
+      body: { title: 'Corto', productIds: [v.productId] },
+    });
+    await call('POST', `/api/v1/live/${creado.body.id}/start`, { token: v.token });
+    await call('POST', `/api/v1/live/${creado.body.id}/end`, { token: v.token });
+
+    const r = await call('GET', `/api/v1/stores/by-slug/${slug}`);
+
+    expect(r.body.enVivo).toBeNull();
+  });
+});

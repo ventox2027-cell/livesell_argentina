@@ -72,7 +72,7 @@ void main() {
                         builder: (_) => TiendaScreen(
                           storeId: 'sto_x',
                           nombreTienda: 'Aroma Deco',
-                          liveEnCurso: liveEnCurso,
+                          liveDetras: liveEnCurso,
                         ),
                       ),
                     ),

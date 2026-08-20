@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../features/lives/presentation/live_viewer_screen.dart';
 import '../../features/lives/presentation/seller_profile_screen.dart';
+import '../../features/lives/presentation/tienda_screen.dart';
 import '../../features/orders/presentation/orders_screen.dart';
 import '../../features/support/presentation/ticket_screen.dart';
 import 'destino.dart';
@@ -20,9 +21,9 @@ import 'destino.dart';
 ///
 /// ─── Los que devuelven `null` ───
 ///
-/// Hay destinos que el resolutor entiende y para los que todavía no hay una
-/// pantalla a la que llevar directo: la tienda y la venta se ven dentro de
-/// otras pantallas, no tienen una propia con su id en la URL.
+/// Hay destinos que el resolutor entiende y para los que no hay una pantalla a
+/// la que llevar directo: la venta se ve dentro de «Mis ventas» y el producto
+/// se abre como hoja sobre la pantalla actual, no como ruta propia.
 ///
 /// Devolver `null` hace que el enlace abra la app y no navegue. Es lo correcto:
 /// abrir una pantalla parecida sería llevar a alguien a un lugar que no pidió,
@@ -44,12 +45,23 @@ Widget? pantallaDeDestino(DestinoEnApp destino) {
     TipoDeDestino.producto => null,
 
     /**
-     * La tienda se ve dentro del perfil del vendedor, y la venta dentro de
-     * «Mis ventas»: ninguna tiene pantalla propia con su id.
+     * ⚠️ La tienda llega con SLUG, no con id.
      *
-     * Se dejan sin resolver en vez de aproximar. Ver la nota de arriba.
+     * `vendox.com.ar/t/lanas-del-sur` es lo que se comparte, porque un slug se
+     * lee y un id no. Quien traduce es el backend: ahí viven las reglas de qué
+     * tienda se puede mostrar, y una copia en Dart dejaría la vidriera de un
+     * vendedor suspendido abierta para cualquiera con el enlace guardado.
+     *
+     * La traducción ocurre DENTRO de la pantalla y no acá: esta función es
+     * pura y sincrónica, y volverla `async` obligaría a todos los destinos a
+     * pasar por un camino que ninguno necesita. Ver `TiendaScreen.porSlug`.
      */
-    TipoDeDestino.tienda => null,
+    TipoDeDestino.tienda => TiendaScreen.porSlug(destino.id),
+
+    /**
+     * La venta se ve dentro de «Mis ventas»: no tiene pantalla propia con su
+     * id. Se deja sin resolver en vez de aproximar — ver la nota de arriba.
+     */
     TipoDeDestino.venta => null,
     TipoDeDestino.resena => null,
   };

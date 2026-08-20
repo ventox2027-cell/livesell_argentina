@@ -640,12 +640,44 @@ export class SellersService {
   }
 
   /** Vidriera pública de una tienda. */
+  /**
+   * La tienda que corresponde a un slug.
+   *
+   * ═══════════════════════════════════════════════════════════════════════════
+   * ES LO QUE ABRE `vendox.com.ar/t/<slug>`
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * Los enlaces que se comparten llevan el slug, porque un slug se lee y un id
+   * no. El catálogo y el horario, en cambio, resuelven por id. Acá se traduce.
+   *
+   * ⚠️ Y NO ES SÓLO UNA TRADUCCIÓN: se decide **si esa tienda se puede
+   * mostrar**. Tienda ACTIVE y vendedor ACTIVE. Si la app resolviera el slug
+   * por su cuenta, bastaría con tener un enlace guardado para seguir viendo
+   * —y comprando— lo de alguien suspendido.
+   */
   async storeBySlug(slug: string) {
     const store = await this.prisma.store.findFirst({
       where: { slug, status: 'ACTIVE', seller: { status: 'ACTIVE' } },
       include: { seller: true },
     });
     if (!store) throw new DomainError('STORE_NOT_FOUND', 'Tienda no encontrada');
+
+    /**
+     * Si el vendedor está transmitiendo AHORA.
+     *
+     * Va en esta misma respuesta y no en un pedido aparte: quien llega por un
+     * enlace compartido no sabe si hay alguien mostrando esto en este momento,
+     * y es lo primero que le sirve saber. Pedirlo por separado serían dos
+     * viajes a otro continente para dibujar una sola pantalla.
+     *
+     * `null` cuando no transmite, y la app no muestra «EN VIVO» sin esto: un
+     * aviso de transmisión sobre alguien offline manda a la persona a buscar
+     * algo que no existe.
+     */
+    const vivo = await this.prisma.liveSession.findFirst({
+      where: { sellerId: store.sellerId, state: { in: ['LIVE', 'RECONNECTING'] } },
+      select: { id: true, title: true },
+    });
 
     return {
       id: store.id,
@@ -655,6 +687,7 @@ export class SellersService {
       logoUrl: store.logoUrl,
       coverUrl: store.coverUrl,
       seller: this.publicSeller(store.seller),
+      enVivo: vivo ? { id: vivo.id, titulo: vivo.title } : null,
       // Quien mira la vidriera tiene que saber cuánto sale el envío ANTES de
       // llegar al checkout. Enterarse del costo con la tarjeta en la mano es la
       // razón número uno por la que alguien abandona una compra.

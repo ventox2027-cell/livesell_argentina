@@ -65,6 +65,22 @@ class LiveApi {
     return PaginaDeCatalogo.fromJson(r.data!);
   }
 
+  /// Resuelve el slug de un enlace compartido a la tienda.
+  ///
+  /// ⚠️ Un slug que no existe —o de un vendedor suspendido— vuelve como 404 y
+  /// se traduce a [TiendaNoEncontrada]. Es un caso normal, no un fallo: pasa
+  /// con cualquier enlace viejo.
+  Future<TiendaPublica> tiendaPorSlug(String slug) async {
+    final r = await _api.get<Map<String, dynamic>>('/stores/by-slug/$slug', sinAuth: true);
+
+    if (r.statusCode == 404) throw const TiendaNoEncontrada();
+    if (r.statusCode != 200 || r.data == null) {
+      throw StateError('No se pudo resolver la tienda $slug');
+    }
+
+    return TiendaPublica.fromJson(r.data!);
+  }
+
   Future<EstadoDeTienda> estadoDeTienda(String storeId) async {
     final r = await _api.get<Map<String, dynamic>>('/stores/$storeId/status');
     return EstadoDeTienda.fromJson(r.data!);
@@ -95,3 +111,16 @@ class LiveApi {
 }
 
 final liveApiProvider = Provider<LiveApi>((ref) => LiveApi(ref.watch(apiClientProvider)));
+
+/// El enlace lleva a una tienda que no existe, o que ya no se puede mostrar.
+///
+/// Se distingue de un fallo de red a propósito: son dos pantallas distintas.
+/// «No encontramos esta tienda» con un enlace roto, y «revisá tu conexión»
+/// cuando el problema es la red — ofrecer reintentar sobre un slug inexistente
+/// es hacer tocar un botón que nunca va a funcionar.
+class TiendaNoEncontrada implements Exception {
+  const TiendaNoEncontrada();
+
+  @override
+  String toString() => 'No encontramos esta tienda.';
+}

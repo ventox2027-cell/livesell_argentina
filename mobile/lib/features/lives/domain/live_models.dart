@@ -590,3 +590,47 @@ class DetalleDeProducto {
     );
   }
 }
+
+/// Una tienda resuelta desde su slug.
+///
+/// ═══════════════════════════════════════════════════════════════════════════
+/// LO QUE HACE FALTA PARA ABRIR `vendox.com.ar/t/<slug>`
+/// ═══════════════════════════════════════════════════════════════════════════
+///
+/// El enlace trae el slug; el catálogo se pide por id. Quien traduce es el
+/// backend, y de paso decide si esa tienda se puede mostrar —tienda y vendedor
+/// activos—. Acá sólo se transporta lo que vino.
+///
+/// ⚠️ `enVivo` puede ser `null` y eso NO es un dato faltante: significa que el
+/// vendedor no está transmitiendo. Mostrar «EN VIVO» sin este dato sería
+/// mandar a la persona a buscar una transmisión que no existe.
+class TiendaPublica {
+  const TiendaPublica({
+    required this.id,
+    required this.nombre,
+    required this.slug,
+    required this.sellerId,
+    this.liveEnCursoId,
+  });
+
+  factory TiendaPublica.fromJson(Map<String, dynamic> j) {
+    final vendedor = j['seller'] as Map<String, dynamic>? ?? const {};
+    final vivo = j['enVivo'] as Map<String, dynamic>?;
+
+    return TiendaPublica(
+      id: j['id'] as String? ?? '',
+      nombre: j['name'] as String? ?? '',
+      slug: j['slug'] as String? ?? '',
+      sellerId: vendedor['id'] as String? ?? '',
+      liveEnCursoId: vivo?['id'] as String?,
+    );
+  }
+
+  final String id;
+  final String nombre;
+  final String slug;
+  final String sellerId;
+
+  /// El vivo que está al aire ahora, o `null` si el vendedor no transmite.
+  final String? liveEnCursoId;
+}

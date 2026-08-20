@@ -287,7 +287,7 @@ class _LiveViewerScreenState extends ConsumerState<LiveViewerScreen> {
           nombreTienda: live.tiendaNombre,
           // Con esto la tienda muestra «EN VIVO» y ofrece volver. Y es lo que
           // habilita el precio exclusivo del vivo al comprar desde el catálogo.
-          liveEnCurso: live.video == null ? null : live.id,
+          liveDetras: live.video == null ? null : live.id,
         ),
       ),
     );

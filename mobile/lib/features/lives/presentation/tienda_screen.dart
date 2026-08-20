@@ -1,7 +1,15 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/design/tokens.dart';
+import '../../../core/network/errores_de_red.dart';
+import '../../../core/network/reintentar_al_volver_la_red.dart';
+import '../data/live_api.dart';
+import '../domain/como_llegar_al_vivo.dart';
+import '../domain/live_models.dart';
+import 'live_viewer_screen.dart';
 import 'variant_sheet.dart';
 import 'widgets/catalogo_de_tienda.dart';
 
@@ -12,8 +20,9 @@ import 'widgets/catalogo_de_tienda.dart';
 /// ═══════════════════════════════════════════════════════════════════════════
 ///
 /// Es la misma tienda que existe cuando el vendedor está offline, y sigue
-/// existiendo cuando la transmisión termina. Alguien que llegó desde un vivo y
-/// alguien que llegó desde el perfil ven exactamente lo mismo.
+/// existiendo cuando la transmisión termina. Alguien que llegó desde un vivo,
+/// alguien que llegó desde el perfil y alguien que abrió un enlace de WhatsApp
+/// ven exactamente lo mismo.
 ///
 /// ═══════════════════════════════════════════════════════════════════════════
 /// POR QUÉ ES UNA PANTALLA Y ANTES ERA UNA HOJA
@@ -31,32 +40,109 @@ import 'widgets/catalogo_de_tienda.dart';
 ///
 /// Con eso resuelto, la pantalla completa gana lo que la hoja no podía dar: el
 /// catálogo entero a la vista en vez de una franja, un lugar propio al que
-/// volver, y el nombre del vendedor arriba en vez de un título apretado entre
-/// el buscador y el borde.
-///
-/// El vivo sigue corriendo atrás y el botón de atrás devuelve a él, en el mismo
-/// punto. `tienda_desde_el_vivo_test.dart` lo fija con el centinela.
-class TiendaScreen extends ConsumerWidget {
+/// volver, y una ruta a la que un enlace puede llevar.
+class TiendaScreen extends ConsumerStatefulWidget {
+  /// La tienda, cuando ya sabemos cuál es.
+  ///
+  /// Es el caso de adentro de la app: el vivo y el perfil del vendedor ya
+  /// tienen el id y el nombre en la mano, así que no hace falta preguntar nada.
   const TiendaScreen({
     super.key,
-    required this.storeId,
-    required this.nombreTienda,
-    this.liveEnCurso,
-  });
+    required String this.storeId,
+    required String this.nombreTienda,
+    this.liveDetras,
+  }) : slug = null;
 
-  final String storeId;
-  final String nombreTienda;
+  /// La tienda de un enlace: `vendox.com.ar/t/<slug>`.
+  ///
+  /// ═══════════════════════════════════════════════════════════════════════════
+  /// POR QUÉ EL SLUG SE RESUELVE ACÁ ADENTRO Y NO ANTES DE NAVEGAR
+  /// ═══════════════════════════════════════════════════════════════════════════
+  ///
+  /// Porque un enlace puede llegar con la app cerrada. `pantallaDeDestino` es
+  /// una función pura y sincrónica que devuelve un `Widget`: no puede esperar
+  /// una respuesta del servidor sin volverse `async`, y eso obligaría a que
+  /// TODOS los destinos —producto, vivo, pedido— pasaran por un camino
+  /// asincrónico que ninguno necesita.
+  ///
+  /// Resolviendo adentro, el enlace abre la pantalla en el mismo frame y la
+  /// pantalla muestra su propio cargando. Es también lo que se ve mejor: algo
+  /// pasa apenas se toca el enlace, en vez de unos segundos de nada.
+  ///
+  /// ⚠️ Quien traduce el slug es el BACKEND, siempre. Ahí viven las reglas de
+  /// qué tienda se puede mostrar —tienda y vendedor activos—, y una copia en
+  /// Dart dejaría la vidriera de un vendedor suspendido abierta para cualquiera
+  /// que tenga el enlace guardado.
+  const TiendaScreen.porSlug(String this.slug, {super.key})
+      : storeId = null,
+        nombreTienda = null,
+        liveDetras = null;
+
+  final String? storeId;
+  final String? nombreTienda;
+
+  /// El slug del enlace, cuando se llegó por uno.
+  final String? slug;
 
   /// El vivo del que se vino, si se vino de uno.
   ///
-  /// Sólo se usa para el aviso «EN VIVO». ⚠️ No se pasa para «volver al vivo»
-  /// con un `push` nuevo: el vivo está **abajo en la pila**, y volver es
-  /// `Navigator.pop`. Un push abriría un SEGUNDO visor del mismo vivo, con dos
-  /// conexiones de LiveKit y dos chats.
-  final String? liveEnCurso;
+  /// ⚠️ Es «el vivo que está ABAJO en la pila», no «el vivo del vendedor». La
+  /// diferencia decide qué hace «EN VIVO»: con esto, `pop`; sin esto, abrir el
+  /// visor. Ver [_VolverAlVivo].
+  final String? liveDetras;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<TiendaScreen> createState() => _TiendaScreenState();
+}
+
+class _TiendaScreenState extends ConsumerState<TiendaScreen> {
+  /// Lo que resolvió el backend, cuando se llegó por un slug.
+  TiendaPublica? _tienda;
+
+  bool _resolviendo = false;
+  Object? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.slug != null) unawaited(_resolverElSlug());
+  }
+
+  Future<void> _resolverElSlug() async {
+    setState(() {
+      _resolviendo = true;
+      _error = null;
+    });
+
+    try {
+      final tienda = await ref.read(liveApiProvider).tiendaPorSlug(widget.slug!);
+      if (!mounted) return;
+      setState(() {
+        _tienda = tienda;
+        _resolviendo = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e;
+        _resolviendo = false;
+      });
+    }
+  }
+
+  /// El id de la tienda: el que vino, o el que resolvió el backend.
+  String? get _storeId => widget.storeId ?? _tienda?.id;
+
+  String get _nombre => widget.nombreTienda ?? _tienda?.nombre ?? '';
+
+  /// Qué hace «EN VIVO», o si no se dibuja. Ver `comoLlegarAlVivo`.
+  ComoLlegarAlVivo get _comoLlegar => comoLlegarAlVivo(
+        liveDetras: widget.liveDetras,
+        liveDelVendedor: _tienda?.liveEnCursoId,
+      );
+
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColor.fondo,
       appBar: AppBar(
@@ -67,7 +153,7 @@ class TiendaScreen extends ConsumerWidget {
             const SizedBox(width: Gap.sm),
             Expanded(
               child: Text(
-                nombreTienda.isEmpty ? 'Tienda' : nombreTienda,
+                _nombre.isEmpty ? 'Tienda' : _nombre,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(fontSize: 16.5, fontWeight: FontWeight.w800),
@@ -76,37 +162,153 @@ class TiendaScreen extends ConsumerWidget {
           ],
         ),
         actions: [
-          if (liveEnCurso != null)
+          if (_comoLlegar != ComoLlegarAlVivo.nada)
             Padding(
               padding: const EdgeInsets.only(right: Gap.md),
-              child: _VolverAlVivo(onTap: () => Navigator.of(context).pop()),
+              child: _VolverAlVivo(onTap: _irAlVivo),
             ),
         ],
       ),
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.only(top: Gap.md),
-          child: CatalogoDeTienda(
-            storeId: storeId,
-            onElegir: (productId) => VariantSheet.mostrar(
-              context,
-              productId: productId,
-              storeId: storeId,
-              // El precio exclusivo del vivo, si se vino de uno. Va como id:
-              // cuánto descuenta lo resuelve el backend.
-              liveSessionId: liveEnCurso,
+      body: SafeArea(child: _cuerpo()),
+    );
+  }
+
+  void _irAlVivo() {
+    switch (_comoLlegar) {
+      case ComoLlegarAlVivo.volverAtras:
+        Navigator.of(context).pop();
+      case ComoLlegarAlVivo.abrirElVisor:
+        unawaited(
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              // El nombre deja que un test vea a dónde se fue sin montar el
+              // visor entero, que necesitaría LiveKit.
+              settings: RouteSettings(name: 'vivo/${_tienda!.liveEnCursoId}'),
+              builder: (_) => LiveViewerScreen(liveId: _tienda!.liveEnCursoId!),
             ),
           ),
+        );
+      case ComoLlegarAlVivo.nada:
+        break;
+    }
+  }
+
+  Widget _cuerpo() {
+    if (_resolviendo) return const Center(child: CircularProgressIndicator());
+
+    final error = _error;
+    if (error != null) return _ErrorDeTienda(error: error, onReintentar: _resolverElSlug);
+
+    final storeId = _storeId;
+    if (storeId == null) return const Center(child: CircularProgressIndicator());
+
+    return Padding(
+      padding: const EdgeInsets.only(top: Gap.md),
+      child: CatalogoDeTienda(
+        storeId: storeId,
+        onElegir: (productId) => VariantSheet.mostrar(
+          context,
+          productId: productId,
+          storeId: storeId,
+          /**
+           * El precio exclusivo del vivo, sólo si se está mirando ese vivo.
+           *
+           * ⚠️ `liveDetras`, no `_vivoAlQueVolver`. Que el vendedor esté
+           * transmitiendo no alcanza: el precio de vivo es para quien está
+           * en la transmisión. Mandar el id igual se lo daría a cualquiera que
+           * abra el enlace de la tienda mientras hay un vivo prendido.
+           *
+           * Va como id, nunca como precio: cuánto descuenta lo resuelve el
+           * backend contra su propia base.
+           */
+          liveSessionId: widget.liveDetras,
         ),
       ),
     );
   }
 }
 
-/// «EN VIVO», y la forma de volver a la transmisión.
+/// No se pudo abrir la tienda del enlace.
 ///
-/// Es un botón y no sólo una etiqueta: quien entró a mirar el catálogo mientras
-/// alguien transmite tiene que poder volver sin buscar el botón de atrás del
+/// ⚠️ Son dos casos distintos y se ven distinto. Un slug que no existe no se
+/// arregla reintentando —el enlace está roto o la tienda ya no se muestra— así
+/// que ofrecer un botón de reintentar ahí es hacer tocar algo que nunca va a
+/// funcionar. Un fallo de red sí se reintenta, y encima solo cuando vuelve la
+/// señal.
+class _ErrorDeTienda extends StatelessWidget {
+  const _ErrorDeTienda({required this.error, required this.onReintentar});
+
+  final Object error;
+  final VoidCallback onReintentar;
+
+  @override
+  Widget build(BuildContext context) {
+    if (error is TiendaNoEncontrada) {
+      return const _Aviso(
+        icono: Icons.storefront_outlined,
+        titulo: 'No encontramos esta tienda',
+        detalle: 'El enlace puede ser viejo, o la tienda ya no está disponible.',
+      );
+    }
+
+    return ReintentarAlVolverLaRed(
+      error: error,
+      onReintentar: onReintentar,
+      child: _Aviso(
+        icono: Icons.wifi_off_rounded,
+        titulo: 'No pudimos abrir la tienda',
+        detalle: mensajeDeError(error),
+        accion: ('Reintentar', onReintentar),
+      ),
+    );
+  }
+}
+
+class _Aviso extends StatelessWidget {
+  const _Aviso({
+    required this.icono,
+    required this.titulo,
+    required this.detalle,
+    this.accion,
+  });
+
+  final IconData icono;
+  final String titulo;
+  final String detalle;
+  final (String, VoidCallback)? accion;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(Gap.xl),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icono, size: 38, color: AppColor.textoDebil),
+            const SizedBox(height: Gap.md),
+            Text(titulo, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+            const SizedBox(height: Gap.xs),
+            Text(
+              detalle,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 13, color: AppColor.textoSuave, height: 1.4),
+            ),
+            if (accion != null) ...[
+              const SizedBox(height: Gap.lg),
+              FilledButton(onPressed: accion!.$2, child: Text(accion!.$1)),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// «EN VIVO», y la forma de llegar a la transmisión.
+///
+/// Es un botón y no sólo una etiqueta: quien está mirando el catálogo mientras
+/// alguien transmite tiene que poder ir sin buscar el botón de atrás del
 /// sistema, que en Android está del otro lado de la pantalla.
 class _VolverAlVivo extends StatelessWidget {
   const _VolverAlVivo({required this.onTap});

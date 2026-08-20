@@ -155,7 +155,7 @@ class _SellerProfileScreenState extends ConsumerState<SellerProfileScreen> {
           nombreTienda: perfil?.tiendaNombre ?? perfil?.nombre ?? '',
           // Si está transmitiendo, la tienda lo dice. Volver desde acá lleva al
           // perfil, que es de donde se vino.
-          liveEnCurso: perfil?.liveEnCursoId,
+          liveDetras: perfil?.liveEnCursoId,
         ),
       ),
     );
